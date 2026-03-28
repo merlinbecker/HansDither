@@ -1,0 +1,8 @@
+name=Hans Dither
+author=Merlin Becker
+description=an 1-bit pixel and tile editor, made for me to learn pixelart and design pulp games 
+bundleID=de.merlinbecker.hansdither
+version=0.1
+buildNumber=1
+imagePath=./images/launcher
+contentWarning=This game contains pixelart
