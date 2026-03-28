@@ -26,9 +26,10 @@ My first project using Pulp, Panic’s low-code editor for Playdate, was more th
 
 [Hans Dither on itch.io](https://merlinbecker.itch.io/hans-dither)
 
----
+## Devlog
 
-## Screenshots
+For more about the background and motivation behind Hans-Dither, read the devlog entry: [No More Excuses: How the Playdate Led Me to Pixel Art and Pulp](support/devlogs/01-noMoreExcuses.md)
+
 
 <div align="center">
 	<img src="support/screenshots/Screen1.gif" alt="Screenshot 1" width="320"/>
