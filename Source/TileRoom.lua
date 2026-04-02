@@ -96,6 +96,10 @@ local tilePickerIndex = 3      -- aktuell angezeigter Tile-Index (min. 3, Tiles 
 local tilePickerVisible = false
 local tilePickerLastCrankMs = 0
 
+-- Datei-Verwaltung
+local currentFileName = nil    -- Name der aktuell geöffneten Datei (ohne Pfad)
+local backRoom = nil           -- Raum, zu dem nach dem Speichern zurückgewechselt wird
+
 -- Matrix-Imagetable (2 Tiles, 8x8) laden (siehe 7.20.12 Image Table)
 local origImagetable = gfx.imagetable.new("images/cellbg")
 assert(origImagetable, "Imagetable konnte nicht geladen werden!")
@@ -231,11 +235,108 @@ local function toggleCurrentCell()
 end
 
 -- Initialize the room with shared data and dependencies
-function TileRoom:init(switchRoom,nextRoomReference)
+-- backRoomReference: Raum für "Save + Back" (LoadRoom)
+function TileRoom:init(switchRoom, nextRoomReference, backRoomReference)
     switchRoomFunction = switchRoom
     nextRoom = nextRoomReference
+    backRoom = backRoomReference
     needsRedraw = true
+end
 
+-- Setzt den Dateinamen des aktuell geöffneten Projekts.
+-- Wird von LoadRoom aufgerufen, bevor zu TileRoom gewechselt wird.
+function TileRoom:setFileName(name)
+    currentFileName = name
+end
+
+-- Setzt Tilemap und Imagetable auf den Ausgangszustand zurück (neue leere Karte).
+-- Imagetable wird auf die 3 Standard-Tiles reduziert, alle Zellen auf Tile 1 gesetzt.
+function TileRoom:newMap()
+    -- Imagetable auf 3 Basis-Tiles (Hintergrund, Gitter, Schwarz) zurücksetzen
+    local freshTable = gfx.imagetable.new(3)
+    freshTable:setImage(1, origImagetable:getImage(1))
+    freshTable:setImage(2, origImagetable:getImage(2))
+    freshTable:setImage(3, blackTile)
+    cellImagetable = freshTable
+    -- HashCache synchron halten
+    hashCache = {}
+    hashCache[1] = imageHash(origImagetable:getImage(1))
+    hashCache[2] = imageHash(origImagetable:getImage(2))
+    hashCache[3] = imageHash(blackTile)
+    tilemap:setImageTable(cellImagetable)
+    -- Alle Zellen auf Tile 1 (Hintergrund) setzen
+    for y = 1, GRID_ROWS do
+        for x = 1, GRID_COLS do
+            tilemap:setTileAtPosition(x, y, 1)
+        end
+    end
+    tilePickerIndex = 3
+    needsRedraw = true
+end
+
+-- Speichert das aktuelle Projekt in den Datastore.
+-- Ablage: saves/<name>      → Tilemap-Indizes (JSON)
+--         saves/<name>_img4, _img5, … → eigene Tile-Bilder (PDI)
+--         saves/<name>_preview        → Vorschaubild der Tilemap (PDI)
+function TileRoom:saveToFile()
+    if not currentFileName then return end
+    local name = currentFileName
+    -- Sicherstellen, dass der Zielordner existiert
+    playdate.file.mkdir("saves")
+    -- 1. Tilemap-Indizes als JSON speichern
+    local data, width = tilemap:getTiles()
+    playdate.datastore.write({data = data, width = width}, "saves/" .. name)
+    -- 2. Eigene Tile-Bilder (Indizes 4+) speichern; Tiles 1-3 sind immer gleich
+    local maxTile = cellImagetable:getLength()
+    for i = 4, maxTile do
+        local img = cellImagetable:getImage(i)
+        if img then
+            playdate.datastore.writeImage(img, "saves/" .. name .. "_img" .. i)
+        end
+    end
+    -- 3. Vorschaubild der Tilemap in ein Offscreen-Image zeichnen und speichern
+    local previewImg = gfx.image.new(GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE, gfx.kColorWhite)
+    gfx.pushContext(previewImg)
+        tilemap:draw(0, 0)
+    gfx.popContext()
+    playdate.datastore.writeImage(previewImg, "saves/" .. name .. "_preview")
+end
+
+-- Lädt ein gespeichertes Projekt aus dem Datastore.
+-- Rekonstruiert Imagetable (Basis-Tiles + eigene Tiles) und Tilemap-Indizes.
+function TileRoom:loadFromFile(name)
+    local saved = playdate.datastore.read("saves/" .. name)
+    if not saved then return end
+    -- Eigene Tile-Bilder der Reihe nach laden (Index 4, 5, …)
+    local customTiles = {}
+    local maxIdx = 3
+    local i = 4
+    while true do
+        local img = playdate.datastore.readImage("saves/" .. name .. "_img" .. i)
+        if not img then break end
+        customTiles[i] = img
+        maxIdx = i
+        i = i + 1
+    end
+    -- Neue Imagetable mit den richtigen Basis-Tiles + geladenen Custom-Tiles aufbauen
+    local freshTable = gfx.imagetable.new(maxIdx)
+    freshTable:setImage(1, origImagetable:getImage(1))
+    freshTable:setImage(2, origImagetable:getImage(2))
+    freshTable:setImage(3, blackTile)
+    hashCache = {}
+    hashCache[1] = imageHash(origImagetable:getImage(1))
+    hashCache[2] = imageHash(origImagetable:getImage(2))
+    hashCache[3] = imageHash(blackTile)
+    for idx, img in pairs(customTiles) do
+        freshTable:setImage(idx, img)
+        hashCache[idx] = imageHash(img)
+    end
+    cellImagetable = freshTable
+    tilemap:setImageTable(cellImagetable)
+    tilemap:setTiles(saved.data, saved.width)
+    -- Tile-Picker-Index validieren (könnte nach dem Laden außerhalb liegen)
+    tilePickerIndex = math.max(3, math.min(tilePickerIndex, cellImagetable:getLength()))
+    needsRedraw = true
 end
 
 -- Counter for ticks 
@@ -311,6 +412,18 @@ function TileRoom:entered()
     needsRedraw = true
     -- Tile Picker zurücksetzen, damit kein altes Fenster beim Raumeintritt sichtbar ist
     tilePickerVisible = false
+    -- Systemmenü: alte Items entfernen, dann "Save + Back" hinzufügen (nur wenn Dateiname gesetzt)
+    local menu = playdate.getSystemMenu()
+    menu:removeAllMenuItems()
+    if currentFileName then
+        -- Beim Auslösen: speichern und zurück zum LoadRoom wechseln
+        menu:addMenuItem("Save + Back", function()
+            TileRoom:saveToFile()
+            if backRoom and switchRoomFunction then
+                switchRoomFunction(backRoom)
+            end
+        end)
+    end
     print("Entered TileRoom")
 end
 

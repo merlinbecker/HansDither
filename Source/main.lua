@@ -37,7 +37,7 @@ end
 -- Initialize rooms with shared data and dependencies
 TitleRoom:init(switchRoom,LoadRoom)
 LoadRoom:init(switchRoom,TileRoom)
-TileRoom:init(switchRoom,PixelRoom)
+TileRoom:init(switchRoom, PixelRoom, LoadRoom)
 PixelRoom:init(switchRoom,TileRoom)
 --ZweiterRaum.init(sharedData, switchRoom, DritterRaum)
 --DritterRaum.init(sharedData, switchRoom, StartRaum)
