@@ -15,6 +15,8 @@ LoadRoom = {}
 local switchRoomFunction
 local nextRoom
 local needsRedraw
+local pendingOpenName
+local pendingOpenIsNew = false
 
 -- Konstanten
 local GRID_COLS = 3
@@ -53,6 +55,27 @@ local function loadPreviews(names)
     for _, name in ipairs(names) do
         previewCache[name] = playdate.datastore.readImage("saves/" .. name .. "_preview")
     end
+end
+
+-- Öffnet den TileRoom für eine Datei.
+-- Bei neuen Dateien: leere Map anlegen und sofort initial speichern,
+-- damit die Save-Datei konsistent existiert, bevor der Room geladen wird.
+local function openTileRoom(name, isNew)
+    nextRoom:setFileName(name)
+    if isNew then
+        nextRoom:newMap()
+        nextRoom:saveToFile()
+    else
+        nextRoom:loadFromFile(name)
+    end
+    switchRoomFunction(nextRoom)
+end
+
+-- Merkt einen Room-Wechsel vor; tatsächlicher Wechsel erfolgt im Update,
+-- nachdem das Keyboard vollständig geschlossen ist.
+local function queueOpenTileRoom(name, isNew)
+    pendingOpenName = name
+    pendingOpenIsNew = isNew and true or false
 end
 
 -- Löscht alle Dateien eines Projekts und entfernt es aus dem Index.
@@ -182,6 +205,17 @@ function LoadRoom:init(switchRoom, nextRoomReference)
 end
 
 function LoadRoom:update()
+    -- Wichtig: Room-Wechsel erst nach vollständigem Keyboard-Close durchführen,
+    -- damit der Input-Handler-Stack nicht im Keyboard-Cleanup landet.
+    if pendingOpenName and not playdate.keyboard.isVisible() then
+        local name = pendingOpenName
+        local isNew = pendingOpenIsNew
+        pendingOpenName = nil
+        pendingOpenIsNew = false
+        openTileRoom(name, isNew)
+        return
+    end
+
     -- Keyboard offen: B-Taste bricht die Eingabe ab
     if playdate.keyboard.isVisible() then
         if playdate.buttonJustPressed(playdate.kButtonB) then
@@ -286,9 +320,7 @@ function LoadRoom:inputHandler()
                         local name = playdate.keyboard.text
                         if name and #name > 0 then
                             addToIndex(name)
-                            nextRoom:setFileName(name)
-                            nextRoom:newMap()
-                            switchRoomFunction(nextRoom)
+                            queueOpenTileRoom(name, true)
                             return  -- Raum verlassen → kein needsRedraw nötig
                         end
                     end
@@ -302,9 +334,7 @@ function LoadRoom:inputHandler()
                 -- Vorhandene Datei öffnen
                 local name = savedNames[linearIndex - 1]
                 if name then
-                    nextRoom:setFileName(name)
-                    nextRoom:loadFromFile(name)
-                    switchRoomFunction(nextRoom)
+                    queueOpenTileRoom(name, false)
                 end
             end
         end

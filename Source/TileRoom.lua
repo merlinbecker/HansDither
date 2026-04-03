@@ -276,30 +276,195 @@ end
 
 -- Speichert das aktuelle Projekt in den Datastore.
 -- Ablage: saves/<name>      → Tilemap-Indizes (JSON)
---         saves/<name>_img4, _img5, … → eigene Tile-Bilder (PDI)
+--         customTileData     → eigene Tile-Bilder als Pixel-Daten (JSON)
 --         saves/<name>_preview        → Vorschaubild der Tilemap (PDI)
+
+-- Serialisiert ein Tile-Bild als flaches Pixel-Array für JSON-Speicherung.
+local function encodeTileImage(image)
+    local w, h = image:getSize()
+    local pixels = {}
+    local n = 1
+    for y = 0, h - 1 do
+        for x = 0, w - 1 do
+            local p = image:sample(x, y)
+            if p == gfx.kColorBlack then
+                pixels[n] = 1
+            elseif p == gfx.kColorClear then
+                pixels[n] = 2
+            else
+                pixels[n] = 0
+            end
+            n = n + 1
+        end
+    end
+    return { w = w, h = h, pixels = pixels }
+end
+
+-- Rekonstruiert ein Tile-Bild aus serialisierten Pixel-Daten.
+local function decodeTileImage(tileData)
+    if not tileData or type(tileData) ~= "table" then return nil end
+    local w = tonumber(tileData.w)
+    local h = tonumber(tileData.h)
+    local pixels = tileData.pixels
+    if not w or not h or type(pixels) ~= "table" then return nil end
+
+    local img = gfx.image.new(w, h, gfx.kColorClear)
+    gfx.pushContext(img)
+        local n = 1
+        for y = 0, h - 1 do
+            for x = 0, w - 1 do
+                local p = pixels[n]
+                if p == 1 then
+                    gfx.setColor(gfx.kColorBlack)
+                    gfx.drawPixel(x, y)
+                elseif p == 0 then
+                    gfx.setColor(gfx.kColorWhite)
+                    gfx.drawPixel(x, y)
+                end
+                n = n + 1
+            end
+        end
+    gfx.popContext()
+    return img
+end
+
+-- Prüft, ob encode/decode für ein Tile verlustfrei ist.
+local function tileRoundtripOk(image)
+    local decoded = decodeTileImage(encodeTileImage(image))
+    if not decoded then return false end
+    return imageHash(image) == imageHash(decoded)
+end
+
+-- Rendert bei jedem Save ein frisches Preview-Bild aus der aktuellen Tilemap.
+local function renderPreviewImage()
+    local previewImg = gfx.image.new(GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE, gfx.kColorWhite)
+    gfx.pushContext(previewImg)
+        tilemap:draw(0, 0)
+    gfx.popContext()
+    return previewImg
+end
+
+-- Entfernt unbenutzte Tiles und zieht die verbleibenden Indizes kompakt nach.
+-- Basis-Tiles 1..3 bleiben immer erhalten.
+local function compactTileState()
+    local data, width = tilemap:getTiles()
+    local maxTile = cellImagetable:getLength()
+
+    local used = { [1] = true, [2] = true, [3] = true }
+    for _, idx in ipairs(data) do
+        if type(idx) == "number" then
+            used[idx] = true
+        end
+    end
+
+    local oldToNew = {}
+    local newToOld = {}
+    local newCount = 0
+    for oldIdx = 1, maxTile do
+        if used[oldIdx] then
+            local img = cellImagetable:getImage(oldIdx)
+            if img or oldIdx <= 3 then
+                newCount = newCount + 1
+                oldToNew[oldIdx] = newCount
+                newToOld[newCount] = oldIdx
+            else
+                print("Warnung: Benutztes Tile ohne Bild wird entfernt:", oldIdx)
+            end
+        end
+    end
+
+    local remappedData = {}
+    for i, oldIdx in ipairs(data) do
+        local mapped = oldToNew[oldIdx]
+        if not mapped then
+            mapped = 1
+            print("Warnung: Undefinierter Tile-Index in Map auf 1 gesetzt:", oldIdx)
+        end
+        remappedData[i] = mapped
+    end
+
+    local newTable = gfx.imagetable.new(newCount)
+    local newHashCache = {}
+    for newIdx = 1, newCount do
+        local oldIdx = newToOld[newIdx]
+        local img = cellImagetable:getImage(oldIdx)
+        if img then
+            newTable:setImage(newIdx, img)
+            newHashCache[newIdx] = imageHash(img)
+        end
+    end
+
+    local removedCount = 0
+    for oldIdx = 4, maxTile do
+        if not oldToNew[oldIdx] then
+            removedCount = removedCount + 1
+        end
+    end
+    if removedCount > 0 then
+        print("Info: Unbenutzte Tiles entfernt:", removedCount)
+    end
+
+    local remappedPickerIndex = oldToNew[tilePickerIndex] or 3
+    remappedPickerIndex = math.max(3, math.min(remappedPickerIndex, newCount))
+
+    return {
+        data = remappedData,
+        width = width,
+        imageTable = newTable,
+        hashCache = newHashCache,
+        maxTile = newCount,
+        tilePickerIndex = remappedPickerIndex
+    }
+end
+
 function TileRoom:saveToFile()
     if not currentFileName then return end
     local name = currentFileName
     -- Sicherstellen, dass der Zielordner existiert
     playdate.file.mkdir("saves")
-    -- 1. Tilemap-Indizes als JSON speichern
-    local data, width = tilemap:getTiles()
-    playdate.datastore.write({data = data, width = width}, "saves/" .. name)
-    -- 2. Eigene Tile-Bilder (Indizes 4+) speichern; Tiles 1-3 sind immer gleich
-    local maxTile = cellImagetable:getLength()
+
+    -- 1. Tile-Zustand komprimieren und direkt in den Runtime-Zustand übernehmen.
+    local compacted = compactTileState()
+    cellImagetable = compacted.imageTable
+    hashCache = compacted.hashCache
+    tilemap:setImageTable(cellImagetable)
+    tilemap:setTiles(compacted.data, compacted.width)
+    tilePickerIndex = compacted.tilePickerIndex
+
+    -- 2. Komprimierte Tilemap-Indizes als JSON speichern
+    local data = compacted.data
+    local width = compacted.width
+    local maxTile = compacted.maxTile
+    local customTileIndices = {}
+    -- 3. Eigene Tile-Bilder (Indizes 4+) als Pixel-Daten speichern
+    local customTileData = {}
+    local customTileHashes = {}
     for i = 4, maxTile do
         local img = cellImagetable:getImage(i)
         if img then
-            playdate.datastore.writeImage(img, "saves/" .. name .. "_img" .. i)
+            customTileData[tostring(i)] = encodeTileImage(img)
+            customTileHashes[tostring(i)] = imageHash(img)
+            table.insert(customTileIndices, i)
+            if not tileRoundtripOk(img) then
+                print("Warnung: Rekonstruktionstest fehlgeschlagen fuer Tile:", i)
+            end
+        else
+            print("Warnung: Kein Bild an Imagetable-Index:", i)
         end
     end
-    -- 3. Vorschaubild der Tilemap in ein Offscreen-Image zeichnen und speichern
-    local previewImg = gfx.image.new(GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE, gfx.kColorWhite)
-    gfx.pushContext(previewImg)
-        tilemap:draw(0, 0)
-    gfx.popContext()
+    -- Save-Header mit den tatsächlich geschriebenen Custom-Tile-Indizes aktualisieren.
+    playdate.datastore.write({
+        data = data,
+        width = width,
+        customTileIndices = customTileIndices,
+        customTileData = customTileData,
+        customTileHashes = customTileHashes
+    }, "saves/" .. name)
+
+    -- 4. Vorschaubild bei jedem Save neu rendern und speichern
+    local previewImg = renderPreviewImage()
     playdate.datastore.writeImage(previewImg, "saves/" .. name .. "_preview")
+    needsRedraw = true
 end
 
 -- Lädt ein gespeichertes Projekt aus dem Datastore.
@@ -307,16 +472,38 @@ end
 function TileRoom:loadFromFile(name)
     local saved = playdate.datastore.read("saves/" .. name)
     if not saved then return end
-    -- Eigene Tile-Bilder der Reihe nach laden (Index 4, 5, …)
+    -- Eigene Tile-Bilder laden (neues Format): direkt aus customTileData.
     local customTiles = {}
     local maxIdx = 3
-    local i = 4
-    while true do
-        local img = playdate.datastore.readImage("saves/" .. name .. "_img" .. i)
-        if not img then break end
-        customTiles[i] = img
-        maxIdx = i
-        i = i + 1
+    local customTileIndices = saved.customTileIndices
+    local customTileData = saved.customTileData or {}
+    local customTileHashes = saved.customTileHashes or {}
+    if type(customTileIndices) ~= "table" then
+        customTileIndices = {}
+        for k, _ in pairs(customTileData) do
+            local idx = tonumber(k)
+            if idx and idx >= 4 then
+                table.insert(customTileIndices, idx)
+            end
+        end
+        table.sort(customTileIndices)
+    end
+    for _, i in ipairs(customTileIndices) do
+        local tileData = customTileData[tostring(i)] or customTileData[i]
+        local img = decodeTileImage(tileData)
+        if img then
+            local storedHash = customTileHashes[tostring(i)] or customTileHashes[i]
+            local loadedHash = imageHash(img)
+            if storedHash and storedHash ~= loadedHash then
+                print("Warnung: Hash-Mismatch nach Rekonstruktion fuer Tile:", i)
+            else
+                print("Info: Rekonstruktion OK fuer Tile:", i)
+            end
+            customTiles[i] = img
+            maxIdx = i
+        else
+            print("Warnung: Konnte Tile-Pixeldaten nicht laden:", i)
+        end
     end
     -- Neue Imagetable mit den richtigen Basis-Tiles + geladenen Custom-Tiles aufbauen
     local freshTable = gfx.imagetable.new(maxIdx)
@@ -327,9 +514,12 @@ function TileRoom:loadFromFile(name)
     hashCache[1] = imageHash(origImagetable:getImage(1))
     hashCache[2] = imageHash(origImagetable:getImage(2))
     hashCache[3] = imageHash(blackTile)
-    for idx, img in pairs(customTiles) do
-        freshTable:setImage(idx, img)
-        hashCache[idx] = imageHash(img)
+    for i = 4, maxIdx do
+        local img = customTiles[i]
+        if img then
+            freshTable:setImage(i, img)
+            hashCache[i] = imageHash(img)
+        end
     end
     cellImagetable = freshTable
     tilemap:setImageTable(cellImagetable)

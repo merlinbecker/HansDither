@@ -53,6 +53,13 @@ function playdate.update()
     currentRoom:update()
 end
 
+-- Speichert beim Beenden, wenn der TileRoom aktiv ist.
+function playdate.gameWillTerminate()
+    if currentRoom == TileRoom and TileRoom and TileRoom.saveToFile then
+        TileRoom:saveToFile()
+    end
+end
+
 -- Example transitions (to be implemented in room-specific input handlers)
 -- switchRoom(ZweiterRaum)
 -- switchRoom(DritterRaum)
