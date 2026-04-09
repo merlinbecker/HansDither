@@ -1,0 +1,820 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Generated schema for Root",
+  "type": "object",
+  "properties": {
+    "card": {
+      "type": "number"
+    },
+    "font": {
+      "type": "object",
+      "properties": {
+        "pipe": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "type": {
+          "type": "number"
+        },
+        "chars": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "required": [
+        "pipe",
+        "type",
+        "chars"
+      ]
+    },
+    "icon": {
+      "type": "number"
+    },
+    "name": {
+      "type": "string"
+    },
+    "song": {
+      "type": "number"
+    },
+    "wrap": {
+      "type": "number"
+    },
+    "intro": {
+      "type": "string"
+    },
+    "rooms": {
+      "type": "array",
+      "items": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "name": {
+              "type": "string"
+            },
+            "song": {
+              "type": "number"
+            },
+            "exits": {
+              "type": "array",
+              "items": {}
+            },
+            "tiles": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "script": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "song",
+            "exits",
+            "tiles",
+            "script"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "name": {
+              "type": "string"
+            },
+            "song": {
+              "type": "number"
+            },
+            "exits": {
+              "type": "array",
+              "items": {}
+            },
+            "tiles": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "script": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "song",
+            "exits",
+            "tiles",
+            "script"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "name": {
+              "type": "string"
+            },
+            "song": {
+              "type": "number"
+            },
+            "exits": {
+              "type": "array",
+              "items": {}
+            },
+            "tiles": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "script": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "song",
+            "exits",
+            "tiles",
+            "script"
+          ]
+        }
+      ],
+      "additionalItems": false
+    },
+    "songs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number"
+          },
+          "bpm": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {}
+            }
+          },
+          "ticks": {
+            "type": "number"
+          },
+          "splits": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {}
+            }
+          },
+          "loopFrom": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "bpm",
+          "name",
+          "notes",
+          "ticks",
+          "splits",
+          "loopFrom"
+        ]
+      }
+    },
+    "tiles": {
+      "type": "array",
+      "items": {}
+    },
+    "author": {
+      "type": "string"
+    },
+    "editor": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number"
+        },
+        "loopSong": {
+          "type": "boolean"
+        },
+        "showCard": {
+          "type": "boolean"
+        },
+        "showGrid": {
+          "type": "boolean"
+        },
+        "showIcon": {
+          "type": "boolean"
+        },
+        "showWrap": {
+          "type": "boolean"
+        },
+        "loopNotes": {
+          "type": "boolean"
+        },
+        "showLayer": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        },
+        "showWalls": {
+          "type": "boolean"
+        },
+        "sampleText": {
+          "type": "string"
+        },
+        "sortedTiles": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "activeCharId": {
+          "type": "number"
+        },
+        "activeExitId": {
+          "type": "number"
+        },
+        "activeModeId": {
+          "type": "number"
+        },
+        "activeNoteId": {
+          "type": "number"
+        },
+        "activePipeId": {
+          "type": "number"
+        },
+        "activeRoomId": {
+          "type": "number"
+        },
+        "activeSongId": {
+          "type": "number"
+        },
+        "activeTextId": {
+          "type": "number"
+        },
+        "activeTileId": {
+          "type": "number"
+        },
+        "activeFrameId": {
+          "type": "number"
+        },
+        "activeLayerId": {
+          "type": "number"
+        },
+        "activeSoundId": {
+          "type": "number"
+        },
+        "activeVoiceId": {
+          "type": "number"
+        },
+        "recentScripts": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "activeScriptId": {
+          "type": "number"
+        },
+        "highlightTiles": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "version",
+        "loopSong",
+        "showCard",
+        "showGrid",
+        "showIcon",
+        "showWrap",
+        "loopNotes",
+        "showLayer",
+        "showWalls",
+        "sampleText",
+        "sortedTiles",
+        "activeCharId",
+        "activeExitId",
+        "activeModeId",
+        "activeNoteId",
+        "activePipeId",
+        "activeRoomId",
+        "activeSongId",
+        "activeTextId",
+        "activeTileId",
+        "activeFrameId",
+        "activeLayerId",
+        "activeSoundId",
+        "activeVoiceId",
+        "recentScripts",
+        "activeScriptId",
+        "highlightTiles"
+      ]
+    },
+    "frames": {
+      "type": "array",
+      "items": {}
+    },
+    "player": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "type": "number"
+        },
+        "id": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "room",
+        "id",
+        "x",
+        "y"
+      ]
+    },
+    "script": {
+      "type": "number"
+    },
+    "sounds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number"
+          },
+          "bpm": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "number"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "ticks": {
+            "type": "number"
+          },
+          "envelope": {
+            "type": "object",
+            "properties": {
+              "decay": {
+                "type": "number"
+              },
+              "attack": {
+                "type": "number"
+              },
+              "release": {
+                "type": "number"
+              },
+              "sustain": {
+                "type": "number"
+              },
+              "volume": {
+                "type": "number"
+              }
+            },
+            "required": []
+          }
+        },
+        "required": [
+          "id",
+          "bpm",
+          "name",
+          "type",
+          "notes",
+          "ticks",
+          "envelope"
+        ]
+      }
+    },
+    "scripts": {
+      "type": "array",
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "load": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "change": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "__blocks": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  }
+                },
+                "__comments": {
+                  "type": "array",
+                  "items": {}
+                },
+                "__srcOrder": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "load",
+                "change",
+                "__blocks",
+                "__comments",
+                "__srcOrder"
+              ]
+            },
+            "type": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "data",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "__srcOrder": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "__comments": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "__blocks": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {}
+                  }
+                },
+                "update": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "crank": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "draw": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "cancel": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "confirm": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "paint": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "erase": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                }
+              },
+              "required": [
+                "__srcOrder",
+                "__comments",
+                "__blocks",
+                "update",
+                "crank",
+                "draw",
+                "cancel",
+                "confirm",
+                "paint",
+                "erase"
+              ]
+            },
+            "type": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "data",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "enter": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                },
+                "__blocks": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {}
+                  }
+                },
+                "__comments": {
+                  "type": "array",
+                  "items": {}
+                },
+                "__srcOrder": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "enter",
+                "__blocks",
+                "__comments",
+                "__srcOrder"
+              ]
+            },
+            "type": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "data",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "number"
+            },
+            "type": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ]
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "number"
+            },
+            "id": {
+              "type": "number"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "__srcOrder": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "__comments": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "__blocks": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {}
+                  }
+                },
+                "enter": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "additionalItems": false
+                }
+              },
+              "required": [
+                "__srcOrder",
+                "__comments",
+                "__blocks",
+                "enter"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "data"
+          ]
+        }
+      ],
+      "additionalItems": false
+    },
+    "version": {
+      "type": "number"
+    },
+    "background": {
+      "type": "number"
+    },
+    "buildNumber": {
+      "type": "string"
+    },
+    "versionString": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "card",
+    "font",
+    "icon",
+    "name",
+    "song",
+    "wrap",
+    "intro",
+    "rooms",
+    "songs",
+    "tiles",
+    "author",
+    "editor",
+    "frames",
+    "player",
+    "script",
+    "sounds",
+    "scripts",
+    "version",
+    "background",
+    "buildNumber",
+    "versionString"
+  ]
+}
