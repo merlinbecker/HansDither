@@ -105,6 +105,11 @@ local backRoom = nil           -- Raum, zu dem nach dem Speichern zurückgewechs
 local gameData = nil           -- v2-Game-Tabelle (rooms, tiles, frames)
 local currentRoomIndex = 1     -- 1-basierter Lua-Index in gameData.rooms
 
+-- Show Grid: bestimmt, welches Tile als "leer" gilt
+-- true  → Tile 1 (Grid) ist der Hintergrund, Löschen setzt auf 1
+-- false → Tile 2 (Weiß) ist der Hintergrund, Löschen setzt auf 2
+local showGrid = true
+
 -- Matrix-Imagetable (2 Tiles, 8x8) laden (siehe 7.20.12 Image Table)
 local origImagetable = gfx.imagetable.new("images/cellbg")
 assert(origImagetable, "Imagetable konnte nicht geladen werden!")
@@ -224,13 +229,18 @@ end
 
 -- A-Button malt mit dem aktuell im Tile Picker gewählten Tile (tilePickerIndex).
 -- Ist die Zelle bereits auf tilePickerIndex gesetzt, wird sie auf Tile 1 (Hintergrund) zurückgesetzt.
+-- Gibt den aktuellen Hintergrund-Tile-Index zurück (1=Grid, 2=Weiß).
+local function getBackgroundTile()
+    return showGrid and 1 or 2
+end
+
 local function toggleCurrentCell()
     local section, row, col = gridView:getSelection()
     if row and col then
         local current = tilemap:getTileAtPosition(col, row)
         if current == tilePickerIndex then
-            -- Zelle löschen: auf Hintergrund-Tile zurücksetzen
-            tilemap:setTileAtPosition(col, row, 1)
+            -- Zelle löschen: auf aktuellen Hintergrund zurücksetzen
+            tilemap:setTileAtPosition(col, row, getBackgroundTile())
         else
             -- Zelle mit dem aktuell gewählten Picker-Tile füllen
             tilemap:setTileAtPosition(col, row, tilePickerIndex)
@@ -803,6 +813,21 @@ function TileRoom:entered()
             end
         end)
     end
+    -- Checkbox: Show Grid – tauscht Tile 1 (Grid) ↔ Tile 2 (Weiß) als Hintergrund
+    menu:addCheckmarkMenuItem("Show Grid", showGrid, function(checked)
+        showGrid = checked
+        -- Alle Tiles 1↔2 in der Tilemap tauschen
+        local data, width = tilemap:getTiles()
+        for i, tileIdx in ipairs(data) do
+            if tileIdx == 1 then
+                data[i] = 2
+            elseif tileIdx == 2 then
+                data[i] = 1
+            end
+        end
+        tilemap:setTiles(data, width)
+        needsRedraw = true
+    end)
     print("Entered TileRoom")
 end
 

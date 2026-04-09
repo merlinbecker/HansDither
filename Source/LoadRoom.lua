@@ -112,10 +112,16 @@ local gridView = playdate.ui.gridview.new(CELL_W, CELL_H)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setCellPadding(1, 1, 1, 1)
 
--- Zeigt „Loeschen" im Systemmenü wenn eine Room-Zelle selektiert ist.
+-- Aktualisiert das Systemmenü: immer "Zurueck", optional "Loeschen".
 local function updateMenuItems()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
+    -- "Zurueck" zum GameRoom (immer sichtbar)
+    menu:addMenuItem("Zurueck", function()
+        if backRoom and switchRoomFunction then
+            switchRoomFunction(backRoom)
+        end
+    end)
     local _, row, col = gridView:getSelection()
     local linearIndex = (row - 1) * GRID_COLS + col
     if linearIndex > 1 and #roomNames > 1 then
@@ -284,7 +290,8 @@ function LoadRoom:update()
 end
 
 function LoadRoom:entered()
-    playdate.getSystemMenu():removeAllMenuItems()
+    local menu = playdate.getSystemMenu()
+    menu:removeAllMenuItems()
     refreshRoomNames()
     loadRoomPreviews()
     gridView:setNumberOfRows(getGridRows())
