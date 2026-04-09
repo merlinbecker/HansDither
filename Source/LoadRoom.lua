@@ -1,133 +1,128 @@
 -- LoadRoom.lua
--- Datei-Browser für Hans Dither.
--- Drei-Spalten-Ansicht, max. 6 Dateien, Löschen per Systemmenü.
--- Tastatur nur bei Scale 1 verfügbar: vor/nach Eingabe wird Scale umgeschaltet.
+-- Room-Auswahl innerhalb eines Games.
+-- Zeigt alle Rooms eines Games in einem 3-Spalten-Grid.
+-- Wird von GameRoom aufgerufen, nachdem ein Game ausgewählt wurde.
 
 import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/timer"
 import "CoreLibs/keyboard"
+import "Migration" -- MIGRATION: v1→v2 Game-Daten Migration
 
 local gfx = playdate.graphics
 
 LoadRoom = {}
 
 local switchRoomFunction
-local nextRoom
+local nextRoom           -- TileRoom
+local backRoom           -- GameRoom
 local needsRedraw
-local pendingOpenName
+
+local pendingOpenIdx     -- 1-basierter Room-Index für verzögertes Öffnen
 local pendingOpenIsNew = false
 
 -- Konstanten
 local GRID_COLS = 3
-local MAX_FILES = 6
--- Zell-Innengröße (ohne Padding). Padding 1px ringsum → Gesamt-Zelle 66×30 px.
--- 3 Spalten × 66 = 198 px Breite, 3 Zeilen × 30 = 90 px Höhe.
+local MAX_ROOMS = 6
 local CELL_W    = 64
 local CELL_H    = 28
 
--- Datenliste und Vorschau-Cache
-local savedNames  = {}   -- Array von Dateinamen {"map1", "map2", …}
-local previewCache = {}  -- {[name] = gfx.image|nil}
+-- Game-Kontext
+local currentGameName = nil   -- Name des aktuell geöffneten Games
+local currentGameData = nil   -- v2 Game-Daten (rooms, tiles, frames)
+local roomNames       = {}    -- Array von Room-Namen für Anzeige
+local previewCache    = {}    -- {[roomIndex] = gfx.image|nil}, 1-basiert
 
--- ── Datastore-Hilfsfunktionen ─────────────────────────────────────────────────
+-- ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
--- Liest die gespeicherte Index-Datei aus dem Datastore.
-local function readSaveIndex()
-    local idx = playdate.datastore.read("saves/index")
-    return (idx and idx.names) and idx.names or {}
-end
-
--- Ergänzt die Index-Datei um einen neuen Namen (Duplikate ignoriert).
-local function addToIndex(name)
-    playdate.file.mkdir("saves")
-    local idx = playdate.datastore.read("saves/index") or {names = {}}
-    for _, n in ipairs(idx.names) do
-        if n == name then return end
-    end
-    table.insert(idx.names, name)
-    playdate.datastore.write(idx, "saves/index")
-end
-
--- Befüllt previewCache mit den Vorschaubildern aller übergebenen Dateinamen.
-local function loadPreviews(names)
+-- Lädt Room-Previews aus dem Datastore.
+local function loadRoomPreviews()
     previewCache = {}
-    for _, name in ipairs(names) do
-        previewCache[name] = playdate.datastore.readImage("saves/" .. name .. "_preview")
+    if not currentGameData or not currentGameData.rooms then return end
+    for i, room in ipairs(currentGameData.rooms) do
+        previewCache[i] = playdate.datastore.readImage(
+            "saves/" .. currentGameName .. "_room" .. room.id .. "_preview"
+        )
     end
 end
 
--- Öffnet den TileRoom für eine Datei.
--- Bei neuen Dateien: leere Map anlegen und sofort initial speichern,
--- damit die Save-Datei konsistent existiert, bevor der Room geladen wird.
-local function openTileRoom(name, isNew)
-    nextRoom:setFileName(name)
+-- Aktualisiert die Room-Namen-Liste aus gameData.
+local function refreshRoomNames()
+    roomNames = {}
+    if not currentGameData or not currentGameData.rooms then return end
+    for _, room in ipairs(currentGameData.rooms) do
+        table.insert(roomNames, room.name or ("Room " .. (room.id + 1)))
+    end
+end
+
+-- Öffnet den TileRoom für einen bestimmten Room.
+-- roomIdx: 1-basierter Lua-Index in gameData.rooms
+local function openTileRoom(roomIdx, isNew)
+    -- Game-Daten an TileRoom übergeben
+    nextRoom:setGame(currentGameName, currentGameData)
     if isNew then
-        nextRoom:newMap()
+        -- Neuen Room erstellen und laden
+        local newIdx = nextRoom:newRoom()
+        -- gameData wird von TileRoom aktualisiert
+        currentGameData = nextRoom:getGameData()
+        -- Initial speichern
         nextRoom:saveToFile()
     else
-        nextRoom:loadFromFile(name)
+        nextRoom:setRoom(roomIdx)
     end
     switchRoomFunction(nextRoom)
 end
 
--- Merkt einen Room-Wechsel vor; tatsächlicher Wechsel erfolgt im Update,
--- nachdem das Keyboard vollständig geschlossen ist.
-local function queueOpenTileRoom(name, isNew)
-    pendingOpenName = name
+-- Merkt einen Room-Wechsel vor (für nach Keyboard-Close).
+local function queueOpenTileRoom(roomIdx, isNew)
+    pendingOpenIdx = roomIdx
     pendingOpenIsNew = isNew and true or false
 end
 
--- Löscht alle Dateien eines Projekts und entfernt es aus dem Index.
-local function deleteSave(name)
-    -- JSON-Tilemap-Datei
-    playdate.datastore.delete("saves/" .. name)
-    -- Vorschaubild
-    local prev = "saves/" .. name .. "_preview.pdi"
-    if playdate.file.exists(prev) then playdate.file.delete(prev) end
-    -- Custom-Tile-Bilder (Index 4+)
-    local i = 4
-    while true do
-        local p = "saves/" .. name .. "_img" .. i .. ".pdi"
-        if not playdate.file.exists(p) then break end
-        playdate.file.delete(p)
-        i += 1
+-- Löscht einen Room aus dem aktuellen Game.
+-- roomIdx: 1-basierter Lua-Index
+local function deleteRoom(roomIdx)
+    if not currentGameData or not currentGameData.rooms then return end
+    -- Mindestens 1 Room muss bleiben
+    if #currentGameData.rooms <= 1 then return end
+    -- Room-Preview löschen
+    local room = currentGameData.rooms[roomIdx]
+    if room then
+        local prevPath = "saves/" .. currentGameName .. "_room" .. room.id .. "_preview.pdi"
+        if playdate.file.exists(prevPath) then
+            playdate.file.delete(prevPath)
+        end
     end
-    -- Aus Index-Datei entfernen
-    local idx = playdate.datastore.read("saves/index") or {names = {}}
-    for j, n in ipairs(idx.names) do
-        if n == name then table.remove(idx.names, j); break end
-    end
-    playdate.datastore.write(idx, "saves/index")
+    -- Room aus gameData entfernen
+    table.remove(currentGameData.rooms, roomIdx)
+    -- Game speichern
+    playdate.datastore.write(currentGameData, "saves/" .. currentGameName)
+    -- Listen aktualisieren
+    refreshRoomNames()
+    loadRoomPreviews()
 end
 
 -- Berechnet die benötigte Zeilenanzahl für das Grid.
 local function getGridRows()
-    -- 1 Zelle für „+Neu", dann savedNames
-    return math.max(1, math.ceil((1 + #savedNames) / GRID_COLS))
+    return math.max(1, math.ceil((1 + #roomNames) / GRID_COLS))
 end
 
 -- ── GridView ──────────────────────────────────────────────────────────────────
--- Innere Zellgröße 64×28 + 1px Padding ringsum = Gesamtzelle 66×30 px
 local gridView = playdate.ui.gridview.new(CELL_W, CELL_H)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setCellPadding(1, 1, 1, 1)
 
--- Zeigt „Loeschen" im Systemmenü wenn eine Datei-Zelle selektiert ist;
--- entfernt den Eintrag bei der „+Neu"-Zelle.
+-- Zeigt „Loeschen" im Systemmenü wenn eine Room-Zelle selektiert ist.
 local function updateMenuItems()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
     local _, row, col = gridView:getSelection()
     local linearIndex = (row - 1) * GRID_COLS + col
-    if linearIndex > 1 then
-        local name = savedNames[linearIndex - 1]
-        if name then
-            -- Callback wird aufgerufen, wenn der Nutzer den Menüpunkt bestätigt
+    if linearIndex > 1 and #roomNames > 1 then
+        local roomIdx = linearIndex - 1
+        if roomIdx <= #roomNames then
             menu:addMenuItem("loeschen", function()
-                deleteSave(name)
-                savedNames = readSaveIndex()
-                loadPreviews(savedNames)
+                deleteRoom(roomIdx)
                 gridView:setNumberOfRows(getGridRows())
                 gridView:setSelection(1, 1, 1)
                 updateMenuItems()
@@ -137,15 +132,12 @@ local function updateMenuItems()
     end
 end
 
--- Zeichnet eine Zelle:
--- Linearer Index 1 = „+Neu", Index 2..n+1 = savedNames[1..n]
+-- Zeichnet eine Zelle.
 function gridView:drawCell(section, row, column, selected, x, y, width, height)
     local linearIndex = (row - 1) * GRID_COLS + column
-    local totalCells  = 1 + #savedNames
-    -- Überzählige Zellen (letzte Zeile teilweise leer) leer lassen
+    local totalCells  = 1 + #roomNames
     if linearIndex > totalCells then return end
 
-    -- Hintergrund der Zelle
     if selected then
         gfx.setColor(gfx.kColorBlack)
         gfx.fillRect(x, y, width, height)
@@ -157,23 +149,19 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
     end
 
     if linearIndex == 1 then
-        -- „+Neu"-Zelle: großes „+" zentriert
         if selected then
             gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
         else
             gfx.setImageDrawMode(gfx.kDrawModeCopy)
         end
-        -- „+" vertikal und horizontal zentriert im inneren Bereich
         gfx.drawTextAligned("+", x + width // 2, y + height // 2 - 5, kTextAlignment.center)
     else
-        -- Datei-Zelle: Preview-Bild, skaliert auf 0.2 → 40×24 px, zentriert in 64×28
-        local name = savedNames[linearIndex - 1]
-        if name then
-            local preview = previewCache[name]
+        local roomIdx = linearIndex - 1
+        if roomIdx <= #roomNames then
+            local preview = previewCache[roomIdx]
             if preview then
                 local px = x + (width  - 40) // 2
                 local py = y + (height - 24) // 2
-                -- Invertierter Zeichenmodus bei Selektion (weiße Pixel auf schwarzem Bg)
                 if selected then
                     gfx.setImageDrawMode(gfx.kDrawModeInverted)
                 else
@@ -181,7 +169,6 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
                 end
                 preview:drawScaled(px, py, 0.2)
             else
-                -- Kein Preview vorhanden: leerer Platzhalter-Rahmen
                 if selected then
                     gfx.setColor(gfx.kColorWhite)
                 else
@@ -192,57 +179,85 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
         end
     end
 
-    -- Zeichenmodus zurücksetzen
     gfx.setImageDrawMode(gfx.kDrawModeCopy)
 end
 
 -- ── Room-Lifecycle ────────────────────────────────────────────────────────────
 
-function LoadRoom:init(switchRoom, nextRoomReference)
+function LoadRoom:init(switchRoom, nextRoomReference, backRoomReference)
     switchRoomFunction = switchRoom
     nextRoom = nextRoomReference
+    backRoom = backRoomReference
     needsRedraw = true
 end
 
+-- Wird von GameRoom aufgerufen, bevor zu LoadRoom gewechselt wird.
+-- Lädt Game-Daten und bereitet Room-Liste vor.
+function LoadRoom:setGame(gameName, isNew)
+    currentGameName = gameName
+    if isNew then
+        -- Neues Game: TileRoom erstellt die Daten, wir brauchen ein leeres Game
+        -- TileRoom:newMap() wird beim ersten Room-Öffnen aufgerufen
+        currentGameData = nil
+    else
+        local saved = playdate.datastore.read("saves/" .. gameName)
+        -- MIGRATION: v1-Format erkennen und konvertieren
+        if saved and Migration.needsMigration(saved) then
+            local origImagetable = gfx.imagetable.new("images/cellbg")
+            local blackTileImg = gfx.image.new(8, 8)
+            gfx.pushContext(blackTileImg)
+                gfx.setColor(gfx.kColorBlack)
+                gfx.fillRect(0, 0, 8, 8)
+            gfx.popContext()
+            local baseTileImages = {
+                origImagetable:getImage(1),
+                origImagetable:getImage(2),
+                blackTileImg
+            }
+            saved = Migration.migrateV1ToV2(saved, gameName, baseTileImages)
+            playdate.datastore.write(saved, "saves/" .. gameName)
+            print("Info: v1-Save in LoadRoom migriert zu v2:", gameName)
+        end
+        currentGameData = saved
+    end
+    refreshRoomNames()
+end
+
 function LoadRoom:update()
-    -- Wichtig: Room-Wechsel erst nach vollständigem Keyboard-Close durchführen,
-    -- damit der Input-Handler-Stack nicht im Keyboard-Cleanup landet.
-    if pendingOpenName and not playdate.keyboard.isVisible() then
-        local name = pendingOpenName
+    -- Verzögerter Room-Wechsel nach Keyboard-Close
+    if pendingOpenIdx and not playdate.keyboard.isVisible() then
+        local roomIdx = pendingOpenIdx
         local isNew = pendingOpenIsNew
-        pendingOpenName = nil
+        pendingOpenIdx = nil
         pendingOpenIsNew = false
-        openTileRoom(name, isNew)
+        openTileRoom(roomIdx, isNew)
         return
     end
 
-    -- Keyboard offen: B-Taste bricht die Eingabe ab
     if playdate.keyboard.isVisible() then
         if playdate.buttonJustPressed(playdate.kButtonB) then
-            playdate.keyboard.hide()  -- löst keyboardWillHideCallback(false) aus
+            playdate.keyboard.hide()
         end
-        -- Vorschautext im unteren Bereich soll live mitscrollen
         needsRedraw = true
     end
 
     if needsRedraw or gridView.isScrolling then
         gfx.clear(gfx.kColorWhite)
 
-        -- Titelzeile (y 0..12)
-        gfx.drawText("Hans Dither", 4, 2)
+        -- Titelzeile: Game-Name
+        local title = currentGameName or "Hans Dither"
+        gfx.drawText(title, 4, 2)
         gfx.setColor(gfx.kColorBlack)
         gfx.drawLine(0, 12, 199, 12)
 
-        -- Grid (y 13..102: 3 Zeilen × 30 px = 90 px)
+        -- Grid
         gridView:drawInRect(1, 13, 198, 90)
 
         -- Trennlinie unten
         gfx.setColor(gfx.kColorBlack)
         gfx.drawLine(0, 104, 199, 104)
 
-        -- ── Unterer Info-Bereich (y 105..119) ────────────────────────────────
-        -- Keyboard geöffnet: aktuell eingetippten Text als Live-Vorschau anzeigen
-        -- Keyboard zu: Namen der selektierten Zelle anzeigen
+        -- Unterer Info-Bereich
         local infoText
         if playdate.keyboard.isVisible() then
             local t = playdate.keyboard.text
@@ -251,13 +266,13 @@ function LoadRoom:update()
             local _, row, col = gridView:getSelection()
             local idx = (row - 1) * GRID_COLS + col
             if idx == 1 then
-                if #savedNames >= MAX_FILES then
-                    infoText = "[Max. " .. MAX_FILES .. " Dateien erreicht]"
+                if #roomNames >= MAX_ROOMS then
+                    infoText = "[Max. " .. MAX_ROOMS .. " Rooms erreicht]"
                 else
-                    infoText = "[+ Neue Karte]"
+                    infoText = "[+ Neuer Room]"
                 end
             else
-                infoText = savedNames[idx - 1] or ""
+                infoText = roomNames[idx - 1] or ""
             end
         end
         gfx.drawText(infoText, 4, 108)
@@ -269,14 +284,21 @@ function LoadRoom:update()
 end
 
 function LoadRoom:entered()
-    -- Systemmenü aufräumen (z.B. TileRoom-Items entfernen)
     playdate.getSystemMenu():removeAllMenuItems()
-    -- Dateiliste und Vorschaubilder aktualisieren
-    savedNames = readSaveIndex()
-    loadPreviews(savedNames)
+    refreshRoomNames()
+    loadRoomPreviews()
     gridView:setNumberOfRows(getGridRows())
     gridView:setSelection(1, 1, 1)
     updateMenuItems()
+    -- Nach Rückkehr aus TileRoom: gameData aktualisieren (könnte gespeichert worden sein)
+    if currentGameName and nextRoom and nextRoom.getGameData then
+        local updatedData = nextRoom:getGameData()
+        if updatedData and updatedData.name == currentGameName then
+            currentGameData = updatedData
+            refreshRoomNames()
+            loadRoomPreviews()
+        end
+    end
     needsRedraw = true
     print("Entered LoadRoom")
 end
@@ -309,33 +331,27 @@ function LoadRoom:inputHandler()
             local _, row, col = gridView:getSelection()
             local linearIndex = (row - 1) * GRID_COLS + col
             if linearIndex == 1 then
-                -- „+ Neue Karte": nur wenn MAX_FILES noch nicht erreicht
-                if #savedNames >= MAX_FILES then return end
-                -- Keyboard benötigt Display-Scale 1
-                playdate.display.setScale(1)
-                playdate.keyboard.show("")
-                playdate.keyboard.keyboardWillHideCallback = function(confirmed)
-                    playdate.display.setScale(2)
-                    if confirmed then
-                        local name = playdate.keyboard.text
-                        if name and #name > 0 then
-                            addToIndex(name)
-                            queueOpenTileRoom(name, true)
-                            return  -- Raum verlassen → kein needsRedraw nötig
-                        end
-                    end
-                    -- Abbruch oder leerer Name: zurück zur Liste
-                    savedNames = readSaveIndex()
-                    gridView:setNumberOfRows(getGridRows())
-                    updateMenuItems()
-                    needsRedraw = true
+                -- „+ Neuer Room": nur wenn MAX_ROOMS noch nicht erreicht
+                if #roomNames >= MAX_ROOMS then return end
+                if not currentGameData then
+                    -- Neues Game: erstelle und lade direkt
+                    queueOpenTileRoom(1, true)
+                else
+                    -- Neuen Room hinzufügen
+                    queueOpenTileRoom(#roomNames + 1, true)
                 end
             else
-                -- Vorhandene Datei öffnen
-                local name = savedNames[linearIndex - 1]
-                if name then
-                    queueOpenTileRoom(name, false)
+                -- Vorhandenen Room öffnen
+                local roomIdx = linearIndex - 1
+                if roomIdx <= #roomNames then
+                    queueOpenTileRoom(roomIdx, false)
                 end
+            end
+        end,
+        BButtonDown = function()
+            -- Zurück zum GameRoom
+            if backRoom and switchRoomFunction then
+                switchRoomFunction(backRoom)
             end
         end
     }

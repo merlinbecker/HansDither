@@ -8,6 +8,7 @@ import "CoreLibs/object" -- für playdate.graphics.image.new()
 
 -- Load rooms
 import "TitleRoom"
+import "GameRoom"
 import "LoadRoom"
 import "TileRoom"
 
@@ -35,8 +36,9 @@ function switchRoom(newRoom)
 end
 
 -- Initialize rooms with shared data and dependencies
-TitleRoom:init(switchRoom,LoadRoom)
-LoadRoom:init(switchRoom,TileRoom)
+TitleRoom:init(switchRoom, GameRoom)
+GameRoom:init(switchRoom, LoadRoom)
+LoadRoom:init(switchRoom, TileRoom, GameRoom)
 TileRoom:init(switchRoom, PixelRoom, LoadRoom)
 PixelRoom:init(switchRoom,TileRoom)
 --ZweiterRaum.init(sharedData, switchRoom, DritterRaum)

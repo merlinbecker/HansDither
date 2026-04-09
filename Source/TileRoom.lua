@@ -1,4 +1,4 @@
--- StartRaum.lua
+-- TileRoom.lua
 
 import "CoreLibs/graphics"
 import "CoreLibs/timer"
@@ -7,6 +7,7 @@ import "CoreLibs/animation"
 import "CoreLibs/crank"
 import "CoreLibs/object" -- für playdate.graphics.image.new()
 import "PixelRoom"
+import "Migration" -- MIGRATION: v1→v2 Konvertierung
 
 
 --
@@ -97,8 +98,12 @@ local tilePickerVisible = false
 local tilePickerLastCrankMs = 0
 
 -- Datei-Verwaltung
-local currentFileName = nil    -- Name der aktuell geöffneten Datei (ohne Pfad)
+local currentFileName = nil    -- Name des aktuell geöffneten Games (ohne Pfad)
 local backRoom = nil           -- Raum, zu dem nach dem Speichern zurückgewechselt wird
+
+-- Game State (v2): vollständiges Game-Objekt mit allen Rooms
+local gameData = nil           -- v2-Game-Tabelle (rooms, tiles, frames)
+local currentRoomIndex = 1     -- 1-basierter Lua-Index in gameData.rooms
 
 -- Matrix-Imagetable (2 Tiles, 8x8) laden (siehe 7.20.12 Image Table)
 local origImagetable = gfx.imagetable.new("images/cellbg")
@@ -243,44 +248,142 @@ function TileRoom:init(switchRoom, nextRoomReference, backRoomReference)
     needsRedraw = true
 end
 
--- Setzt den Dateinamen des aktuell geöffneten Projekts.
--- Wird von LoadRoom aufgerufen, bevor zu TileRoom gewechselt wird.
+-- Setzt den Dateinamen des aktuell geöffneten Games.
+-- Wird von LoadRoom/GameRoom aufgerufen, bevor zu TileRoom gewechselt wird.
 function TileRoom:setFileName(name)
     currentFileName = name
 end
 
--- Setzt Tilemap und Imagetable auf den Ausgangszustand zurück (neue leere Karte).
--- Imagetable wird auf die 3 Standard-Tiles reduziert, alle Zellen auf Tile 1 gesetzt.
-function TileRoom:newMap()
-    -- Imagetable auf 3 Basis-Tiles (Hintergrund, Gitter, Schwarz) zurücksetzen
-    local freshTable = gfx.imagetable.new(3)
-    freshTable:setImage(1, origImagetable:getImage(1))
-    freshTable:setImage(2, origImagetable:getImage(2))
-    freshTable:setImage(3, blackTile)
-    cellImagetable = freshTable
-    -- HashCache synchron halten
-    hashCache = {}
-    hashCache[1] = imageHash(origImagetable:getImage(1))
-    hashCache[2] = imageHash(origImagetable:getImage(2))
-    hashCache[3] = imageHash(blackTile)
-    tilemap:setImageTable(cellImagetable)
-    -- Alle Zellen auf Tile 1 (Hintergrund) setzen
-    for y = 1, GRID_ROWS do
-        for x = 1, GRID_COLS do
-            tilemap:setTileAtPosition(x, y, 1)
-        end
+-- Setzt Game-Kontext: name + v2-Daten, baut Imagetable aus tiles/frames auf.
+-- Wird von LoadRoom aufgerufen, bevor ein Room geladen wird.
+function TileRoom:setGame(name, data)
+    currentFileName = name
+    gameData = data
+    -- Imagetable aus v2 tiles/frames aufbauen
+    rebuildImagetableFromGameData()
+    -- Ersten Room in Tilemap laden, damit kein stale State übrigbleibt
+    if gameData and gameData.rooms and #gameData.rooms > 0 then
+        currentRoomIndex = 1
+        loadRoomIntoTilemap(1)
     end
+end
+
+-- Gibt die aktuelle gameData-Tabelle zurück (für LoadRoom/GameRoom).
+function TileRoom:getGameData()
+    return gameData
+end
+
+-- Speichert den aktuellen Room-State in gameData zurück und lädt einen anderen Room.
+-- roomIdx: 1-basierter Lua-Index in gameData.rooms
+function TileRoom:setRoom(roomIdx)
+    -- Aktuellen Room-State sichern, bevor wir wechseln
+    syncCurrentRoomToGameData()
+    -- Neuen Room laden
+    currentRoomIndex = roomIdx
+    loadRoomIntoTilemap(roomIdx)
+    tilePickerIndex = math.max(3, math.min(tilePickerIndex, cellImagetable:getLength()))
+    needsRedraw = true
+end
+
+-- Erstellt einen neuen leeren Room im aktuellen Game.
+-- Rückgabe: 1-basierter Lua-Index des neuen Rooms
+function TileRoom:newRoom()
+    if not gameData then
+        -- Falls kein Game geladen: komplett neues Game erstellen
+        -- createEmptyGameData erzeugt bereits einen Room (id=0), daher direkt diesen verwenden
+        gameData = createEmptyGameData(currentFileName or "untitled")
+        rebuildImagetableFromGameData()
+        currentRoomIndex = 1
+        loadRoomIntoTilemap(1)
+        tilePickerIndex = 3
+        needsRedraw = true
+        return 1
+    end
+    -- Neue Room-ID = höchste vorhandene + 1 (0-basiert im Speicherformat)
+    local maxId = -1
+    for _, room in ipairs(gameData.rooms) do
+        if room.id > maxId then maxId = room.id end
+    end
+    local newId = maxId + 1
+    -- Leere Tile-Daten: alle auf 0 (white, 0-basiert)
+    local emptyTiles = {}
+    for i = 1, GRID_COLS * GRID_ROWS do
+        emptyTiles[i] = 0
+    end
+    local newRoom = {
+        id = newId,
+        name = "Room " .. (newId + 1),
+        tiles = emptyTiles
+    }
+    table.insert(gameData.rooms, newRoom)
+    -- Neuen Room direkt laden
+    currentRoomIndex = #gameData.rooms
+    loadRoomIntoTilemap(currentRoomIndex)
+    tilePickerIndex = 3
+    needsRedraw = true
+    return currentRoomIndex
+end
+
+-- Setzt Tilemap und Imagetable auf den Ausgangszustand zurück (neues leeres Game).
+-- Erstellt Game mit einem leeren Room und den 3 Basis-Tiles.
+function TileRoom:newMap()
+    gameData = createEmptyGameData(currentFileName or "untitled")
+    rebuildImagetableFromGameData()
+    currentRoomIndex = 1
+    loadRoomIntoTilemap(1)
     tilePickerIndex = 3
     needsRedraw = true
 end
 
--- Speichert das aktuelle Projekt in den Datastore.
--- Ablage: saves/<name>      → Tilemap-Indizes (JSON)
---         customTileData     → eigene Tile-Bilder als Pixel-Daten (JSON)
---         saves/<name>_preview        → Vorschaubild der Tilemap (PDI)
+-- ── Internes Datenmodell ──────────────────────────────────────────────────────
 
--- Serialisiert ein Tile-Bild als flaches Pixel-Array für JSON-Speicherung.
-local function encodeTileImage(image)
+-- Erstellt ein leeres v2-Game-Objekt mit 3 Basis-Tiles und einem leeren Room.
+function createEmptyGameData(name)
+    -- Basis-Frames aus Runtime-Images
+    local baseTileImages = {
+        origImagetable:getImage(1),
+        origImagetable:getImage(2),
+        blackTile
+    }
+    local frames = {}
+    local baseNames = { "white", "grid", "black" }
+    for i, img in ipairs(baseTileImages) do
+        local data = encodeFrameData(img)
+        frames[i] = { id = i - 1, data = data }
+    end
+    local tiles = {}
+    for i = 1, 3 do
+        tiles[i] = {
+            id = i - 1,
+            name = baseNames[i],
+            type = 0,
+            frames = { i - 1 }
+        }
+    end
+    -- Ein leerer Room (alle Tiles = 0 = white)
+    local emptyRoomTiles = {}
+    for j = 1, GRID_COLS * GRID_ROWS do
+        emptyRoomTiles[j] = 0
+    end
+    local rooms = {
+        {
+            id = 0,
+            name = "Room 1",
+            tiles = emptyRoomTiles
+        }
+    }
+    return {
+        version = 2,
+        name = name,
+        rooms = rooms,
+        tiles = tiles,
+        frames = frames
+    }
+end
+
+-- Serialisiert ein Tile-Bild als flaches 64er-Pixel-Array (v2 Frame-Format).
+-- Rückgabe: Array mit 64 Einträgen (0=weiß, 1=schwarz, 2=transparent)
+function encodeFrameData(image)
     local w, h = image:getSize()
     local pixels = {}
     local n = 1
@@ -297,16 +400,26 @@ local function encodeTileImage(image)
             n = n + 1
         end
     end
-    return { w = w, h = h, pixels = pixels }
+    return pixels
 end
 
--- Rekonstruiert ein Tile-Bild aus serialisierten Pixel-Daten.
-local function decodeTileImage(tileData)
-    if not tileData or type(tileData) ~= "table" then return nil end
-    local w = tonumber(tileData.w)
-    local h = tonumber(tileData.h)
-    local pixels = tileData.pixels
-    if not w or not h or type(pixels) ~= "table" then return nil end
+-- Rekonstruiert ein 8×8-Tile-Bild aus Frame-Daten (flaches 64er-Array).
+local function decodeFrameData(frameData)
+    if not frameData or type(frameData) ~= "table" then return nil end
+    -- Unterstützt sowohl v2 (flaches Array) als auch v1 ({w, h, pixels})
+    local pixels, w, h
+    if frameData.pixels then
+        -- v1-Format: {w=8, h=8, pixels={...}}
+        w = tonumber(frameData.w) or 8
+        h = tonumber(frameData.h) or 8
+        pixels = frameData.pixels
+    else
+        -- v2-Format: flaches 64er-Array direkt als data
+        w = 8
+        h = 8
+        pixels = frameData
+    end
+    if type(pixels) ~= "table" then return nil end
 
     local img = gfx.image.new(w, h, gfx.kColorClear)
     gfx.pushContext(img)
@@ -330,12 +443,12 @@ end
 
 -- Prüft, ob encode/decode für ein Tile verlustfrei ist.
 local function tileRoundtripOk(image)
-    local decoded = decodeTileImage(encodeTileImage(image))
+    local decoded = decodeFrameData(encodeFrameData(image))
     if not decoded then return false end
     return imageHash(image) == imageHash(decoded)
 end
 
--- Rendert bei jedem Save ein frisches Preview-Bild aus der aktuellen Tilemap.
+-- Rendert ein Preview-Bild aus der aktuellen Tilemap.
 local function renderPreviewImage()
     local previewImg = gfx.image.new(GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE, gfx.kColorWhite)
     gfx.pushContext(previewImg)
@@ -344,16 +457,95 @@ local function renderPreviewImage()
     return previewImg
 end
 
+-- Rendert ein Preview für einen bestimmten Room (ohne die Tilemap zu verändern).
+-- Temporär: setzt Tilemap-Daten, rendert, stellt dann wieder her.
+local function renderRoomPreview(roomData)
+    -- Room-Tiles von 0-basiert auf 1-basiert konvertieren
+    local runtimeTiles = {}
+    for i, tileId in ipairs(roomData.tiles) do
+        runtimeTiles[i] = tileId + 1
+    end
+    -- Tilemap-State sichern
+    local savedData, savedWidth = tilemap:getTiles()
+    -- Temporär setzen
+    tilemap:setTiles(runtimeTiles, GRID_COLS)
+    local preview = renderPreviewImage()
+    -- Wiederherstellen
+    tilemap:setTiles(savedData, savedWidth)
+    return preview
+end
+
+-- Baut die Runtime-Imagetable und den hashCache aus gameData.tiles/frames auf.
+function rebuildImagetableFromGameData()
+    if not gameData then return end
+    local tileCount = #gameData.tiles
+    local freshTable = gfx.imagetable.new(tileCount)
+    hashCache = {}
+    for i, tileDef in ipairs(gameData.tiles) do
+        -- Jedes Tile hat genau einen Frame (für jetzt)
+        local frameId = tileDef.frames[1] -- 0-basiert
+        local frameObj = nil
+        -- Frame-Objekt per ID finden
+        for _, f in ipairs(gameData.frames) do
+            if f.id == frameId then
+                frameObj = f
+                break
+            end
+        end
+        if frameObj then
+            local img = decodeFrameData(frameObj.data)
+            if img then
+                freshTable:setImage(i, img)
+                hashCache[i] = imageHash(img)
+            end
+        end
+    end
+    cellImagetable = freshTable
+    tilemap:setImageTable(cellImagetable)
+end
+
+-- Lädt einen Room (per 1-basiertem Lua-Index) aus gameData in die Tilemap.
+function loadRoomIntoTilemap(roomIdx)
+    if not gameData or not gameData.rooms[roomIdx] then return end
+    local roomData = gameData.rooms[roomIdx]
+    -- Room-Tiles: 0-basiert (Speicherformat) → 1-basiert (Runtime)
+    local runtimeTiles = {}
+    for i, tileId in ipairs(roomData.tiles) do
+        runtimeTiles[i] = tileId + 1
+    end
+    tilemap:setTiles(runtimeTiles, GRID_COLS)
+end
+
+-- Synchronisiert den aktuellen Tilemap-State zurück in gameData.rooms[currentRoomIndex].
+function syncCurrentRoomToGameData()
+    if not gameData or not gameData.rooms[currentRoomIndex] then return end
+    local data, _ = tilemap:getTiles()
+    -- Runtime (1-basiert) → Speicher (0-basiert)
+    local savedTiles = {}
+    for i, runtimeIdx in ipairs(data) do
+        savedTiles[i] = runtimeIdx - 1
+    end
+    gameData.rooms[currentRoomIndex].tiles = savedTiles
+end
+
 -- Entfernt unbenutzte Tiles und zieht die verbleibenden Indizes kompakt nach.
 -- Basis-Tiles 1..3 bleiben immer erhalten.
+-- Berücksichtigt alle Rooms des Games, nicht nur den aktuellen.
 local function compactTileState()
-    local data, width = tilemap:getTiles()
+    -- Zuerst: aktuellen Room-State in gameData synchronisieren
+    syncCurrentRoomToGameData()
+
     local maxTile = cellImagetable:getLength()
 
+    -- Alle in irgendeinem Room benutzten Tiles sammeln (1-basierte Runtime-IDs)
     local used = { [1] = true, [2] = true, [3] = true }
-    for _, idx in ipairs(data) do
-        if type(idx) == "number" then
-            used[idx] = true
+    for _, room in ipairs(gameData.rooms) do
+        for _, tileId0 in ipairs(room.tiles) do
+            -- 0-basiert → 1-basiert
+            local runtimeIdx = tileId0 + 1
+            if type(runtimeIdx) == "number" then
+                used[runtimeIdx] = true
+            end
         end
     end
 
@@ -373,16 +565,20 @@ local function compactTileState()
         end
     end
 
-    local remappedData = {}
-    for i, oldIdx in ipairs(data) do
-        local mapped = oldToNew[oldIdx]
-        if not mapped then
-            mapped = 1
-            print("Warnung: Undefinierter Tile-Index in Map auf 1 gesetzt:", oldIdx)
+    -- Alle Rooms remappen (0-basiert)
+    for _, room in ipairs(gameData.rooms) do
+        for i, tileId0 in ipairs(room.tiles) do
+            local runtimeOld = tileId0 + 1
+            local runtimeNew = oldToNew[runtimeOld]
+            if not runtimeNew then
+                runtimeNew = 1
+                print("Warnung: Undefinierter Tile-Index in Room auf 0 gesetzt:", tileId0)
+            end
+            room.tiles[i] = runtimeNew - 1  -- zurück auf 0-basiert
         end
-        remappedData[i] = mapped
     end
 
+    -- Neue Imagetable aufbauen
     local newTable = gfx.imagetable.new(newCount)
     local newHashCache = {}
     for newIdx = 1, newCount do
@@ -408,8 +604,6 @@ local function compactTileState()
     remappedPickerIndex = math.max(3, math.min(remappedPickerIndex, newCount))
 
     return {
-        data = remappedData,
-        width = width,
         imageTable = newTable,
         hashCache = newHashCache,
         maxTile = newCount,
@@ -417,114 +611,109 @@ local function compactTileState()
     }
 end
 
+-- Speichert das aktuelle Game im v2-Format.
 function TileRoom:saveToFile()
-    if not currentFileName then return end
+    if not currentFileName or not gameData then return end
     local name = currentFileName
-    -- Sicherstellen, dass der Zielordner existiert
     playdate.file.mkdir("saves")
 
-    -- 1. Tile-Zustand komprimieren und direkt in den Runtime-Zustand übernehmen.
+    -- 1. Aktuellen Room-State in gameData synchronisieren
+    syncCurrentRoomToGameData()
+
+    -- 2. Tiles komprimieren (über alle Rooms)
     local compacted = compactTileState()
     cellImagetable = compacted.imageTable
     hashCache = compacted.hashCache
     tilemap:setImageTable(cellImagetable)
-    tilemap:setTiles(compacted.data, compacted.width)
     tilePickerIndex = compacted.tilePickerIndex
 
-    -- 2. Komprimierte Tilemap-Indizes als JSON speichern
-    local data = compacted.data
-    local width = compacted.width
-    local maxTile = compacted.maxTile
-    local customTileIndices = {}
-    -- 3. Eigene Tile-Bilder (Indizes 4+) als Pixel-Daten speichern
-    local customTileData = {}
-    local customTileHashes = {}
-    for i = 4, maxTile do
+    -- Aktuellen Room neu in Tilemap laden (Indizes wurden remapped)
+    loadRoomIntoTilemap(currentRoomIndex)
+
+    -- 3. v2-Tiles und Frames aus der komprimierten Imagetable aufbauen
+    local v2Tiles = {}
+    local v2Frames = {}
+    local baseNames = { "white", "grid", "black" }
+    for i = 1, compacted.maxTile do
         local img = cellImagetable:getImage(i)
         if img then
-            customTileData[tostring(i)] = encodeTileImage(img)
-            customTileHashes[tostring(i)] = imageHash(img)
-            table.insert(customTileIndices, i)
+            local frameId = i - 1 -- 0-basiert
+            local tileName
+            if i <= 3 then
+                tileName = baseNames[i]
+            else
+                tileName = "tile_" .. frameId
+            end
+            v2Tiles[i] = {
+                id = frameId,
+                name = tileName,
+                type = 0,
+                frames = { frameId }
+            }
+            v2Frames[i] = {
+                id = frameId,
+                data = encodeFrameData(img)
+            }
             if not tileRoundtripOk(img) then
                 print("Warnung: Rekonstruktionstest fehlgeschlagen fuer Tile:", i)
             end
-        else
-            print("Warnung: Kein Bild an Imagetable-Index:", i)
         end
     end
-    -- Save-Header mit den tatsächlich geschriebenen Custom-Tile-Indizes aktualisieren.
-    playdate.datastore.write({
-        data = data,
-        width = width,
-        customTileIndices = customTileIndices,
-        customTileData = customTileData,
-        customTileHashes = customTileHashes
-    }, "saves/" .. name)
 
-    -- 4. Vorschaubild bei jedem Save neu rendern und speichern
-    local previewImg = renderPreviewImage()
-    playdate.datastore.writeImage(previewImg, "saves/" .. name .. "_preview")
+    -- 4. gameData aktualisieren
+    gameData.tiles = v2Tiles
+    gameData.frames = v2Frames
+    gameData.version = 2
+    gameData.name = name
+
+    -- 5. Gesamtes Game als JSON speichern
+    playdate.datastore.write(gameData, "saves/" .. name)
+
+    -- 6. Preview-Bilder generieren
+    -- Aktueller Room-Preview (Dateiname nutzt room.id, nicht den Lua-Index)
+    local currentRoomId = gameData.rooms[currentRoomIndex].id
+    local currentPreview = renderPreviewImage()
+    playdate.datastore.writeImage(currentPreview, "saves/" .. name .. "_room" .. currentRoomId .. "_preview")
+
+    -- Game-Preview = Preview des ersten Rooms
+    if currentRoomIndex == 1 then
+        playdate.datastore.writeImage(currentPreview, "saves/" .. name .. "_preview")
+    else
+        -- Ersten Room temporär rendern
+        local firstRoomPreview = renderRoomPreview(gameData.rooms[1])
+        playdate.datastore.writeImage(firstRoomPreview, "saves/" .. name .. "_preview")
+    end
+
     needsRedraw = true
 end
 
--- Lädt ein gespeichertes Projekt aus dem Datastore.
--- Rekonstruiert Imagetable (Basis-Tiles + eigene Tiles) und Tilemap-Indizes.
+-- Lädt ein gespeichertes Game aus dem Datastore.
 function TileRoom:loadFromFile(name)
     local saved = playdate.datastore.read("saves/" .. name)
     if not saved then return end
-    -- Eigene Tile-Bilder laden (neues Format): direkt aus customTileData.
-    local customTiles = {}
-    local maxIdx = 3
-    local customTileIndices = saved.customTileIndices
-    local customTileData = saved.customTileData or {}
-    local customTileHashes = saved.customTileHashes or {}
-    if type(customTileIndices) ~= "table" then
-        customTileIndices = {}
-        for k, _ in pairs(customTileData) do
-            local idx = tonumber(k)
-            if idx and idx >= 4 then
-                table.insert(customTileIndices, idx)
-            end
-        end
-        table.sort(customTileIndices)
+
+    -- MIGRATION: v1-Format erkennen und konvertieren
+    if Migration.needsMigration(saved) then
+        local baseTileImages = {
+            origImagetable:getImage(1),
+            origImagetable:getImage(2),
+            blackTile
+        }
+        saved = Migration.migrateV1ToV2(saved, name, baseTileImages)
+        -- Migriertes Format direkt speichern
+        playdate.datastore.write(saved, "saves/" .. name)
+        print("Info: v1-Save migriert zu v2:", name)
     end
-    for _, i in ipairs(customTileIndices) do
-        local tileData = customTileData[tostring(i)] or customTileData[i]
-        local img = decodeTileImage(tileData)
-        if img then
-            local storedHash = customTileHashes[tostring(i)] or customTileHashes[i]
-            local loadedHash = imageHash(img)
-            if storedHash and storedHash ~= loadedHash then
-                print("Warnung: Hash-Mismatch nach Rekonstruktion fuer Tile:", i)
-            else
-                print("Info: Rekonstruktion OK fuer Tile:", i)
-            end
-            customTiles[i] = img
-            maxIdx = i
-        else
-            print("Warnung: Konnte Tile-Pixeldaten nicht laden:", i)
-        end
-    end
-    -- Neue Imagetable mit den richtigen Basis-Tiles + geladenen Custom-Tiles aufbauen
-    local freshTable = gfx.imagetable.new(maxIdx)
-    freshTable:setImage(1, origImagetable:getImage(1))
-    freshTable:setImage(2, origImagetable:getImage(2))
-    freshTable:setImage(3, blackTile)
-    hashCache = {}
-    hashCache[1] = imageHash(origImagetable:getImage(1))
-    hashCache[2] = imageHash(origImagetable:getImage(2))
-    hashCache[3] = imageHash(blackTile)
-    for i = 4, maxIdx do
-        local img = customTiles[i]
-        if img then
-            freshTable:setImage(i, img)
-            hashCache[i] = imageHash(img)
-        end
-    end
-    cellImagetable = freshTable
-    tilemap:setImageTable(cellImagetable)
-    tilemap:setTiles(saved.data, saved.width)
-    -- Tile-Picker-Index validieren (könnte nach dem Laden außerhalb liegen)
+
+    -- v2-Daten laden
+    currentFileName = name
+    gameData = saved
+    rebuildImagetableFromGameData()
+
+    -- Ersten Room laden
+    currentRoomIndex = 1
+    loadRoomIntoTilemap(1)
+
     tilePickerIndex = math.max(3, math.min(tilePickerIndex, cellImagetable:getLength()))
     needsRedraw = true
 end
@@ -626,6 +815,20 @@ function TileRoom:setNewTile(tile)
     -- Aktuelle Zelle auf das neue Tile setzen
     local selSection, selRow, selCol = gridView:getSelection()
     tilemap:setTileAtPosition(selCol, selRow, index)
+    -- gameData tiles/frames synchron halten: neues Tile ggf. als Tile+Frame anhängen
+    if gameData and index > #gameData.tiles then
+        local frameId = index - 1 -- 0-basiert
+        gameData.frames[index] = {
+            id = frameId,
+            data = encodeFrameData(tile)
+        }
+        gameData.tiles[index] = {
+            id = frameId,
+            name = "tile_" .. frameId,
+            type = 0,
+            frames = { frameId }
+        }
+    end
 end
 
 -- Input handler for StartRaum
