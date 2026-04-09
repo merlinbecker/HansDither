@@ -17,6 +17,11 @@ local PADDING=40
 -- Grid-Zustand: false=weiß, true=schwarz
 local gridState = {}
 
+-- Change All Similar Tiles: wenn true, wird beim Verlassen das bestehende
+-- Tile in-place überschrieben statt ein neues anzulegen.
+local changeAllSimilar = false
+local currentTileIndex = nil -- 1-basierter Index des bearbeiteten Tiles in der Imagetable
+
 local gridView = playdate.ui.gridview.new(CELL_SIZE, CELL_SIZE)
 gridView:setNumberOfSections(1)
 gridView:setNumberOfColumns(GRID_COLS)
@@ -59,7 +64,8 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
 end
 
 
-function PixelRoom:setCurrentTile(tile)
+function PixelRoom:setCurrentTile(tile, tileIndex)
+    currentTileIndex = tileIndex
     for y = 1, GRID_ROWS do
     gridState[y] = {}
         for x = 1, GRID_COLS do
@@ -106,9 +112,7 @@ function PixelRoom:update()
         if ticks <=-4 then
             ticks=0
             if switchRoomFunction then
-                --set the tilemap and the current position for editing
-                -- hier setzen, dann switchen
-                -- Schwarzes Tile erzeugen und als drittes Tile anhängen
+                -- Tile-Bild aus gridState erzeugen
                 local newTile = gfx.image.new(GRID_COLS, GRID_ROWS,gfx.kColorWhite)
                 gfx.pushContext(newTile)
                     gfx.setColor(gfx.kColorBlack)
@@ -120,7 +124,13 @@ function PixelRoom:update()
                         end
                     end
                 gfx.popContext()
-                nextRoom:setNewTile(newTile)
+                if changeAllSimilar and currentTileIndex then
+                    -- In-place: bestehendes Tile überschreiben
+                    nextRoom:updateExistingTile(newTile, currentTileIndex)
+                else
+                    -- Standard: neues Tile anlegen / deduplizieren
+                    nextRoom:setNewTile(newTile)
+                end
                 switchRoomFunction(nextRoom)
             end
         end
@@ -145,7 +155,21 @@ end
 
 function PixelRoom:entered()
     needsRedraw = true
-    print("Entered TitleRoom")
+    -- System-Menü: Checkbox "All Similar" + "Invert"
+    local menu = playdate.getSystemMenu()
+    menu:removeAllMenuItems()
+    menu:addCheckmarkMenuItem("All Similar", changeAllSimilar, function(checked)
+        changeAllSimilar = checked
+    end)
+    menu:addMenuItem("Invert", function()
+        for y = 1, GRID_ROWS do
+            for x = 1, GRID_COLS do
+                gridState[y][x] = not gridState[y][x]
+            end
+        end
+        needsRedraw = true
+    end)
+    print("Entered PixelRoom")
 end
 
 -- Input handler for StartRaum

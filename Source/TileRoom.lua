@@ -750,7 +750,7 @@ function TileRoom:update()
                 local selSection, selRow, selCol = gridView:getSelection()
                 local tileIndex = tilemap:getTileAtPosition(selCol, selRow)
                 local tile = cellImagetable:getImage(tileIndex)
-                nextRoom:setCurrentTile(tile)
+                nextRoom:setCurrentTile(tile, tileIndex)
                 switchRoomFunction(nextRoom)
             end
         end
@@ -854,6 +854,29 @@ function TileRoom:setNewTile(tile)
             frames = { frameId }
         }
     end
+end
+
+-- Überschreibt ein bestehendes Tile in-place (für "Change All Similar Tiles").
+-- Alle Zellen in der Tilemap, die diesen Index verwenden, zeigen automatisch das neue Bild.
+function TileRoom:updateExistingTile(tile, tileIndex)
+    if not tileIndex or tileIndex < 1 then return end
+    -- Bild in der Imagetable ersetzen
+    cellImagetable:setImage(tileIndex, tile)
+    hashCache[tileIndex] = imageHash(tile)
+    tilemap:setImageTable(cellImagetable)
+    -- gameData synchron halten
+    if gameData and tileIndex <= #gameData.tiles then
+        local tileDef = gameData.tiles[tileIndex]
+        local frameId = tileDef.frames[1]
+        -- Frame-Daten aktualisieren
+        for _, f in ipairs(gameData.frames) do
+            if f.id == frameId then
+                f.data = encodeFrameData(tile)
+                break
+            end
+        end
+    end
+    needsRedraw = true
 end
 
 -- Input handler for StartRaum
