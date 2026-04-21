@@ -8,6 +8,7 @@ import "CoreLibs/crank"
 import "CoreLibs/object" -- für playdate.graphics.image.new()
 import "PixelRoom"
 import "Migration" -- MIGRATION: v1→v2 Konvertierung
+import "PulpGameIO"
 
 
 --
@@ -103,6 +104,7 @@ local backRoom = nil           -- Raum, zu dem nach dem Speichern zurückgewechs
 
 -- Game State (v2): vollständiges Game-Objekt mit allen Rooms
 local gameData = nil           -- v2-Game-Tabelle (rooms, tiles, frames)
+local pulpState = nil          -- Vollstaendiges Pulp-Dokument + Zuordnungen
 local currentRoomIndex = 1     -- 1-basierter Lua-Index in gameData.rooms
 
 -- Show Grid: bestimmt, welches Tile als "leer" gilt
@@ -266,9 +268,17 @@ end
 
 -- Setzt Game-Kontext: name + v2-Daten, baut Imagetable aus tiles/frames auf.
 -- Wird von LoadRoom aufgerufen, bevor ein Room geladen wird.
-function TileRoom:setGame(name, data)
+function TileRoom:setGame(name, data, externalPulpState)
     currentFileName = name
     gameData = data
+    pulpState = externalPulpState
+
+    if gameData and not pulpState then
+        local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(name, gameData, nil)
+        normalizedState.document = normalizedDocument
+        pulpState = normalizedState
+    end
+
     -- Imagetable aus v2 tiles/frames aufbauen
     rebuildImagetableFromGameData()
     -- Ersten Room in Tilemap laden, damit kein stale State übrigbleibt
@@ -281,6 +291,12 @@ end
 -- Gibt die aktuelle gameData-Tabelle zurück (für LoadRoom/GameRoom).
 function TileRoom:getGameData()
     return gameData
+end
+
+-- Gibt das vollstaendige Pulp-Dokument samt Zuordnungen zurueck.
+-- LoadRoom nutzt diesen Zustand, damit spaetere Saves vorhandene Pulp-Attribute behalten.
+function TileRoom:getPulpDocument()
+    return pulpState
 end
 
 -- Speichert den aktuellen Room-State in gameData zurück und lädt einen anderen Room.
@@ -302,6 +318,9 @@ function TileRoom:newRoom()
         -- Falls kein Game geladen: komplett neues Game erstellen
         -- createEmptyGameData erzeugt bereits einen Room (id=0), daher direkt diesen verwenden
         gameData = createEmptyGameData(currentFileName or "untitled")
+        local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(currentFileName or "untitled", gameData, nil)
+        normalizedState.document = normalizedDocument
+        pulpState = normalizedState
         rebuildImagetableFromGameData()
         currentRoomIndex = 1
         loadRoomIntoTilemap(1)
@@ -326,6 +345,9 @@ function TileRoom:newRoom()
         tiles = emptyTiles
     }
     table.insert(gameData.rooms, newRoom)
+    if pulpState and pulpState.roomMetadataById then
+        pulpState.roomMetadataById[newId] = nil
+    end
     -- Neuen Room direkt laden
     currentRoomIndex = #gameData.rooms
     loadRoomIntoTilemap(currentRoomIndex)
@@ -338,6 +360,9 @@ end
 -- Erstellt Game mit einem leeren Room und den 3 Basis-Tiles.
 function TileRoom:newMap()
     gameData = createEmptyGameData(currentFileName or "untitled")
+    local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(currentFileName or "untitled", gameData, nil)
+    normalizedState.document = normalizedDocument
+    pulpState = normalizedState
     rebuildImagetableFromGameData()
     currentRoomIndex = 1
     loadRoomIntoTilemap(1)
@@ -617,7 +642,8 @@ local function compactTileState()
         imageTable = newTable,
         hashCache = newHashCache,
         maxTile = newCount,
-        tilePickerIndex = remappedPickerIndex
+        tilePickerIndex = remappedPickerIndex,
+        oldToNew = oldToNew
     }
 end
 
@@ -636,6 +662,7 @@ function TileRoom:saveToFile()
     hashCache = compacted.hashCache
     tilemap:setImageTable(cellImagetable)
     tilePickerIndex = compacted.tilePickerIndex
+    pulpState = PulpGameIO.remapTileMappings(pulpState, compacted.oldToNew)
 
     -- Aktuellen Room neu in Tilemap laden (Indizes wurden remapped)
     loadRoomIntoTilemap(currentRoomIndex)
@@ -673,11 +700,20 @@ function TileRoom:saveToFile()
     -- 4. gameData aktualisieren
     gameData.tiles = v2Tiles
     gameData.frames = v2Frames
-    gameData.version = 2
     gameData.name = name
 
-    -- 5. Gesamtes Game als JSON speichern
-    playdate.datastore.write(gameData, "saves/" .. name)
+    -- 5. Vollstaendiges Pulp-Dokument erzeugen und speichern.
+    -- Dabei bleiben bereits vorhandene, nicht vom Editor verwaltete Felder erhalten.
+    local outputDocument, outputState = PulpGameIO.buildSaveDocument(
+        name,
+        gameData,
+        pulpState,
+        { currentRoomIndex = currentRoomIndex }
+    )
+    outputState.document = outputDocument
+    pulpState = outputState
+    gameData.version = outputDocument.version
+    playdate.datastore.write(outputDocument, "saves/" .. name)
 
     -- 6. Preview-Bilder generieren
     -- Aktueller Room-Preview (Dateiname nutzt room.id, nicht den Lua-Index)
@@ -702,22 +738,24 @@ function TileRoom:loadFromFile(name)
     local saved = playdate.datastore.read("saves/" .. name)
     if not saved then return end
 
-    -- MIGRATION: v1-Format erkennen und konvertieren
-    if Migration.needsMigration(saved) then
-        local baseTileImages = {
+    currentFileName = name
+    local preparedGameData, preparedPulpState, migrated = PulpGameIO.prepareLoadedGame(
+        name,
+        saved,
+        {
             origImagetable:getImage(1),
             origImagetable:getImage(2),
             blackTile
         }
-        saved = Migration.migrateV1ToV2(saved, name, baseTileImages)
-        -- Migriertes Format direkt speichern
-        playdate.datastore.write(saved, "saves/" .. name)
-        print("Info: v1-Save migriert zu v2:", name)
+    )
+    gameData = preparedGameData
+    pulpState = preparedPulpState
+
+    if migrated and pulpState and pulpState.document then
+        playdate.datastore.write(pulpState.document, "saves/" .. name)
+        print("Info: Legacy-Save in Pulp-Format normalisiert:", name)
     end
 
-    -- v2-Daten laden
-    currentFileName = name
-    gameData = saved
     rebuildImagetableFromGameData()
 
     -- Ersten Room laden

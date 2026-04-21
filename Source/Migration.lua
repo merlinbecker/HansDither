@@ -8,7 +8,14 @@ Migration = {}
 -- Prüft ob Daten im alten v1-Format vorliegen und migriert werden müssen.
 function Migration.needsMigration(data)
     if not data then return false end
-    return data.version == nil or data.version < 2
+    -- Das alte Editor-Format erkennt man nicht verlässlich an der Versionsnummer,
+    -- weil echte Pulp-Dokumente ebenfalls kleine Versionswerte benutzen koennen.
+    -- Legacy-Saves hatten stattdessen eine flache Tilemap unter `data` sowie
+    -- optionale Felder wie `customTileData`, `customTileIndices` oder `width`.
+    return data.data ~= nil
+        or data.customTileData ~= nil
+        or data.customTileIndices ~= nil
+        or data.width ~= nil
 end
 
 -- Prüft ob der Index im alten Format {names:[...]} vorliegt.

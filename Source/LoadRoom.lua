@@ -8,6 +8,7 @@ import "CoreLibs/ui"
 import "CoreLibs/timer"
 import "CoreLibs/keyboard"
 import "Migration" -- MIGRATION: v1→v2 Game-Daten Migration
+import "PulpGameIO"
 
 local gfx = playdate.graphics
 
@@ -30,6 +31,7 @@ local CELL_H    = 28
 -- Game-Kontext
 local currentGameName = nil   -- Name des aktuell geöffneten Games
 local currentGameData = nil   -- v2 Game-Daten (rooms, tiles, frames)
+local currentPulpState = nil  -- Vollstaendiges Pulp-Dokument + Zuordnungen
 local roomNames       = {}    -- Array von Room-Namen für Anzeige
 local previewCache    = {}    -- {[roomIndex] = gfx.image|nil}, 1-basiert
 
@@ -59,12 +61,13 @@ end
 -- roomIdx: 1-basierter Lua-Index in gameData.rooms
 local function openTileRoom(roomIdx, isNew)
     -- Game-Daten an TileRoom übergeben
-    nextRoom:setGame(currentGameName, currentGameData)
+    nextRoom:setGame(currentGameName, currentGameData, currentPulpState)
     if isNew then
         -- Neuen Room erstellen und laden
         local newIdx = nextRoom:newRoom()
         -- gameData wird von TileRoom aktualisiert
         currentGameData = nextRoom:getGameData()
+        currentPulpState = nextRoom:getPulpDocument()
         -- Initial speichern
         nextRoom:saveToFile()
     else
@@ -205,10 +208,10 @@ function LoadRoom:setGame(gameName, isNew)
         -- Neues Game: TileRoom erstellt die Daten, wir brauchen ein leeres Game
         -- TileRoom:newMap() wird beim ersten Room-Öffnen aufgerufen
         currentGameData = nil
+        currentPulpState = nil
     else
         local saved = playdate.datastore.read("saves/" .. gameName)
-        -- MIGRATION: v1-Format erkennen und konvertieren
-        if saved and Migration.needsMigration(saved) then
+        if saved then
             local origImagetable = gfx.imagetable.new("images/cellbg")
             local blackTileImg = gfx.image.new(8, 8)
             gfx.pushContext(blackTileImg)
@@ -220,11 +223,20 @@ function LoadRoom:setGame(gameName, isNew)
                 origImagetable:getImage(2),
                 blackTileImg
             }
-            saved = Migration.migrateV1ToV2(saved, gameName, baseTileImages)
-            playdate.datastore.write(saved, "saves/" .. gameName)
-            print("Info: v1-Save in LoadRoom migriert zu v2:", gameName)
+
+            local preparedGameData, preparedPulpState, migrated = PulpGameIO.prepareLoadedGame(
+                gameName,
+                saved,
+                baseTileImages
+            )
+            currentGameData = preparedGameData
+            currentPulpState = preparedPulpState
+
+            if migrated and currentPulpState and currentPulpState.document then
+                playdate.datastore.write(currentPulpState.document, "saves/" .. gameName)
+                print("Info: Legacy-Save in Pulp-Format normalisiert:", gameName)
+            end
         end
-        currentGameData = saved
     end
     refreshRoomNames()
 end
@@ -302,6 +314,9 @@ function LoadRoom:entered()
         local updatedData = nextRoom:getGameData()
         if updatedData and updatedData.name == currentGameName then
             currentGameData = updatedData
+            if nextRoom.getPulpDocument then
+                currentPulpState = nextRoom:getPulpDocument()
+            end
             refreshRoomNames()
             loadRoomPreviews()
         end
