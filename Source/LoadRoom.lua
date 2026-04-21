@@ -7,7 +7,6 @@ import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/timer"
 import "CoreLibs/keyboard"
-import "Migration" -- MIGRATION: v1→v2 Game-Daten Migration
 import "PulpGameIO"
 
 local gfx = playdate.graphics
@@ -212,30 +211,9 @@ function LoadRoom:setGame(gameName, isNew)
     else
         local saved = playdate.datastore.read("saves/" .. gameName)
         if saved then
-            local origImagetable = gfx.imagetable.new("images/cellbg")
-            local blackTileImg = gfx.image.new(8, 8)
-            gfx.pushContext(blackTileImg)
-                gfx.setColor(gfx.kColorBlack)
-                gfx.fillRect(0, 0, 8, 8)
-            gfx.popContext()
-            local baseTileImages = {
-                origImagetable:getImage(1),
-                origImagetable:getImage(2),
-                blackTileImg
-            }
-
-            local preparedGameData, preparedPulpState, migrated = PulpGameIO.prepareLoadedGame(
-                gameName,
-                saved,
-                baseTileImages
-            )
+            local preparedGameData, preparedPulpState = PulpGameIO.prepareLoadedGame(gameName, saved)
             currentGameData = preparedGameData
             currentPulpState = preparedPulpState
-
-            if migrated and currentPulpState and currentPulpState.document then
-                playdate.datastore.write(currentPulpState.document, "saves/" .. gameName)
-                print("Info: Legacy-Save in Pulp-Format normalisiert:", gameName)
-            end
         end
     end
     refreshRoomNames()

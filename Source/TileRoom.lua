@@ -7,7 +7,6 @@ import "CoreLibs/animation"
 import "CoreLibs/crank"
 import "CoreLibs/object" -- für playdate.graphics.image.new()
 import "PixelRoom"
-import "Migration" -- MIGRATION: v1→v2 Konvertierung
 import "PulpGameIO"
 
 
@@ -739,22 +738,12 @@ function TileRoom:loadFromFile(name)
     if not saved then return end
 
     currentFileName = name
-    local preparedGameData, preparedPulpState, migrated = PulpGameIO.prepareLoadedGame(
-        name,
-        saved,
-        {
-            origImagetable:getImage(1),
-            origImagetable:getImage(2),
-            blackTile
-        }
-    )
+    local preparedGameData, preparedPulpState = PulpGameIO.prepareLoadedGame(name, saved)
+    if not preparedGameData then
+        return
+    end
     gameData = preparedGameData
     pulpState = preparedPulpState
-
-    if migrated and pulpState and pulpState.document then
-        playdate.datastore.write(pulpState.document, "saves/" .. name)
-        print("Info: Legacy-Save in Pulp-Format normalisiert:", name)
-    end
 
     rebuildImagetableFromGameData()
 

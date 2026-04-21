@@ -10,8 +10,6 @@
 -- aufgebaut, wobei vorhandene Attribute aus einem bereits existierenden Dokument
 -- so weit wie moeglich erhalten bleiben.
 
-import "Migration"
-
 PulpGameIO = {}
 
 -- Das SDK stellt JSON je nach Kontext als globales `json` bereit.
@@ -713,22 +711,20 @@ function PulpGameIO.buildSaveDocument(gameName, gameData, pulpState, options)
     }
 end
 
-function PulpGameIO.prepareLoadedGame(gameName, savedData, baseTileImages)
+function PulpGameIO.prepareLoadedGame(gameName, savedData)
     if not savedData then
         return nil, nil, false
     end
 
-    if documentLooksStructured(savedData) and not Migration.needsMigration(savedData) then
-        local workingGameData, pulpState = extractWorkingStateFromDocument(savedData, gameName)
-        local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(gameName, workingGameData, pulpState)
-        normalizedState.document = normalizedDocument
-        return workingGameData, normalizedState, false
+    if not documentLooksStructured(savedData) then
+        print("Warnung: Nicht unterstuetztes Legacy-Save-Format fuer " .. tostring(gameName))
+        return nil, nil, false
     end
 
-    local migratedGameData = Migration.migrateV1ToV2(savedData, gameName, baseTileImages)
-    local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(gameName, migratedGameData, nil)
+    local workingGameData, pulpState = extractWorkingStateFromDocument(savedData, gameName)
+    local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(gameName, workingGameData, pulpState)
     normalizedState.document = normalizedDocument
-    return migratedGameData, normalizedState, true
+    return workingGameData, normalizedState, false
 end
 
 return PulpGameIO

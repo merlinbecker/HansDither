@@ -6,7 +6,6 @@ import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/timer"
 import "CoreLibs/keyboard"
-import "Migration" -- MIGRATION: Index-Migration
 
 local gfx = playdate.graphics
 
@@ -31,27 +30,18 @@ local previewCache = {}   -- {[name] = gfx.image|nil}
 
 -- ── Datastore-Hilfsfunktionen ─────────────────────────────────────────────────
 
--- Liest die gespeicherte Index-Datei. Unterstützt altes und neues Format.
+-- Liest die gespeicherte Index-Datei im aktuellen Format.
 local function readGameIndex()
     local idx = playdate.datastore.read("saves/index")
     if not idx then return {} end
-    -- MIGRATION: Altes Format {names:[...]} konvertieren
-    if Migration.needsIndexMigration(idx) then
-        idx = Migration.migrateIndex(idx)
-        playdate.datastore.write(idx, "saves/index")
-        print("Info: Index von v1 (names) zu v2 (games) migriert")
-    end
-    return idx.games or {}
+    if type(idx.games) ~= "table" then return {} end
+    return idx.games
 end
 
 -- Ergänzt die Index-Datei um einen neuen Game-Namen (Duplikate ignoriert).
 local function addToIndex(name)
     playdate.file.mkdir("saves")
     local idx = playdate.datastore.read("saves/index") or { games = {} }
-    -- MIGRATION: Altes Format {names:[...]} konvertieren
-    if Migration.needsIndexMigration(idx) then
-        idx = Migration.migrateIndex(idx)
-    end
     if not idx.games then idx.games = {} end
     for _, n in ipairs(idx.games) do
         if n == name then return end
@@ -105,19 +95,8 @@ local function deleteGame(name)
             i = i + 1
         end
     end
-    -- Alte v1-Dateien aufräumen (falls Migration noch nicht erfolgt war)
-    local i = 4
-    while true do
-        local p = "saves/" .. name .. "_img" .. i .. ".pdi"
-        if not playdate.file.exists(p) then break end
-        playdate.file.delete(p)
-        i = i + 1
-    end
     -- Aus Index entfernen
     local idx = playdate.datastore.read("saves/index") or { games = {} }
-    if Migration.needsIndexMigration(idx) then -- MIGRATION:
-        idx = Migration.migrateIndex(idx) -- MIGRATION:
-    end -- MIGRATION:
     local games = idx.games or {}
     for j, n in ipairs(games) do
         if n == name then table.remove(games, j); break end
