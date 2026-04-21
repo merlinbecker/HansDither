@@ -115,9 +115,8 @@ local showGrid = true
 local origImagetable = gfx.imagetable.new("images/cellbg")
 assert(origImagetable, "Imagetable konnte nicht geladen werden!")
 
--- hier wird die Tilemap geladen, 
--- diese sollte eigentlich dann vom LoadRoom übergeben werden.
--- todo: bessere Imagetable laden, dann kann ich mir die Erstellung des schwarzen Tiles sparen
+-- hier wird die Tilemap geladen,
+-- diese sollte eigentlich dann vom LoadRoom uebergeben werden.
 -- Neue Imagetable mit 3 Einträgen anlegen
 local cellImagetable = gfx.imagetable.new(3)
 local img1=origImagetable:getImage(1)
@@ -544,8 +543,23 @@ function loadRoomIntoTilemap(roomIdx)
     local roomData = gameData.rooms[roomIdx]
     -- Room-Tiles: 0-basiert (Speicherformat) → 1-basiert (Runtime)
     local runtimeTiles = {}
+    local countGrid = 0
+    local countWhite = 0
     for i, tileId in ipairs(roomData.tiles) do
-        runtimeTiles[i] = tileId + 1
+        local runtimeIdx = tileId + 1
+        runtimeTiles[i] = runtimeIdx
+        if runtimeIdx == 1 then
+            countGrid = countGrid + 1
+        elseif runtimeIdx == 2 then
+            countWhite = countWhite + 1
+        end
+    end
+    -- showGrid beim Laden aus den Raumdaten ableiten.
+    -- Wenn eines der beiden Basis-Tiles dominiert, verwenden wir dieses als Hintergrundmodus.
+    if countGrid > countWhite then
+        showGrid = true
+    elseif countWhite > countGrid then
+        showGrid = false
     end
     tilemap:setTiles(runtimeTiles, GRID_COLS)
 end
@@ -765,19 +779,14 @@ function TileRoom:update()
         lastBlinkState = cursorBlinker.on
         needsRedraw = true
     end
-    -- todo, nochmal durchtesten und der drank muss wirklich einmal 360 grad durchgehen
     -- Zoom-Trigger: D-Pad Up gehalten + Crank
     if upHeld then
         ticks += playdate.getCrankTicks(4)
         if ticks >=4 then
             ticks=0
             if switchRoomFunction then
-                --set the tilemap and the current position for editing
-                -- hier setzen, dann switchen
-                local selSection, selRow, selCol = gridView:getSelection()
-                local tileIndex = tilemap:getTileAtPosition(selCol, selRow)
-                local tile = cellImagetable:getImage(tileIndex)
-                nextRoom:setCurrentTile(tile, tileIndex)
+                local context = TileRoom:getTileContext3x3()
+                nextRoom:setFromTileContext(context)
                 switchRoomFunction(nextRoom)
             end
         end
@@ -901,6 +910,103 @@ function TileRoom:updateExistingTile(tile, tileIndex)
                 f.data = encodeFrameData(tile)
                 break
             end
+        end
+    end
+    needsRedraw = true
+end
+
+-- Gibt den 3×3-Tile-Kontext rund um den aktuellen Cursor zurück.
+-- Tiles außerhalb des Rasters werden als nil/0 übergeben (out-of-bounds).
+-- Rückgabe-Tabelle:
+--   context.tiles[1..9]       – gfx.image oder nil (out-of-bounds)
+--   context.tileIndices[1..9] – Imagetable-Index (1-basiert) oder 0 (out-of-bounds)
+--   context.cursorSlot        – 1-9, der Slot in dem der Cursor steht (immer 5 = Mitte)
+--   context.cursorTileCol     – Tilemap-Spalte des Cursors (1-basiert)
+--   context.cursorTileRow     – Tilemap-Zeile des Cursors (1-basiert)
+function TileRoom:getTileContext3x3()
+    local _, selRow, selCol = gridView:getSelection()
+    local tiles        = {}
+    local tileIndices  = {}
+    local slotIdx = 1
+    for dr = -1, 1 do
+        for dc = -1, 1 do
+            local tileCol = selCol + dc
+            local tileRow = selRow + dr
+            if tileCol >= 1 and tileCol <= GRID_COLS
+            and tileRow >= 1 and tileRow <= GRID_ROWS then
+                local idx = tilemap:getTileAtPosition(tileCol, tileRow)
+                tiles[slotIdx]       = cellImagetable:getImage(idx)
+                tileIndices[slotIdx] = idx
+            else
+                tiles[slotIdx]       = nil
+                tileIndices[slotIdx] = 0
+            end
+            slotIdx = slotIdx + 1
+        end
+    end
+    return {
+        tiles            = tiles,
+        tileIndices      = tileIndices,
+        cursorSlot       = 5,   -- Mitte des 3×3-Rasters
+        cursorTileCol    = selCol,
+        cursorTileRow    = selRow,
+        showGrid         = showGrid
+    }
+end
+
+-- Nimmt eine Liste von Tile-Edits aus ZoomRoom entgegen und schreibt sie in Tilemap
+-- und Imagetable. Jeder Edit hat folgende Felder:
+--   edit.tileCol        – Tilemap-Spalte (1-basiert)
+--   edit.tileRow        – Tilemap-Zeile  (1-basiert)
+--   edit.image          – gfx.image (neues Tile-Bild)
+--   edit.existingIndex  – >0: In-place überschreiben; 0: neu deduplizieren
+function TileRoom:applyTileEditsBatch(edits)
+    if not edits or #edits == 0 then return end
+    for _, edit in ipairs(edits) do
+        -- Nur gültige Koordinaten verarbeiten
+        if edit.tileCol >= 1 and edit.tileCol <= GRID_COLS
+        and edit.tileRow >= 1 and edit.tileRow <= GRID_ROWS
+        and edit.image then
+            local finalIndex
+            if edit.existingIndex and edit.existingIndex > 0 then
+                -- In-place: Bild im bestehenden Slot ersetzen
+                cellImagetable:setImage(edit.existingIndex, edit.image)
+                hashCache[edit.existingIndex] = imageHash(edit.image)
+                tilemap:setImageTable(cellImagetable)
+                finalIndex = edit.existingIndex
+                -- gameData Frame-Daten synchron halten
+                if gameData and edit.existingIndex <= #gameData.tiles then
+                    local tileDef = gameData.tiles[edit.existingIndex]
+                    local frameId = tileDef.frames[1]
+                    for _, f in ipairs(gameData.frames) do
+                        if f.id == frameId then
+                            f.data = encodeFrameData(edit.image)
+                            break
+                        end
+                    end
+                end
+            else
+                -- Neu: deduplizieren oder anhängen
+                local newIdx, newTable = findOrAppendImage(cellImagetable, edit.image, hashCache)
+                cellImagetable = newTable
+                tilemap:setImageTable(cellImagetable)
+                finalIndex = newIdx
+                -- gameData synchron halten
+                if gameData and newIdx > #gameData.tiles then
+                    local frameId = newIdx - 1
+                    gameData.frames[newIdx] = {
+                        id   = frameId,
+                        data = encodeFrameData(edit.image)
+                    }
+                    gameData.tiles[newIdx] = {
+                        id     = frameId,
+                        name   = "tile_" .. frameId,
+                        type   = 0,
+                        frames = { frameId }
+                    }
+                end
+            end
+            tilemap:setTileAtPosition(edit.tileCol, edit.tileRow, finalIndex)
         end
     end
     needsRedraw = true

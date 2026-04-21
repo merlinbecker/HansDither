@@ -6,6 +6,7 @@
 | Tile | 8x8-Bildbaustein, der in Rooms an Rasterpositionen verwendet wird. |
 | Imagetable | Playdate-Struktur fuer eine Indexliste von Bildern (Tiles). |
 | Tilemap | Rasterstruktur, die Tile-Indizes auf Positionen abbildet und zeichnet. |
+| ZoomRoom | Zwischenraum zwischen TileRoom und PixelRoom, der einen 3x3 Tilebereich als 24x24 Pixelraster bearbeitbar macht. |
 | GridView | UI-Komponente fuer Rasternavigation und Zellrendering. |
 | Pulp-Dokument | Vollstaendige JSON-Struktur fuer Pulp-kompatible Spielinhalte. |
 | gameData | Interne, kompakte Arbeitsdarstellung des Editors (rooms/tiles/frames). |
@@ -13,4 +14,5 @@
 | Kompaktierung | Entfernen ungenutzter Tiles und Neuabbildung der Referenzen. |
 | Preview | Gespeichertes Vorschaubild eines Games oder Rooms im Datastore. |
 | Save + Back | Systemmenue-Aktion: Speichern des aktuellen Zustands und Rueckkehr zu LoadRoom. |
+| Slot (ZoomRoom) | Einer der 9 Teilbereiche (3x3), die jeweils einem 8x8 Tile im Zoom-Kontext entsprechen. |
 | All Similar | PixelRoom-Option: Bearbeitet ein bestehendes Tile in-place statt neues Tile zu erzeugen. |

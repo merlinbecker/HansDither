@@ -42,3 +42,15 @@
 - Stimulus: Bearbeiten und erneutes Speichern.
 - Reaktion: Nicht verwaltete Dokumentbereiche bleiben erhalten.
 - Metrik: Strukturfelder wie songs/sounds/editor/scripts bleiben vorhanden und gueltig.
+
+### QS-06 Zoom-Commit-Korrektheit
+- Kontext: Nutzer bearbeitet mehrere Slots im ZoomRoom und kehrt zu TileRoom zurueck.
+- Stimulus: Zoom-Out mit Commit.
+- Reaktion: Nur geaenderte Slots werden uebernommen; identische Tilebilder werden wiederverwendet (Dedupe).
+- Metrik: Keine unnoetigen Tile-Neuanlagen fuer unveraenderte Slots; visuell korrekte Rueckgabe im TileRoom.
+
+### QS-07 Show-Grid-Synchronitaet
+- Kontext: showGrid wird im TileRoom ein-/ausgeschaltet, danach Wechsel zu ZoomRoom.
+- Stimulus: ZoomRoom wird ueber den TileRoom-Zoompfad geoeffnet.
+- Reaktion: Inter-tile Rasterlinien im ZoomRoom folgen exakt dem showGrid-Status des TileRoom.
+- Metrik: Kein Zustand, in dem TileRoom und ZoomRoom unterschiedliche Grid-Linienmodi zeigen.

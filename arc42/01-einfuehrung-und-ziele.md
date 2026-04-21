@@ -23,7 +23,7 @@ Die wichtigsten Qualitaetsziele fuer die Architektur sind:
 | 1 | Zuverlaessige Persistenz | Spielstaende duerfen bei Save/Load nicht verloren gehen; insbesondere muessen Tile-/Frame-/Room-Zuordnungen konsistent bleiben. |
 | 2 | Direkte Bedienbarkeit | Kernaktionen (Navigieren, Pixel setzen/loeschen, Room/Game-Auswahl) muessen mit wenigen Eingaben erreichbar sein. |
 | 3 | Pulp-Kompatibilitaet | Gespeicherte Daten sollen weiterhin in Pulp verwertbar bleiben; bestehende Felder duerfen nicht unnoetig verloren gehen. |
-| 4 | Wartbarkeit | Raumlogik soll modular getrennt bleiben (Title/Game/Load/Tile/Pixel), damit Features isoliert erweitert werden koennen. |
+| 4 | Wartbarkeit | Raumlogik soll modular getrennt bleiben (Title/Game/Load/Tile/Zoom/Pixel), damit Features isoliert erweitert werden koennen. |
 | 5 | Performantes Redraw | Rendern soll auf Playdate-Hardware flüssig bleiben (zustandsbasiertes Redraw, einfache Datenstrukturen). |
 
 ## 1.3 Stakeholder

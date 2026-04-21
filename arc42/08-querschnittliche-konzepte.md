@@ -10,12 +10,18 @@
   - B als Modus-/Rueckkehr-Modifier,
   - Crank fuer Picker oder Zoom-Trigger.
 
+- Der Editing-Flow ist gestuft:
+  - TileRoom (roomweite Tilemap),
+  - ZoomRoom (3x3 Tilekontext als 24x24 Pixelgrid),
+  - PixelRoom (Einzeltile-Detail).
+
 Nutzen: klare mentale Modelle fuer Nutzer und saubere Trennung je Room.
 
 ## 8.2 Rendering- und Redraw-Konzept
 
 - Rendering ist zustandsbasiert ueber needsRedraw.
 - TileRoom nutzt tilemap fuer flaechiges Rendering und gridview fuer Cursoroverlay.
+- ZoomRoom zeichnet Pixelinhalt plus Tilegrenzen; inter-tile Rasterlinien werden ueber showGrid synchron zu TileRoom ein-/ausgeblendet.
 - Blink-/Timer-Updates laufen zentral im Update-Loop.
 
 Nutzen: geringer Overhead auf limitierter Hardware, gut steuerbare Darstellung.
@@ -33,6 +39,7 @@ Nutzen: Kompatibilitaet plus editorinterne Einfachheit.
 
 - Basis-Tiles sind stabil (1..3).
 - Neue oder bearbeitete Tiles werden dedupliziert bzw. in-place ersetzt.
+- ZoomRoom-Commits uebergeben nur geaenderte Slots; TileRoom dedupliziert diese ueber Hashvergleich.
 - Vor Save erfolgt Kompaktierung ungenutzter Tiles ueber alle Rooms.
 
 Nutzen: begrenzter Speicherverbrauch und konsistente Tile-Referenzen.

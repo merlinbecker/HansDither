@@ -13,6 +13,7 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 | GameRoom | Auswahl/Anlage/Loeschen von Games inklusive Vorschauen. |
 | LoadRoom | Auswahl/Anlage/Loeschen von Rooms innerhalb eines Games. |
 | TileRoom | Haupteditor fuer Room-Tiles, Picker, Save + Back, Grid-Logik. |
+| ZoomRoom | Zwischeneditor fuer 3x3 Tilekontext als 24x24 Pixelgrid inkl. Batch-Rueckgabe. |
 | PixelRoom | Detaileditor fuer einzelne 8x8-Tiles auf Pixel-Ebene. |
 | PulpGameIO | Normalisierung und Merge zwischen Arbeitsdaten und Pulp-Dokument. |
 
@@ -20,6 +21,8 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 
 - switchRoom(newRoom): room-uebergreifende Navigation inklusive Input-Handler-Wechsel.
 - TileRoom:setGame(name, data, pulpState): Kontextuebergabe vor Room-Editing.
+- TileRoom:getTileContext3x3()/applyTileEditsBatch(edits): Kontextbereitstellung und Ruecknahme geaenderter Zoom-Slots.
+- ZoomRoom:setFromTileContext(context): Uebernahme des 3x3-Umfelds inkl. showGrid-Synchronisierung.
 - TileRoom:saveToFile(): Persistenz-Pipeline inkl. Kompaktierung, Mapping und Preview.
 - PulpGameIO.prepareLoadedGame()/buildSaveDocument(): Konvertierung zwischen Datenformen.
 
@@ -59,7 +62,20 @@ Besonders relevante interne Teile:
 - compactTileState() fuer remapping und Entfernen ungenutzter Tiles.
 - syncCurrentRoomToGameData() als Bruecke UI -> Datenmodell.
 
-### 5.2.4 Whitebox PixelRoom
+### 5.2.4 Whitebox ZoomRoom
+
+Verantwortung:
+- 3x3-Tilekontext aus TileRoom als 24x24 Pixelarbeitsflaeche darstellen.
+- Slot-Mapping (3x3) inkl. out-of-bounds Behandlung verwalten.
+- Aenderungen nur bei Differenz als Batch an TileRoom zurueckgeben.
+- showGrid-Status aus TileRoom uebernehmen und inter-tile Rasterlinien entsprechend ein-/ausblenden.
+
+Interne Logik:
+- gridState als boolesches 24x24 Raster.
+- tileSlots mit originalTileIndex/originalTileImage fuer Aenderungsvergleich.
+- commitAndReturnToTileRoom() erzeugt nur geaenderte Edits und nutzt Neu/Dedupe-Pfad in TileRoom.
+
+### 5.2.5 Whitebox PixelRoom
 
 Verantwortung:
 - 8x8-Pixelbearbeitung eines ausgewaehlten Tiles.
@@ -70,7 +86,7 @@ Interne Logik:
 - Menueaktionen: All Similar, Invert.
 - B+Crank-Pattern fuer Ruecksprung und Uebergabe.
 
-### 5.2.5 Whitebox PulpGameIO
+### 5.2.6 Whitebox PulpGameIO
 
 Verantwortung:
 - Laden und Mergerhaltung des Pulp-Dokuments.

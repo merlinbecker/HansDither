@@ -41,3 +41,17 @@
 - Entscheidung: Erweiterung in geordneten Schritten laut Konzeptplaenen.
 - Begruendung: Kleine, kontrollierte Inkremente reduzieren Integrationsrisiko.
 - Konsequenz: Historische Planartefakte muessen sauber in finale Doku ueberfuehrt werden.
+
+## 9.7 AD-007: ZoomRoom als Zwischenstufe zwischen TileRoom und PixelRoom
+
+- Status: umgesetzt
+- Entscheidung: Zwischen TileRoom und PixelRoom existiert ein eigener ZoomRoom mit 24x24 Pixelarbeitsflaeche fuer einen 3x3 Tilekontext.
+- Begruendung: Bearbeitung benachbarter Tiles in einem gemeinsamen Kontext reduziert Wechselkosten und verbessert lokale Konsistenz.
+- Konsequenz: Zusaetzliche Mapping- und Commitlogik (Slot -> Tile-Koordinate, Aenderungsvergleich) ist erforderlich.
+
+## 9.8 AD-008: Geaenderte Zoom-Slots nur ueber Dedupe-Pfad committen
+
+- Status: umgesetzt
+- Entscheidung: ZoomRoom commitet nur geaenderte Slots; TileRoom verarbeitet diese als Neu/Dedupe (findOrAppendImage + Hashvergleich).
+- Begruendung: Verhindert unnoetige Tile-Neuschreibungen und haelt das Verhalten konsistent mit dem bestehenden PixelRoom-Standardpfad.
+- Konsequenz: Originalbilder pro Slot muessen fuer den Vergleich im ZoomRoom vorgehalten werden.

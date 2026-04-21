@@ -19,7 +19,7 @@
 | Qualitaetsziel | Strategiebeitrag |
 |---|---|
 | Zuverlaessige Persistenz | Versionierte Save-Pipeline, Kompaktierung + stabile ID-Mappings, Preview-Erzeugung. |
-| Bedienbarkeit | Konsistente Grid-Navigation in GameRoom/LoadRoom/TileRoom/PixelRoom. |
+| Bedienbarkeit | Konsistente Grid-Navigation in GameRoom/LoadRoom/TileRoom/ZoomRoom/PixelRoom. |
 | Pulp-Kompatibilitaet | Build/Prepare-Workflow in PulpGameIO mit Feld-Erhalt und Defaults. |
 | Wartbarkeit | Module pro Verantwortungsbereich, wenig globale Quervernetzung. |
 | Performance | needsRedraw-Ansatz, einfache 8x8-Tiles, limitierte Grid-Groessen. |

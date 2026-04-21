@@ -25,6 +25,7 @@ Hans Dither ist ein lokaler Pixel-Editor fuer Playdate. Externe Interaktionen en
 | Game auswaehlen/anlegen | GameRoom-Grid + Keyboard + Indexdatei saves/index |
 | Room auswaehlen/anlegen | LoadRoom-Grid + gameData.rooms |
 | Zeichnen im Tile-Canvas | TileRoom-Tilemap mit Cursor-Overlay und Picker |
+| Zwischenzoom fuer 3x3 Tilebereich | ZoomRoom mit 24x24 Pixel-Grid, Slot-Mapping und Batch-Commit |
 | Pixelgenaue Bearbeitung | PixelRoom mit 8x8 Grid-State und Rueckschreiben ins Tile |
 | Speichern | TileRoom:saveToFile() + PulpGameIO.buildSaveDocument() |
 | Laden | PulpGameIO.prepareLoadedGame() + Imagetable-Rekonstruktion |

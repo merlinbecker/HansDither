@@ -21,15 +21,16 @@ Ergebnis: Der Editor ist mit konsistentem Spiel- und Room-Kontext aktiv.
 
 Ergebnis: Der Room-Zustand ist visuell aktualisiert und intern in Tilemap vorhanden.
 
-## 6.3 Szenario: Detailbearbeitung in PixelRoom
+## 6.3 Szenario: Zoom-Bearbeitung zwischen TileRoom und PixelRoom
 
 1. Im TileRoom wird B gehalten und Crank-Trigger erreicht.
-2. Selektiertes Tile wird an PixelRoom uebergeben.
-3. In PixelRoom werden einzelne Pixel im 8x8-Raster geaendert.
-4. Rueckkehr erstellt neues Tile oder ueberschreibt in-place (All Similar).
-5. TileRoom uebernimmt das Ergebnis in Imagetable und setzt Tilemap an Cursorposition.
+2. TileRoom erzeugt den 3x3-Kontext um den Cursor (inkl. showGrid-Status) und uebergibt ihn an ZoomRoom.
+3. ZoomRoom rendert ein 24x24 Pixelgrid, erlaubt Bearbeitung mehrerer Slots und optionalen Zoom in PixelRoom.
+4. In PixelRoom wird ein einzelner 8x8-Slot detailliert geaendert und an ZoomRoom zurueckgegeben.
+5. Bei Zoom-Out (ZoomRoom -> TileRoom) werden nur geaenderte Slots committed.
+6. TileRoom uebernimmt diese Slots per applyTileEditsBatch ueber findOrAppendImage (Dedupe/Hashvergleich).
 
-Ergebnis: Detailaenderung ist im Room sichtbar und fuer spaeteres Speichern vorbereitet.
+Ergebnis: Mehrere Tile-Aenderungen sind im Room sichtbar und dedupliziert fuer spaeteres Speichern vorbereitet.
 
 ## 6.4 Szenario: Save + Back
 

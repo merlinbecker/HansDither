@@ -11,6 +11,7 @@ import "TitleRoom"
 import "GameRoom"
 import "LoadRoom"
 import "TileRoom"
+import "ZoomRoom"
 
 
 local gfx = playdate.graphics
@@ -39,8 +40,9 @@ end
 TitleRoom:init(switchRoom, GameRoom)
 GameRoom:init(switchRoom, LoadRoom)
 LoadRoom:init(switchRoom, TileRoom, GameRoom)
-TileRoom:init(switchRoom, PixelRoom, LoadRoom)
-PixelRoom:init(switchRoom,TileRoom)
+TileRoom:init(switchRoom, ZoomRoom, LoadRoom)
+ZoomRoom:init(switchRoom, PixelRoom, TileRoom)
+PixelRoom:init(switchRoom, ZoomRoom)
 --ZweiterRaum.init(sharedData, switchRoom, DritterRaum)
 --DritterRaum.init(sharedData, switchRoom, StartRaum)
 
