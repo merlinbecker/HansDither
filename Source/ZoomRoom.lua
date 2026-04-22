@@ -28,6 +28,9 @@ local OFFSET_Y   = 0
 local DASH_LEN   = 2   -- px Strich
 local GAP_LEN    = 2   -- px Lücke
 
+local HOLD_INITIAL_DELAY_MS = 220
+local HOLD_REPEAT_MS = 80
+
 -- ── Modul-State ───────────────────────────────────────────────────────────────
 
 local switchRoomFunction
@@ -67,7 +70,13 @@ local lastBlinkState = cursorBlinker.on
 
 -- Crank-Akkumulator (analog zu TileRoom/PixelRoom)
 local ticks  = 0
-local upHeld = false
+
+local directionHold = {
+    up = { active = false, nextMs = 0 },
+    down = { active = false, nextMs = 0 },
+    left = { active = false, nextMs = 0 },
+    right = { active = false, nextMs = 0 }
+}
 
 -- ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
@@ -285,6 +294,72 @@ local function toggleCurrentCell()
     needsRedraw = true
 end
 
+local function moveCursor(direction)
+    local oldRow = cursorRow
+    local oldCol = cursorCol
+
+    if direction == "up" then
+        if cursorRow > 1 then cursorRow = cursorRow - 1 end
+    elseif direction == "down" then
+        if cursorRow < GRID_ROWS then cursorRow = cursorRow + 1 end
+    elseif direction == "left" then
+        if cursorCol > 1 then cursorCol = cursorCol - 1 end
+    elseif direction == "right" then
+        if cursorCol < GRID_COLS then cursorCol = cursorCol + 1 end
+    else
+        return
+    end
+
+    if oldRow ~= cursorRow or oldCol ~= cursorCol then
+        if playdate.buttonIsPressed(playdate.kButtonA) then
+            toggleCurrentCell()
+        else
+            needsRedraw = true
+        end
+    end
+end
+
+local function startDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    moveCursor(direction)
+    state.active = true
+    state.nextMs = playdate.getCurrentTimeMilliseconds() + HOLD_INITIAL_DELAY_MS
+end
+
+local function stopDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    state.active = false
+end
+
+local function clearDirectionHold()
+    for _, state in pairs(directionHold) do
+        state.active = false
+    end
+end
+
+local function processDirectionHold()
+    local nowMs = playdate.getCurrentTimeMilliseconds()
+    local buttonByDirection = {
+        up = playdate.kButtonUp,
+        down = playdate.kButtonDown,
+        left = playdate.kButtonLeft,
+        right = playdate.kButtonRight
+    }
+    for direction, state in pairs(directionHold) do
+        if state.active then
+            local button = buttonByDirection[direction]
+            if not playdate.buttonIsPressed(button) then
+                state.active = false
+            elseif nowMs >= state.nextMs then
+                moveCursor(direction)
+                state.nextMs = nowMs + HOLD_REPEAT_MS
+            end
+        end
+    end
+end
+
 -- ── Public API ────────────────────────────────────────────────────────────────
 
 -- Initialisiert ZoomRoom mit Abhängigkeiten.
@@ -385,6 +460,7 @@ end
 -- ── Room-Lifecycle ────────────────────────────────────────────────────────────
 
 function ZoomRoom:entered()
+    clearDirectionHold()
     needsRedraw = true
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
@@ -392,6 +468,8 @@ function ZoomRoom:entered()
 end
 
 function ZoomRoom:update()
+    processDirectionHold()
+
     cursorBlinker:updateAll()
     if cursorBlinker.on ~= lastBlinkState then
         lastBlinkState = cursorBlinker.on
@@ -399,8 +477,10 @@ function ZoomRoom:update()
     end
 
     -- Zoom-Trigger: B gehalten + Crank
-    if upHeld then
-        ticks += playdate.getCrankTicks(4)
+    local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
+    if bHeld then
+        local crankTicks = playdate.getCrankTicks(4) or 0
+        ticks += crankTicks
         if ticks >= 4 then
             ticks = 0
             -- Crank vorwärts → in PixelRoom zoomen
@@ -426,37 +506,31 @@ end
 function ZoomRoom:inputHandler()
     return {
         upButtonDown = function()
-            upHeld = false
-            if cursorRow > 1 then cursorRow = cursorRow - 1 end
-            needsRedraw = true
+            startDirectionHold("up")
         end,
         upButtonUp = function()
-            upHeld = false
+            stopDirectionHold("up")
         end,
         downButtonDown = function()
-            upHeld = false
-            if cursorRow < GRID_ROWS then cursorRow = cursorRow + 1 end
-            needsRedraw = true
+            startDirectionHold("down")
+        end,
+        downButtonUp = function()
+            stopDirectionHold("down")
         end,
         leftButtonDown = function()
-            upHeld = false
-            if cursorCol > 1 then cursorCol = cursorCol - 1 end
-            needsRedraw = true
+            startDirectionHold("left")
+        end,
+        leftButtonUp = function()
+            stopDirectionHold("left")
         end,
         rightButtonDown = function()
-            upHeld = false
-            if cursorCol < GRID_COLS then cursorCol = cursorCol + 1 end
-            needsRedraw = true
+            startDirectionHold("right")
+        end,
+        rightButtonUp = function()
+            stopDirectionHold("right")
         end,
         AButtonDown = function()
-            upHeld = false
             toggleCurrentCell()
-        end,
-        BButtonDown = function()
-            upHeld = true
-        end,
-        BButtonUp = function()
-            upHeld = false
         end
     }
 end

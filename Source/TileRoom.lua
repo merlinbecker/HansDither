@@ -87,7 +87,15 @@ local GRID_ROWS = 15
 local CELL_SIZE = 8 -- 8x8 Pixel pro Zelle, wenn die Skalierung aus ist, 16x16
 local SCREEN_W = 200 -- Playdate-Bildschirmbreite in Pixeln
 
-local upHeld = false
+local HOLD_INITIAL_DELAY_MS = 220
+local HOLD_REPEAT_MS = 80
+
+local directionHold = {
+    up = { active = false, nextMs = 0 },
+    down = { active = false, nextMs = 0 },
+    left = { active = false, nextMs = 0 },
+    right = { active = false, nextMs = 0 }
+}
 
 -- Tile Picker: zeigt das aktuell gewählte Tile beim Crank-Drehen in einer Ecke an
 local PICKER_TIMEOUT_MS = 3000 -- Fenster verschwindet nach 3s ohne Crank
@@ -246,6 +254,80 @@ local function toggleCurrentCell()
             tilemap:setTileAtPosition(col, row, tilePickerIndex)
         end
         needsRedraw = true
+    end
+end
+
+local function paintCurrentCell()
+    local section, row, col = gridView:getSelection()
+    if row and col then
+        if tilemap:getTileAtPosition(col, row) ~= tilePickerIndex then
+            tilemap:setTileAtPosition(col, row, tilePickerIndex)
+            needsRedraw = true
+        end
+    end
+end
+
+local function moveCursor(direction)
+    local _, oldRow, oldCol = gridView:getSelection()
+    if direction == "up" then
+        gridView:selectPreviousRow(false, true, false)
+    elseif direction == "down" then
+        gridView:selectNextRow(false, true, false)
+    elseif direction == "left" then
+        gridView:selectPreviousColumn(false, true, false)
+    elseif direction == "right" then
+        gridView:selectNextColumn(false, true, false)
+    else
+        return
+    end
+
+    local _, newRow, newCol = gridView:getSelection()
+    if oldRow ~= newRow or oldCol ~= newCol then
+        if playdate.buttonIsPressed(playdate.kButtonA) then
+            paintCurrentCell()
+        end
+        needsRedraw = true
+    end
+end
+
+local function startDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    moveCursor(direction)
+    state.active = true
+    state.nextMs = playdate.getCurrentTimeMilliseconds() + HOLD_INITIAL_DELAY_MS
+end
+
+local function stopDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    state.active = false
+end
+
+local function clearDirectionHold()
+    for _, state in pairs(directionHold) do
+        state.active = false
+    end
+end
+
+local function processDirectionHold()
+    local nowMs = playdate.getCurrentTimeMilliseconds()
+    local buttonByDirection = {
+        up = playdate.kButtonUp,
+        down = playdate.kButtonDown,
+        left = playdate.kButtonLeft,
+        right = playdate.kButtonRight
+    }
+    for direction, state in pairs(directionHold) do
+        if state.active then
+            local button = buttonByDirection[direction]
+            if not playdate.buttonIsPressed(button) then
+                state.active = false
+            elseif nowMs >= state.nextMs then
+                moveCursor(direction)
+                state.nextMs = nowMs + HOLD_REPEAT_MS
+            end
+        end
     end
 end
 
@@ -774,14 +856,18 @@ local ticks=0
 
 -- Update logic for StartRaum
 function TileRoom:update()
+    processDirectionHold()
+
     cursorBlinker:updateAll()
     if cursorBlinker.on ~= lastBlinkState then
         lastBlinkState = cursorBlinker.on
         needsRedraw = true
     end
     -- Zoom-Trigger: D-Pad Up gehalten + Crank
-    if upHeld then
-        ticks += playdate.getCrankTicks(4)
+    local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
+    if bHeld then
+        local crankTicks = playdate.getCrankTicks(4) or 0
+        ticks += crankTicks
         if ticks >=4 then
             ticks=0
             if switchRoomFunction then
@@ -834,6 +920,7 @@ function TileRoom:update()
 end
 
 function TileRoom:entered()
+    clearDirectionHold()
     needsRedraw = true
     -- Tile Picker zurücksetzen, damit kein altes Fenster beim Raumeintritt sichtbar ist
     tilePickerVisible = false
@@ -1016,37 +1103,31 @@ end
 function TileRoom:inputHandler()
     return {
     upButtonDown = function()
-        upHeld = false
-        gridView:selectPreviousRow(false, true, false)
-        needsRedraw = true
+        startDirectionHold("up")
     end,
     upButtonUp = function()
-        upHeld = false
+        stopDirectionHold("up")
     end,
     downButtonDown = function()
-        upHeld = false
-        gridView:selectNextRow(false, true, false)
-        needsRedraw = true
+        startDirectionHold("down")
+    end,
+    downButtonUp = function()
+        stopDirectionHold("down")
     end,
     leftButtonDown = function()
-        upHeld = false
-        gridView:selectPreviousColumn(false, true, false)
-        needsRedraw = true
+        startDirectionHold("left")
+    end,
+    leftButtonUp = function()
+        stopDirectionHold("left")
     end,
     rightButtonDown = function()
-        upHeld = false
-        gridView:selectNextColumn(false, true, false)
-        needsRedraw = true
+        startDirectionHold("right")
+    end,
+    rightButtonUp = function()
+        stopDirectionHold("right")
     end,
     AButtonDown = function()
-        upHeld = false
         toggleCurrentCell()
-    end,
-    BButtonDown = function()
-        upHeld = true
-    end,
-    BButtonUp = function()
-        upHeld = false
     end
 }
 end

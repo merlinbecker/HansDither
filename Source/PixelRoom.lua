@@ -14,6 +14,9 @@ local GRID_ROWS = 8
 local CELL_SIZE = 15 -- 15x15 Pixel pro Zelle, wenn die Skalierung aus ist, 8x8
 local PADDING=40
 
+local HOLD_INITIAL_DELAY_MS = 220
+local HOLD_REPEAT_MS = 80
+
 -- Grid-Zustand: false=weiß, true=schwarz
 local gridState = {}
 
@@ -21,6 +24,15 @@ local gridState = {}
 -- Tile in-place überschrieben statt ein neues anzulegen.
 local changeAllSimilar = false
 local currentTileIndex = nil -- 1-basierter Index des bearbeiteten Tiles in der Imagetable
+
+local directionHold = {
+    up = { active = false, nextMs = 0 },
+    down = { active = false, nextMs = 0 },
+    left = { active = false, nextMs = 0 },
+    right = { active = false, nextMs = 0 }
+}
+
+local ticks = 0
 
 local gridView = playdate.ui.gridview.new(CELL_SIZE, CELL_SIZE)
 gridView:setNumberOfSections(1)
@@ -85,6 +97,71 @@ local function toggleCurrentCell()
     end
 end
 
+local function moveCursor(direction)
+    local _, oldRow, oldCol = gridView:getSelection()
+    if direction == "up" then
+        gridView:selectPreviousRow(false, true, false)
+    elseif direction == "down" then
+        gridView:selectNextRow(false, true, false)
+    elseif direction == "left" then
+        gridView:selectPreviousColumn(false, true, false)
+    elseif direction == "right" then
+        gridView:selectNextColumn(false, true, false)
+    else
+        return
+    end
+
+    local _, newRow, newCol = gridView:getSelection()
+    if oldRow ~= newRow or oldCol ~= newCol then
+        if playdate.buttonIsPressed(playdate.kButtonA) then
+            toggleCurrentCell()
+        else
+            needsRedraw = true
+        end
+    end
+end
+
+local function startDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    moveCursor(direction)
+    state.active = true
+    state.nextMs = playdate.getCurrentTimeMilliseconds() + HOLD_INITIAL_DELAY_MS
+end
+
+local function stopDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    state.active = false
+end
+
+local function clearDirectionHold()
+    for _, state in pairs(directionHold) do
+        state.active = false
+    end
+end
+
+local function processDirectionHold()
+    local nowMs = playdate.getCurrentTimeMilliseconds()
+    local buttonByDirection = {
+        up = playdate.kButtonUp,
+        down = playdate.kButtonDown,
+        left = playdate.kButtonLeft,
+        right = playdate.kButtonRight
+    }
+    for direction, state in pairs(directionHold) do
+        if state.active then
+            local button = buttonByDirection[direction]
+            if not playdate.buttonIsPressed(button) then
+                state.active = false
+            elseif nowMs >= state.nextMs then
+                moveCursor(direction)
+                state.nextMs = nowMs + HOLD_REPEAT_MS
+            end
+        end
+    end
+end
+
 
 -- Initialize the room with shared data and dependencies
 function PixelRoom:init(switchRoom,nextRoomReference)
@@ -101,14 +178,18 @@ end
 
 -- Update logic for StartRaum
 function PixelRoom:update()
+    processDirectionHold()
+
     cursorBlinker:updateAll()
     if cursorBlinker.on ~= lastBlinkState then
         lastBlinkState = cursorBlinker.on
         needsRedraw = true
     end
 
-    if upHeld then
-        ticks += playdate.getCrankTicks(4)
+    local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
+    if bHeld then
+        local crankTicks = playdate.getCrankTicks(4) or 0
+        ticks += crankTicks
         if ticks <=-4 then
             ticks=0
             if switchRoomFunction then
@@ -154,6 +235,7 @@ function PixelRoom:update()
 end
 
 function PixelRoom:entered()
+    clearDirectionHold()
     needsRedraw = true
     -- System-Menü: Checkbox "All Similar" + "Invert"
     local menu = playdate.getSystemMenu()
@@ -176,37 +258,31 @@ end
 function PixelRoom:inputHandler()
     return {
     upButtonDown = function()
-        upHeld = false
-        gridView:selectPreviousRow(false, true, false)
-        needsRedraw = true
+        startDirectionHold("up")
     end,
     upButtonUp = function()
-        upHeld = false
+        stopDirectionHold("up")
     end,
     downButtonDown = function()
-        upHeld = false
-        gridView:selectNextRow(false, true, false)
-        needsRedraw = true
+        startDirectionHold("down")
+    end,
+    downButtonUp = function()
+        stopDirectionHold("down")
     end,
     leftButtonDown = function()
-        upHeld = false
-        gridView:selectPreviousColumn(false, true, false)
-        needsRedraw = true
+        startDirectionHold("left")
+    end,
+    leftButtonUp = function()
+        stopDirectionHold("left")
     end,
     rightButtonDown = function()
-        upHeld = false
-        gridView:selectNextColumn(false, true, false)
-        needsRedraw = true
+        startDirectionHold("right")
+    end,
+    rightButtonUp = function()
+        stopDirectionHold("right")
     end,
     AButtonDown = function()
-        upHeld = false
         toggleCurrentCell()
-    end,
-    BButtonDown = function()
-        upHeld = true
-    end,
-    BButtonUp = function()
-        upHeld = false
     end
 }
 end

@@ -18,6 +18,19 @@ local needsRedraw
 local pendingOpenName
 local pendingOpenIsNew = false
 
+local HOLD_INITIAL_DELAY_MS = 220
+local HOLD_REPEAT_MS = 90
+
+local directionHold = {
+    up = { active = false, nextMs = 0 },
+    down = { active = false, nextMs = 0 },
+    left = { active = false, nextMs = 0 },
+    right = { active = false, nextMs = 0 }
+}
+
+local gridView
+local updateMenuItems
+
 -- Konstanten
 local GRID_COLS = 3
 local MAX_GAMES = 6
@@ -110,13 +123,70 @@ local function getGridRows()
     return math.max(1, math.ceil((1 + #savedGames) / GRID_COLS))
 end
 
+local function moveSelection(direction)
+    if direction == "up" then
+        gridView:selectPreviousRow(true, true, true)
+    elseif direction == "down" then
+        gridView:selectNextRow(true, true, true)
+    elseif direction == "left" then
+        gridView:selectPreviousColumn(true, true, true)
+    elseif direction == "right" then
+        gridView:selectNextColumn(true, true, true)
+    else
+        return
+    end
+    updateMenuItems()
+    needsRedraw = true
+end
+
+local function startDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    moveSelection(direction)
+    state.active = true
+    state.nextMs = playdate.getCurrentTimeMilliseconds() + HOLD_INITIAL_DELAY_MS
+end
+
+local function stopDirectionHold(direction)
+    local state = directionHold[direction]
+    if not state then return end
+    state.active = false
+end
+
+local function clearDirectionHold()
+    for _, state in pairs(directionHold) do
+        state.active = false
+    end
+end
+
+local function processDirectionHold()
+    local nowMs = playdate.getCurrentTimeMilliseconds()
+    local buttonByDirection = {
+        up = playdate.kButtonUp,
+        down = playdate.kButtonDown,
+        left = playdate.kButtonLeft,
+        right = playdate.kButtonRight
+    }
+    for direction, state in pairs(directionHold) do
+        if state.active then
+            local button = buttonByDirection[direction]
+            if not playdate.buttonIsPressed(button) then
+                state.active = false
+            elseif nowMs >= state.nextMs then
+                moveSelection(direction)
+                state.nextMs = nowMs + HOLD_REPEAT_MS
+            end
+        end
+    end
+end
+
 -- ── GridView ──────────────────────────────────────────────────────────────────
-local gridView = playdate.ui.gridview.new(CELL_W, CELL_H)
+gridView = playdate.ui.gridview.new(CELL_W, CELL_H)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setCellPadding(1, 1, 1, 1)
 
 -- Zeigt „Loeschen" im Systemmenü wenn eine Game-Zelle selektiert ist.
-local function updateMenuItems()
+updateMenuItems = function()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
     local _, row, col = gridView:getSelection()
@@ -196,6 +266,8 @@ function GameRoom:init(switchRoom, nextRoomReference)
 end
 
 function GameRoom:update()
+    processDirectionHold()
+
     if pendingOpenName and not playdate.keyboard.isVisible() then
         local name = pendingOpenName
         local isNew = pendingOpenIsNew
@@ -254,6 +326,7 @@ function GameRoom:update()
 end
 
 function GameRoom:entered()
+    clearDirectionHold()
     playdate.getSystemMenu():removeAllMenuItems()
     savedGames = readGameIndex()
     loadPreviews(savedGames)
@@ -269,24 +342,28 @@ end
 function GameRoom:inputHandler()
     return {
         upButtonDown = function()
-            gridView:selectPreviousRow(true, true, true)
-            updateMenuItems()
-            needsRedraw = true
+            startDirectionHold("up")
+        end,
+        upButtonUp = function()
+            stopDirectionHold("up")
         end,
         downButtonDown = function()
-            gridView:selectNextRow(true, true, true)
-            updateMenuItems()
-            needsRedraw = true
+            startDirectionHold("down")
+        end,
+        downButtonUp = function()
+            stopDirectionHold("down")
         end,
         leftButtonDown = function()
-            gridView:selectPreviousColumn(true, true, true)
-            updateMenuItems()
-            needsRedraw = true
+            startDirectionHold("left")
+        end,
+        leftButtonUp = function()
+            stopDirectionHold("left")
         end,
         rightButtonDown = function()
-            gridView:selectNextColumn(true, true, true)
-            updateMenuItems()
-            needsRedraw = true
+            startDirectionHold("right")
+        end,
+        rightButtonUp = function()
+            stopDirectionHold("right")
         end,
         AButtonDown = function()
             local _, row, col = gridView:getSelection()
