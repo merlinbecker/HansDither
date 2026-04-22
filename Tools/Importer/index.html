@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hans Dither Importer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="page-header">
+    <h1>Hans Dither Importer</h1>
+    <p>Importiert ein PNG als neuen Room und legt noetige Tiles/Frames in einer Pulp-JSON an.</p>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls">
+      <h2>Dateien</h2>
+
+      <label for="jsonFile">Pulp JSON</label>
+      <input id="jsonFile" type="file" accept="application/json,.json">
+
+      <label for="pngFile">PNG</label>
+      <input id="pngFile" type="file" accept="image/png,.png">
+
+      <label for="threshold">Threshold (0-255)</label>
+      <input id="threshold" type="number" min="0" max="255" value="128">
+
+      <div class="button-row">
+        <button id="importBtn" disabled>Import starten</button>
+        <button id="exportBtn" disabled>Export JSON</button>
+      </div>
+
+      <h3>Status</h3>
+      <pre id="status" class="status">Bereit. Bitte JSON und PNG waehlen.</pre>
+    </section>
+
+    <section class="panel room-view">
+      <div class="panel-head">
+        <h2>Room Canvas</h2>
+        <div class="room-nav">
+          <button id="prevRoomBtn" disabled>&lt;</button>
+          <span id="roomMeta">Kein Room geladen</span>
+          <button id="nextRoomBtn" disabled>&gt;</button>
+        </div>
+      </div>
+      <canvas id="roomCanvas" width="200" height="120" aria-label="Room Vorschau"></canvas>
+    </section>
+
+    <section class="panel tile-view">
+      <h2>sortedTiles Canvas</h2>
+      <canvas id="tilesCanvas" width="420" height="420" aria-label="Tile Palette"></canvas>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
