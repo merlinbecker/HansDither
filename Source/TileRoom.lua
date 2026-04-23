@@ -8,73 +8,16 @@ import "CoreLibs/crank"
 import "CoreLibs/object" -- für playdate.graphics.image.new()
 import "PixelRoom"
 import "PulpGameIO"
+import "loadingBar"
+import "RoomOperation"
+import "TileRoomPersistence"
+import "TileRoomEditor"
 
-
---
--- imageHash(image): Erzeugt einen einfachen Hash für ein playdate.graphics.image
--- Damit können Tiles verglichen werden, ohne die Bilddaten direkt zu vergleichen.
--- Nutzt image:sample(x, y) für alle Pixel und berechnet daraus einen Hashwert.
--- Für kleine Tiles (z.B. 8x8 oder 16x16) ist das performant genug.
--- https://de.wikipedia.org/wiki/FNV_(Informatik)
--- Rückgabe: Hex-String als Hashrepräsentation
---
-function imageHash(image)
-    local w, h = image:getSize()
-    -- FNV-1a Offset Basis als signed 32-bit: 0x811C9DC5 = -2128831035
-    -- Playdate nutzt 32-bit Lua-Integers (max 2147483647), daher darf 2166136261 nicht direkt verwendet werden.
-    local hash = -2128831035
-    for y = 0, h - 1 do
-        for x = 0, w - 1 do
-            local pixel = image:sample(x, y) or 0 -- 0=weiß, 1=schwarz, 2=transparent
-            -- FNV-1a Hash Schritt: XOR dann Multiplikation
-            -- Kein % 4294967296 nötig: 32-bit Lua wrapat Integer-Overflow automatisch
-            hash = hash ~ pixel
-            hash = hash * 16777619
-        end
-    end
-    -- Hex-String zurückgeben (8-stellig); %x formatiert Integer als unsigned, also korrekt für negative Werte
-    return string.format("%08x", hash)
-end
-
-
---
--- findOrAppendImage(imagetable, image, hashCache):
--- Sucht, ob das Bild (per Hash) schon in der Imagetable ist.
--- Falls ja, gibt den Index des ersten Treffers zurück.
--- Falls nein, hängt das Bild an die Imagetable an, cached den Hash und gibt den neuen Index zurück.
--- hashCache ist ein Array mit den Hashes der Imagetable (Index = Bildindex)
---
--- Rückgabe: Index (1-basiert)
---
 
 local hashCache = {}
---
--- findOrAppendImage(imagetable, image, hashCache):
--- Sucht, ob das Bild (per Hash) schon in der Imagetable ist.
--- Falls ja, gibt den Index und die unveränderte Imagetable zurück.
--- Falls nein, erzeugt eine neue Imagetable mit dem Bild am Ende, cached den Hash und gibt neuen Index und neue Imagetable zurück.
--- Rückgabe: index, imagetable
-function findOrAppendImage(imagetable, image, hashCache)
-    local imgHash = imageHash(image)
-    -- Prüfe, ob Hash schon im Cache ist
-    for idx, cachedHash in ipairs(hashCache) do
-        if cachedHash == imgHash then
-            return idx, imagetable -- Bild schon vorhanden
-        end
-    end
-    -- Bild ist neu: Neue Imagetable mit zusätzlichem Bild erzeugen
-    local oldCount = imagetable:getLength()
-    local newTable = playdate.graphics.imagetable.new(oldCount + 1)
-    for i = 1, oldCount do
-        newTable:setImage(i, imagetable:getImage(i))
-    end
-    newTable:setImage(oldCount + 1, image)
-    hashCache[oldCount + 1] = imgHash
-    return oldCount + 1, newTable
-end
-
-
 local gfx = playdate.graphics
+local cellImagetable
+local showGrid
 
 TileRoom = {}
 
@@ -113,11 +56,44 @@ local backRoom = nil           -- Raum, zu dem nach dem Speichern zurückgewechs
 local gameData = nil           -- v2-Game-Tabelle (rooms, tiles, frames)
 local pulpState = nil          -- Vollstaendiges Pulp-Dokument + Zuordnungen
 local currentRoomIndex = 1     -- 1-basierter Lua-Index in gameData.rooms
+local roomLoadingBar = loadingBar.new()
+local persistenceConfig = {
+    gfx = gfx,
+    gridCols = GRID_COLS,
+    gridRows = GRID_ROWS,
+    cellSize = CELL_SIZE,
+    getGameData = function() return gameData end,
+    setGameData = function(value) gameData = value end,
+    getPulpState = function() return pulpState end,
+    setPulpState = function(value) pulpState = value end,
+    getCurrentRoomIndex = function() return currentRoomIndex end,
+    setCurrentRoomIndex = function(value) currentRoomIndex = value end,
+    getCellImagetable = function() return cellImagetable end,
+    setCellImagetable = function(value) cellImagetable = value end,
+    getHashCache = function() return hashCache end,
+    setHashCache = function(value) hashCache = value end,
+    getTilePickerIndex = function() return tilePickerIndex end,
+    setTilePickerIndex = function(value) tilePickerIndex = value end,
+    getShowGrid = function() return showGrid end,
+    setShowGrid = function(value) showGrid = value end
+}
+local persistence = TileRoomPersistence.new(persistenceConfig)
+local editor = nil
+
+local function markDirty()
+    needsRedraw = true
+end
+
+local roomOperation = RoomOperation.new(roomLoadingBar, markDirty)
+
+local function isOperationActive()
+    return roomOperation and roomOperation:isActive() or false
+end
 
 -- Show Grid: bestimmt, welches Tile als "leer" gilt
 -- true  → Tile 1 (Grid) ist der Hintergrund, Löschen setzt auf 1
 -- false → Tile 2 (Weiß) ist der Hintergrund, Löschen setzt auf 2
-local showGrid = true
+showGrid = true
 
 -- Matrix-Imagetable (2 Tiles, 8x8) laden (siehe 7.20.12 Image Table)
 local origImagetable = gfx.imagetable.new("images/cellbg")
@@ -126,14 +102,14 @@ assert(origImagetable, "Imagetable konnte nicht geladen werden!")
 -- hier wird die Tilemap geladen,
 -- diese sollte eigentlich dann vom LoadRoom uebergeben werden.
 -- Neue Imagetable mit 3 Einträgen anlegen
-local cellImagetable = gfx.imagetable.new(3)
+cellImagetable = gfx.imagetable.new(3)
 local img1=origImagetable:getImage(1)
 cellImagetable:setImage(1, img1)
-hashCache[1]=imageHash(img1)
+hashCache[1]=persistence:imageHash(img1)
 
 local img2=origImagetable
 cellImagetable:setImage(2, origImagetable:getImage(2))
-hashCache[2]=imageHash(origImagetable:getImage(2))
+hashCache[2]=persistence:imageHash(origImagetable:getImage(2))
 
 -- Schwarzes Tile erzeugen und als drittes Tile anhängen
 local blackTile = gfx.image.new(CELL_SIZE, CELL_SIZE)
@@ -142,7 +118,7 @@ gfx.pushContext(blackTile)
     gfx.fillRect(0, 0, CELL_SIZE, CELL_SIZE)
 gfx.popContext()
 cellImagetable:setImage(3, blackTile)
-hashCache[3]=imageHash(blackTile)
+hashCache[3]=persistence:imageHash(blackTile)
 
 
 
@@ -169,6 +145,31 @@ cursorBlinker:startLoop()
 local lastBlinkState = cursorBlinker.on
 local needsRedraw = true
 
+persistenceConfig.tilemap = tilemap
+persistenceConfig.origImagetable = origImagetable
+persistenceConfig.blackTile = blackTile
+
+editor = TileRoomEditor.new({
+    gfx = gfx,
+    tilemap = tilemap,
+    gridView = gridView,
+    cursorBlinker = cursorBlinker,
+    cellSize = CELL_SIZE,
+    screenW = SCREEN_W,
+    gridCols = GRID_COLS,
+    winSize = WIN_SIZE,
+    winMargin = WIN_MARGIN,
+    directionHold = directionHold,
+    holdInitialDelayMs = HOLD_INITIAL_DELAY_MS,
+    holdRepeatMs = HOLD_REPEAT_MS,
+    getCellImagetable = function() return cellImagetable end,
+    getTilePickerIndex = function() return tilePickerIndex end,
+    getTilePickerVisible = function() return tilePickerVisible end,
+    getTilePickerLastCrankMs = function() return tilePickerLastCrankMs end,
+    getShowGrid = function() return showGrid end,
+    markDirty = markDirty
+})
+
 -- Mittelwert initiale Selektion in der Bildschirmmitte (12, 8) in Sektion 1
 -- setSelection(section, row, column)
 gridView:setSelection(1, math.floor(GRID_ROWS / 2) + 1, math.floor(GRID_COLS / 2) + 1)
@@ -176,159 +177,7 @@ gridView:setSelection(1, math.floor(GRID_ROWS / 2) + 1, math.floor(GRID_COLS / 2
 
 -- Zeichne eine Zelle und optional Cursor, bei Auswahl
 function gridView:drawCell(section, row, column, selected, x, y, width, height)
-    local selSection, selRow, selCol = gridView:getSelection()
-    -- Die Tilemap wird im Haupt-Draw (playdate.update) gezeichnet!
-    -- Cursor immer in der selektierten Zelle zeichnen
-    local isCursor = (section == selSection and row == selRow and column == selCol)
-    if isCursor and cursorBlinker.on then
-        local tileIndex = tilemap:getTileAtPosition(column, row)
-        local cx = x + width / 2
-        local cy = y + height / 2
-        -- Cursor-Farbe per Pixel-Sample der Tile-Mitte bestimmen.
-        -- sample() gibt gfx.kColorWhite, gfx.kColorBlack oder gfx.kColorClear zurück.
-        local tile = cellImagetable:getImage(tileIndex)
-        local centerPixel = tile and tile:sample(CELL_SIZE // 2, CELL_SIZE // 2) or gfx.kColorWhite
-        if centerPixel == gfx.kColorBlack then
-            -- Tile-Mitte ist schwarz → Cursor weiß für Sichtbarkeit
-            gfx.setColor(gfx.kColorWhite)
-        else
-            -- Tile-Mitte ist weiß oder transparent → Cursor schwarz
-            gfx.setColor(gfx.kColorBlack)
-        end
-        gfx.fillCircleAtPoint(cx, cy, 2)
-    end
-end
-
-
-
---
--- drawTilePickerWindow(): Zeichnet das Tile-Picker-Popup in der Ecke, die am weitesten
--- vom Cursor entfernt ist. Links -> oben rechts, Rechts -> oben links.
--- Das Tile wird 2x skaliert (image:drawScaled) für bessere Lesbarkeit.
--- Wird nur gezeichnet, wenn tilePickerVisible == true.
---
-local function drawTilePickerWindow()
-    if not tilePickerVisible then return end
-
-    -- Position: gegenüberliegende horizontale Seite zum Cursor
-    local _, _, selCol = gridView:getSelection()
-    local px
-    if selCol <= GRID_COLS / 2 then
-        -- Cursor in linker Hälfte → Fenster oben rechts
-        px = SCREEN_W - WIN_SIZE - WIN_MARGIN
-    else
-        -- Cursor in rechter Hälfte → Fenster oben links
-        px = WIN_MARGIN
-    end
-    local py = WIN_MARGIN
-
-    -- Hintergrund (weiß, damit das Tile auf klarem Grund erscheint)
-    gfx.setColor(gfx.kColorWhite)
-    gfx.fillRect(px, py, WIN_SIZE, WIN_SIZE)
-    -- Rahmen (schwarz, 1px)
-    gfx.setColor(gfx.kColorBlack)
-    gfx.drawRect(px, py, WIN_SIZE, WIN_SIZE)
-    -- Tile 2x skaliert (8x8 → 16x16) mit 3px Abstand zum Fensterrand
-    local tile = cellImagetable:getImage(tilePickerIndex)
-    if tile then
-        tile:drawScaled(px + 3, py + 3, 2.0)
-    end
-end
-
--- A-Button malt mit dem aktuell im Tile Picker gewählten Tile (tilePickerIndex).
--- Ist die Zelle bereits auf tilePickerIndex gesetzt, wird sie auf Tile 1 (Hintergrund) zurückgesetzt.
--- Gibt den aktuellen Hintergrund-Tile-Index zurück (1=Grid, 2=Weiß).
-local function getBackgroundTile()
-    return showGrid and 1 or 2
-end
-
-local function toggleCurrentCell()
-    local section, row, col = gridView:getSelection()
-    if row and col then
-        local current = tilemap:getTileAtPosition(col, row)
-        if current == tilePickerIndex then
-            -- Zelle löschen: auf aktuellen Hintergrund zurücksetzen
-            tilemap:setTileAtPosition(col, row, getBackgroundTile())
-        else
-            -- Zelle mit dem aktuell gewählten Picker-Tile füllen
-            tilemap:setTileAtPosition(col, row, tilePickerIndex)
-        end
-        needsRedraw = true
-    end
-end
-
-local function paintCurrentCell()
-    local section, row, col = gridView:getSelection()
-    if row and col then
-        if tilemap:getTileAtPosition(col, row) ~= tilePickerIndex then
-            tilemap:setTileAtPosition(col, row, tilePickerIndex)
-            needsRedraw = true
-        end
-    end
-end
-
-local function moveCursor(direction)
-    local _, oldRow, oldCol = gridView:getSelection()
-    if direction == "up" then
-        gridView:selectPreviousRow(false, true, false)
-    elseif direction == "down" then
-        gridView:selectNextRow(false, true, false)
-    elseif direction == "left" then
-        gridView:selectPreviousColumn(false, true, false)
-    elseif direction == "right" then
-        gridView:selectNextColumn(false, true, false)
-    else
-        return
-    end
-
-    local _, newRow, newCol = gridView:getSelection()
-    if oldRow ~= newRow or oldCol ~= newCol then
-        if playdate.buttonIsPressed(playdate.kButtonA) then
-            paintCurrentCell()
-        end
-        needsRedraw = true
-    end
-end
-
-local function startDirectionHold(direction)
-    local state = directionHold[direction]
-    if not state then return end
-    moveCursor(direction)
-    state.active = true
-    state.nextMs = playdate.getCurrentTimeMilliseconds() + HOLD_INITIAL_DELAY_MS
-end
-
-local function stopDirectionHold(direction)
-    local state = directionHold[direction]
-    if not state then return end
-    state.active = false
-end
-
-local function clearDirectionHold()
-    for _, state in pairs(directionHold) do
-        state.active = false
-    end
-end
-
-local function processDirectionHold()
-    local nowMs = playdate.getCurrentTimeMilliseconds()
-    local buttonByDirection = {
-        up = playdate.kButtonUp,
-        down = playdate.kButtonDown,
-        left = playdate.kButtonLeft,
-        right = playdate.kButtonRight
-    }
-    for direction, state in pairs(directionHold) do
-        if state.active then
-            local button = buttonByDirection[direction]
-            if not playdate.buttonIsPressed(button) then
-                state.active = false
-            elseif nowMs >= state.nextMs then
-                moveCursor(direction)
-                state.nextMs = nowMs + HOLD_REPEAT_MS
-            end
-        end
-    end
+    editor:drawCell(section, row, column, selected, x, y, width, height)
 end
 
 -- Initialize the room with shared data and dependencies
@@ -360,11 +209,11 @@ function TileRoom:setGame(name, data, externalPulpState)
     end
 
     -- Imagetable aus v2 tiles/frames aufbauen
-    rebuildImagetableFromGameData()
+    persistence:rebuildImagetableFromGameData()
     -- Ersten Room in Tilemap laden, damit kein stale State übrigbleibt
     if gameData and gameData.rooms and #gameData.rooms > 0 then
         currentRoomIndex = 1
-        loadRoomIntoTilemap(1)
+        persistence:loadRoomIntoTilemap(1)
     end
 end
 
@@ -383,10 +232,10 @@ end
 -- roomIdx: 1-basierter Lua-Index in gameData.rooms
 function TileRoom:setRoom(roomIdx)
     -- Aktuellen Room-State sichern, bevor wir wechseln
-    syncCurrentRoomToGameData()
+    persistence:syncCurrentRoomToGameData()
     -- Neuen Room laden
     currentRoomIndex = roomIdx
-    loadRoomIntoTilemap(roomIdx)
+    persistence:loadRoomIntoTilemap(roomIdx)
     tilePickerIndex = math.max(3, math.min(tilePickerIndex, cellImagetable:getLength()))
     needsRedraw = true
 end
@@ -397,13 +246,13 @@ function TileRoom:newRoom()
     if not gameData then
         -- Falls kein Game geladen: komplett neues Game erstellen
         -- createEmptyGameData erzeugt bereits einen Room (id=0), daher direkt diesen verwenden
-        gameData = createEmptyGameData(currentFileName or "untitled")
+        gameData = persistence:createEmptyGameData(currentFileName or "untitled")
         local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(currentFileName or "untitled", gameData, nil)
         normalizedState.document = normalizedDocument
         pulpState = normalizedState
-        rebuildImagetableFromGameData()
+        persistence:rebuildImagetableFromGameData()
         currentRoomIndex = 1
-        loadRoomIntoTilemap(1)
+        persistence:loadRoomIntoTilemap(1)
         tilePickerIndex = 3
         needsRedraw = true
         return 1
@@ -430,7 +279,7 @@ function TileRoom:newRoom()
     end
     -- Neuen Room direkt laden
     currentRoomIndex = #gameData.rooms
-    loadRoomIntoTilemap(currentRoomIndex)
+    persistence:loadRoomIntoTilemap(currentRoomIndex)
     tilePickerIndex = 3
     needsRedraw = true
     return currentRoomIndex
@@ -439,393 +288,130 @@ end
 -- Setzt Tilemap und Imagetable auf den Ausgangszustand zurück (neues leeres Game).
 -- Erstellt Game mit einem leeren Room und den 3 Basis-Tiles.
 function TileRoom:newMap()
-    gameData = createEmptyGameData(currentFileName or "untitled")
+    gameData = persistence:createEmptyGameData(currentFileName or "untitled")
     local normalizedDocument, normalizedState = PulpGameIO.buildSaveDocument(currentFileName or "untitled", gameData, nil)
     normalizedState.document = normalizedDocument
     pulpState = normalizedState
-    rebuildImagetableFromGameData()
+    persistence:rebuildImagetableFromGameData()
     currentRoomIndex = 1
-    loadRoomIntoTilemap(1)
+    persistence:loadRoomIntoTilemap(1)
     tilePickerIndex = 3
     needsRedraw = true
 end
 
--- ── Internes Datenmodell ──────────────────────────────────────────────────────
-
--- Erstellt ein leeres v2-Game-Objekt mit 3 Basis-Tiles und einem leeren Room.
-function createEmptyGameData(name)
-    -- Basis-Frames aus Runtime-Images
-    local baseTileImages = {
-        origImagetable:getImage(1),
-        origImagetable:getImage(2),
-        blackTile
-    }
-    local frames = {}
-    local baseNames = { "white", "grid", "black" }
-    for i, img in ipairs(baseTileImages) do
-        local data = encodeFrameData(img)
-        frames[i] = { id = i - 1, data = data }
-    end
-    local tiles = {}
-    for i = 1, 3 do
-        tiles[i] = {
-            id = i - 1,
-            name = baseNames[i],
-            type = 0,
-            frames = { i - 1 }
-        }
-    end
-    -- Ein leerer Room (alle Tiles = 0 = white)
-    local emptyRoomTiles = {}
-    for j = 1, GRID_COLS * GRID_ROWS do
-        emptyRoomTiles[j] = 0
-    end
-    local rooms = {
-        {
-            id = 0,
-            name = "Room 1",
-            tiles = emptyRoomTiles
-        }
-    }
-    return {
-        version = 2,
-        name = name,
-        rooms = rooms,
-        tiles = tiles,
-        frames = frames
-    }
-end
-
--- Serialisiert ein Tile-Bild als flaches 64er-Pixel-Array (v2 Frame-Format).
--- Rückgabe: Array mit 64 Einträgen (0=weiß, 1=schwarz, 2=transparent)
-function encodeFrameData(image)
-    local w, h = image:getSize()
-    local pixels = {}
-    local n = 1
-    for y = 0, h - 1 do
-        for x = 0, w - 1 do
-            local p = image:sample(x, y)
-            if p == gfx.kColorBlack then
-                pixels[n] = 1
-            elseif p == gfx.kColorClear then
-                pixels[n] = 2
-            else
-                pixels[n] = 0
-            end
-            n = n + 1
-        end
-    end
-    return pixels
-end
-
--- Rekonstruiert ein 8×8-Tile-Bild aus Frame-Daten (flaches 64er-Array).
-local function decodeFrameData(frameData)
-    if not frameData or type(frameData) ~= "table" then return nil end
-    -- Unterstützt sowohl v2 (flaches Array) als auch v1 ({w, h, pixels})
-    local pixels, w, h
-    if frameData.pixels then
-        -- v1-Format: {w=8, h=8, pixels={...}}
-        w = tonumber(frameData.w) or 8
-        h = tonumber(frameData.h) or 8
-        pixels = frameData.pixels
-    else
-        -- v2-Format: flaches 64er-Array direkt als data
-        w = 8
-        h = 8
-        pixels = frameData
-    end
-    if type(pixels) ~= "table" then return nil end
-
-    local img = gfx.image.new(w, h, gfx.kColorClear)
-    gfx.pushContext(img)
-        local n = 1
-        for y = 0, h - 1 do
-            for x = 0, w - 1 do
-                local p = pixels[n]
-                if p == 1 then
-                    gfx.setColor(gfx.kColorBlack)
-                    gfx.drawPixel(x, y)
-                elseif p == 0 then
-                    gfx.setColor(gfx.kColorWhite)
-                    gfx.drawPixel(x, y)
-                end
-                n = n + 1
-            end
-        end
-    gfx.popContext()
-    return img
-end
-
--- Prüft, ob encode/decode für ein Tile verlustfrei ist.
-local function tileRoundtripOk(image)
-    local decoded = decodeFrameData(encodeFrameData(image))
-    if not decoded then return false end
-    return imageHash(image) == imageHash(decoded)
-end
-
--- Rendert ein Preview-Bild aus der aktuellen Tilemap.
-local function renderPreviewImage()
-    local previewImg = gfx.image.new(GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE, gfx.kColorWhite)
-    gfx.pushContext(previewImg)
-        tilemap:draw(0, 0)
-    gfx.popContext()
-    return previewImg
-end
-
--- Rendert ein Preview für einen bestimmten Room (ohne die Tilemap zu verändern).
--- Temporär: setzt Tilemap-Daten, rendert, stellt dann wieder her.
-local function renderRoomPreview(roomData)
-    -- Room-Tiles von 0-basiert auf 1-basiert konvertieren
-    local runtimeTiles = {}
-    for i, tileId in ipairs(roomData.tiles) do
-        runtimeTiles[i] = tileId + 1
-    end
-    -- Tilemap-State sichern
-    local savedData, savedWidth = tilemap:getTiles()
-    -- Temporär setzen
-    tilemap:setTiles(runtimeTiles, GRID_COLS)
-    local preview = renderPreviewImage()
-    -- Wiederherstellen
-    tilemap:setTiles(savedData, savedWidth)
-    return preview
-end
-
--- Baut die Runtime-Imagetable und den hashCache aus gameData.tiles/frames auf.
-function rebuildImagetableFromGameData()
-    if not gameData then return end
-    local tileCount = #gameData.tiles
-    local freshTable = gfx.imagetable.new(tileCount)
-    hashCache = {}
-    for i, tileDef in ipairs(gameData.tiles) do
-        -- Jedes Tile hat genau einen Frame (für jetzt)
-        local frameId = tileDef.frames[1] -- 0-basiert
-        local frameObj = nil
-        -- Frame-Objekt per ID finden
-        for _, f in ipairs(gameData.frames) do
-            if f.id == frameId then
-                frameObj = f
-                break
-            end
-        end
-        if frameObj then
-            local img = decodeFrameData(frameObj.data)
-            if img then
-                freshTable:setImage(i, img)
-                hashCache[i] = imageHash(img)
-            end
-        end
-    end
-    cellImagetable = freshTable
-    tilemap:setImageTable(cellImagetable)
-end
-
--- Lädt einen Room (per 1-basiertem Lua-Index) aus gameData in die Tilemap.
-function loadRoomIntoTilemap(roomIdx)
-    if not gameData or not gameData.rooms[roomIdx] then return end
-    local roomData = gameData.rooms[roomIdx]
-    -- Room-Tiles: 0-basiert (Speicherformat) → 1-basiert (Runtime)
-    local runtimeTiles = {}
-    local countGrid = 0
-    local countWhite = 0
-    for i, tileId in ipairs(roomData.tiles) do
-        local runtimeIdx = tileId + 1
-        runtimeTiles[i] = runtimeIdx
-        if runtimeIdx == 1 then
-            countGrid = countGrid + 1
-        elseif runtimeIdx == 2 then
-            countWhite = countWhite + 1
-        end
-    end
-    -- showGrid beim Laden aus den Raumdaten ableiten.
-    -- Wenn eines der beiden Basis-Tiles dominiert, verwenden wir dieses als Hintergrundmodus.
-    if countGrid > countWhite then
-        showGrid = true
-    elseif countWhite > countGrid then
-        showGrid = false
-    end
-    tilemap:setTiles(runtimeTiles, GRID_COLS)
-end
-
--- Synchronisiert den aktuellen Tilemap-State zurück in gameData.rooms[currentRoomIndex].
-function syncCurrentRoomToGameData()
-    if not gameData or not gameData.rooms[currentRoomIndex] then return end
-    local data, _ = tilemap:getTiles()
-    -- Runtime (1-basiert) → Speicher (0-basiert)
-    local savedTiles = {}
-    for i, runtimeIdx in ipairs(data) do
-        savedTiles[i] = runtimeIdx - 1
-    end
-    gameData.rooms[currentRoomIndex].tiles = savedTiles
-end
-
--- Entfernt unbenutzte Tiles und zieht die verbleibenden Indizes kompakt nach.
--- Basis-Tiles 1..3 bleiben immer erhalten.
--- Berücksichtigt alle Rooms des Games, nicht nur den aktuellen.
-local function compactTileState()
-    -- Zuerst: aktuellen Room-State in gameData synchronisieren
-    syncCurrentRoomToGameData()
-
-    local maxTile = cellImagetable:getLength()
-
-    -- Alle in irgendeinem Room benutzten Tiles sammeln (1-basierte Runtime-IDs)
-    local used = { [1] = true, [2] = true, [3] = true }
-    for _, room in ipairs(gameData.rooms) do
-        for _, tileId0 in ipairs(room.tiles) do
-            -- 0-basiert → 1-basiert
-            local runtimeIdx = tileId0 + 1
-            if type(runtimeIdx) == "number" then
-                used[runtimeIdx] = true
-            end
-        end
-    end
-
-    local oldToNew = {}
-    local newToOld = {}
-    local newCount = 0
-    for oldIdx = 1, maxTile do
-        if used[oldIdx] then
-            local img = cellImagetable:getImage(oldIdx)
-            if img or oldIdx <= 3 then
-                newCount = newCount + 1
-                oldToNew[oldIdx] = newCount
-                newToOld[newCount] = oldIdx
-            else
-                print("Warnung: Benutztes Tile ohne Bild wird entfernt:", oldIdx)
-            end
-        end
-    end
-
-    -- Alle Rooms remappen (0-basiert)
-    for _, room in ipairs(gameData.rooms) do
-        for i, tileId0 in ipairs(room.tiles) do
-            local runtimeOld = tileId0 + 1
-            local runtimeNew = oldToNew[runtimeOld]
-            if not runtimeNew then
-                runtimeNew = 1
-                print("Warnung: Undefinierter Tile-Index in Room auf 0 gesetzt:", tileId0)
-            end
-            room.tiles[i] = runtimeNew - 1  -- zurück auf 0-basiert
-        end
-    end
-
-    -- Neue Imagetable aufbauen
-    local newTable = gfx.imagetable.new(newCount)
-    local newHashCache = {}
-    for newIdx = 1, newCount do
-        local oldIdx = newToOld[newIdx]
-        local img = cellImagetable:getImage(oldIdx)
-        if img then
-            newTable:setImage(newIdx, img)
-            newHashCache[newIdx] = imageHash(img)
-        end
-    end
-
-    local removedCount = 0
-    for oldIdx = 4, maxTile do
-        if not oldToNew[oldIdx] then
-            removedCount = removedCount + 1
-        end
-    end
-    if removedCount > 0 then
-        print("Info: Unbenutzte Tiles entfernt:", removedCount)
-    end
-
-    local remappedPickerIndex = oldToNew[tilePickerIndex] or 3
-    remappedPickerIndex = math.max(3, math.min(remappedPickerIndex, newCount))
-
-    return {
-        imageTable = newTable,
-        hashCache = newHashCache,
-        maxTile = newCount,
-        tilePickerIndex = remappedPickerIndex,
-        oldToNew = oldToNew
-    }
-end
-
 -- Speichert das aktuelle Game im v2-Format.
-function TileRoom:saveToFile()
+function TileRoom:saveToFile(afterSave)
     if not currentFileName or not gameData then return end
+    if isOperationActive() then return end
+
     local name = currentFileName
     playdate.file.mkdir("saves")
 
-    -- 1. Aktuellen Room-State in gameData synchronisieren
-    syncCurrentRoomToGameData()
+    roomOperation:start("Speichere Spiel...", "Vorbereitung", function()
+        return coroutine.create(function()
+            local function yieldProgress(fraction, detail)
+                roomLoadingBar:updateFraction(fraction, detail)
+                needsRedraw = true
+                coroutine.yield()
+            end
 
-    -- 2. Tiles komprimieren (über alle Rooms)
-    local compacted = compactTileState()
-    cellImagetable = compacted.imageTable
-    hashCache = compacted.hashCache
-    tilemap:setImageTable(cellImagetable)
-    tilePickerIndex = compacted.tilePickerIndex
-    pulpState = PulpGameIO.remapTileMappings(pulpState, compacted.oldToNew)
+            coroutine.yield()
 
-    -- Aktuellen Room neu in Tilemap laden (Indizes wurden remapped)
-    loadRoomIntoTilemap(currentRoomIndex)
+            roomLoadingBar:updateFraction(0.1, "Room synchronisieren")
+            persistence:syncCurrentRoomToGameData()
+            needsRedraw = true
+            coroutine.yield()
 
-    -- 3. v2-Tiles und Frames aus der komprimierten Imagetable aufbauen
-    local v2Tiles = {}
-    local v2Frames = {}
-    local baseNames = { "white", "grid", "black" }
-    for i = 1, compacted.maxTile do
-        local img = cellImagetable:getImage(i)
-        if img then
-            local frameId = i - 1 -- 0-basiert
-            local tileName
-            if i <= 3 then
-                tileName = baseNames[i]
+            roomLoadingBar:updateFraction(0.15, "Tiles komprimieren")
+            local compacted = persistence:compactTileState(function(current, total, detail)
+                local ratio = total > 0 and (current / total) or 1
+                yieldProgress(0.15 + (0.25 * ratio), detail)
+            end)
+            cellImagetable = compacted.imageTable
+            hashCache = compacted.hashCache
+            tilemap:setImageTable(cellImagetable)
+            tilePickerIndex = compacted.tilePickerIndex
+            pulpState = PulpGameIO.remapTileMappings(pulpState, compacted.oldToNew)
+            persistence:loadRoomIntoTilemap(currentRoomIndex)
+            needsRedraw = true
+            coroutine.yield()
+
+            roomLoadingBar:updateFraction(0.45, "Tiles serialisieren")
+            local v2Tiles = {}
+            local v2Frames = {}
+            local baseNames = { "white", "grid", "black" }
+            for i = 1, compacted.maxTile do
+                local img = cellImagetable:getImage(i)
+                if img then
+                    local frameId = i - 1
+                    local tileName = i <= 3 and baseNames[i] or ("tile_" .. frameId)
+                    v2Tiles[i] = {
+                        id = frameId,
+                        name = tileName,
+                        type = 0,
+                        frames = { frameId }
+                    }
+                    v2Frames[i] = {
+                        id = frameId,
+                        data = persistence:encodeFrameData(img)
+                    }
+                    if not persistence:tileRoundtripOk(img) then
+                        print("Warnung: Rekonstruktionstest fehlgeschlagen fuer Tile:", i)
+                    end
+                end
+
+                if compacted.maxTile > 0 and (i == compacted.maxTile or i == 1 or i % 8 == 0) then
+                    yieldProgress(0.45 + (0.2 * (i / compacted.maxTile)), "Tile " .. i .. " von " .. compacted.maxTile)
+                end
+            end
+            gameData.tiles = v2Tiles
+            gameData.frames = v2Frames
+            gameData.name = name
+            needsRedraw = true
+            coroutine.yield()
+
+            roomLoadingBar:updateFraction(0.68, "Dokument aufbauen")
+            local outputDocument, outputState = PulpGameIO.buildSaveDocument(
+                name,
+                gameData,
+                pulpState,
+                { currentRoomIndex = currentRoomIndex },
+                function(phase, current, total, detail)
+                    local ratio = total > 0 and (current / total) or 1
+                    yieldProgress(0.68 + (0.14 * ratio), detail)
+                end
+            )
+            outputState.document = outputDocument
+            pulpState = outputState
+            gameData.version = outputDocument.version
+            needsRedraw = true
+            coroutine.yield()
+
+            roomLoadingBar:updateFraction(0.88, "JSON schreiben")
+            playdate.datastore.write(outputDocument, "saves/" .. name)
+            needsRedraw = true
+            coroutine.yield()
+
+            roomLoadingBar:updateFraction(0.95, "Vorschaubilder schreiben")
+            local currentRoomId = gameData.rooms[currentRoomIndex].id
+            local currentPreview = persistence:renderPreviewImage()
+            playdate.datastore.writeImage(currentPreview, "saves/" .. name .. "_room" .. currentRoomId .. "_preview")
+
+            if currentRoomIndex == 1 then
+                playdate.datastore.writeImage(currentPreview, "saves/" .. name .. "_preview")
             else
-                tileName = "tile_" .. frameId
+                local firstRoomPreview = persistence:renderRoomPreview(gameData.rooms[1])
+                playdate.datastore.writeImage(firstRoomPreview, "saves/" .. name .. "_preview")
             end
-            v2Tiles[i] = {
-                id = frameId,
-                name = tileName,
-                type = 0,
-                frames = { frameId }
-            }
-            v2Frames[i] = {
-                id = frameId,
-                data = encodeFrameData(img)
-            }
-            if not tileRoundtripOk(img) then
-                print("Warnung: Rekonstruktionstest fehlgeschlagen fuer Tile:", i)
-            end
-        end
-    end
 
-    -- 4. gameData aktualisieren
-    gameData.tiles = v2Tiles
-    gameData.frames = v2Frames
-    gameData.name = name
+            needsRedraw = true
+            coroutine.yield()
 
-    -- 5. Vollstaendiges Pulp-Dokument erzeugen und speichern.
-    -- Dabei bleiben bereits vorhandene, nicht vom Editor verwaltete Felder erhalten.
-    local outputDocument, outputState = PulpGameIO.buildSaveDocument(
-        name,
-        gameData,
-        pulpState,
-        { currentRoomIndex = currentRoomIndex }
-    )
-    outputState.document = outputDocument
-    pulpState = outputState
-    gameData.version = outputDocument.version
-    playdate.datastore.write(outputDocument, "saves/" .. name)
-
-    -- 6. Preview-Bilder generieren
-    -- Aktueller Room-Preview (Dateiname nutzt room.id, nicht den Lua-Index)
-    local currentRoomId = gameData.rooms[currentRoomIndex].id
-    local currentPreview = renderPreviewImage()
-    playdate.datastore.writeImage(currentPreview, "saves/" .. name .. "_room" .. currentRoomId .. "_preview")
-
-    -- Game-Preview = Preview des ersten Rooms
-    if currentRoomIndex == 1 then
-        playdate.datastore.writeImage(currentPreview, "saves/" .. name .. "_preview")
-    else
-        -- Ersten Room temporär rendern
-        local firstRoomPreview = renderRoomPreview(gameData.rooms[1])
-        playdate.datastore.writeImage(firstRoomPreview, "saves/" .. name .. "_preview")
-    end
-
-    needsRedraw = true
+            roomLoadingBar:updateFraction(1, "Fertig")
+            needsRedraw = true
+            coroutine.yield()
+        end)
+    end, afterSave)
 end
 
 -- Lädt ein gespeichertes Game aus dem Datastore.
@@ -841,11 +427,11 @@ function TileRoom:loadFromFile(name)
     gameData = preparedGameData
     pulpState = preparedPulpState
 
-    rebuildImagetableFromGameData()
+    persistence:rebuildImagetableFromGameData()
 
     -- Ersten Room laden
     currentRoomIndex = 1
-    loadRoomIntoTilemap(1)
+    persistence:loadRoomIntoTilemap(1)
 
     tilePickerIndex = math.max(3, math.min(tilePickerIndex, cellImagetable:getLength()))
     needsRedraw = true
@@ -856,7 +442,13 @@ local ticks=0
 
 -- Update logic for StartRaum
 function TileRoom:update()
-    processDirectionHold()
+    if isOperationActive() then
+        roomOperation:resume(function(err)
+            print("TileRoom operation failed:", tostring(err))
+        end)
+    else
+        editor:processDirectionHold()
+    end
 
     cursorBlinker:updateAll()
     if cursorBlinker.on ~= lastBlinkState then
@@ -865,7 +457,9 @@ function TileRoom:update()
     end
     -- Zoom-Trigger: D-Pad Up gehalten + Crank
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
-    if bHeld then
+    if isOperationActive() then
+        ticks = 0
+    elseif bHeld then
         local crankTicks = playdate.getCrankTicks(4) or 0
         ticks += crankTicks
         if ticks >=4 then
@@ -911,7 +505,8 @@ function TileRoom:update()
         -- Cursor-Overlay via gridView (ruft drawCell für selektierte Zelle auf)
         gridView:drawInRect(0, 0, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
         -- Tile Picker Popup (erscheint bei Crank ohne B, verschwindet nach 3s)
-        drawTilePickerWindow()
+        editor:drawTilePickerWindow()
+        roomLoadingBar:draw()
         needsRedraw = false
     end
 
@@ -920,7 +515,7 @@ function TileRoom:update()
 end
 
 function TileRoom:entered()
-    clearDirectionHold()
+    editor:clearDirectionHold()
     needsRedraw = true
     -- Tile Picker zurücksetzen, damit kein altes Fenster beim Raumeintritt sichtbar ist
     tilePickerVisible = false
@@ -930,10 +525,11 @@ function TileRoom:entered()
     if currentFileName then
         -- Beim Auslösen: speichern und zurück zum LoadRoom wechseln
         menu:addMenuItem("Save + Back", function()
-            TileRoom:saveToFile()
-            if backRoom and switchRoomFunction then
-                switchRoomFunction(backRoom)
-            end
+            TileRoom:saveToFile(function()
+                if backRoom and switchRoomFunction then
+                    switchRoomFunction(backRoom)
+                end
+            end)
         end)
     end
     -- Checkbox: Show Grid – tauscht Tile 1 (Grid) ↔ Tile 2 (Weiß) als Hintergrund
@@ -957,7 +553,7 @@ end
 
 function TileRoom:setNewTile(tile)
     -- Prüfe, ob das Tile schon in der Imagetable ist oder angehängt werden muss
-    local index, newTable = findOrAppendImage(cellImagetable, tile, hashCache)
+    local index, newTable = persistence:findOrAppendImage(cellImagetable, tile, hashCache)
     cellImagetable = newTable
     tilemap:setImageTable(cellImagetable)
     -- Aktuelle Zelle auf das neue Tile setzen
@@ -968,7 +564,7 @@ function TileRoom:setNewTile(tile)
         local frameId = index - 1 -- 0-basiert
         gameData.frames[index] = {
             id = frameId,
-            data = encodeFrameData(tile)
+            data = persistence:encodeFrameData(tile)
         }
         gameData.tiles[index] = {
             id = frameId,
@@ -985,7 +581,7 @@ function TileRoom:updateExistingTile(tile, tileIndex)
     if not tileIndex or tileIndex < 1 then return end
     -- Bild in der Imagetable ersetzen
     cellImagetable:setImage(tileIndex, tile)
-    hashCache[tileIndex] = imageHash(tile)
+    hashCache[tileIndex] = persistence:imageHash(tile)
     tilemap:setImageTable(cellImagetable)
     -- gameData synchron halten
     if gameData and tileIndex <= #gameData.tiles then
@@ -994,7 +590,7 @@ function TileRoom:updateExistingTile(tile, tileIndex)
         -- Frame-Daten aktualisieren
         for _, f in ipairs(gameData.frames) do
             if f.id == frameId then
-                f.data = encodeFrameData(tile)
+                f.data = persistence:encodeFrameData(tile)
                 break
             end
         end
@@ -1058,7 +654,7 @@ function TileRoom:applyTileEditsBatch(edits)
             if edit.existingIndex and edit.existingIndex > 0 then
                 -- In-place: Bild im bestehenden Slot ersetzen
                 cellImagetable:setImage(edit.existingIndex, edit.image)
-                hashCache[edit.existingIndex] = imageHash(edit.image)
+                hashCache[edit.existingIndex] = persistence:imageHash(edit.image)
                 tilemap:setImageTable(cellImagetable)
                 finalIndex = edit.existingIndex
                 -- gameData Frame-Daten synchron halten
@@ -1067,14 +663,14 @@ function TileRoom:applyTileEditsBatch(edits)
                     local frameId = tileDef.frames[1]
                     for _, f in ipairs(gameData.frames) do
                         if f.id == frameId then
-                            f.data = encodeFrameData(edit.image)
+                            f.data = persistence:encodeFrameData(edit.image)
                             break
                         end
                     end
                 end
             else
                 -- Neu: deduplizieren oder anhängen
-                local newIdx, newTable = findOrAppendImage(cellImagetable, edit.image, hashCache)
+                local newIdx, newTable = persistence:findOrAppendImage(cellImagetable, edit.image, hashCache)
                 cellImagetable = newTable
                 tilemap:setImageTable(cellImagetable)
                 finalIndex = newIdx
@@ -1083,7 +679,7 @@ function TileRoom:applyTileEditsBatch(edits)
                     local frameId = newIdx - 1
                     gameData.frames[newIdx] = {
                         id   = frameId,
-                        data = encodeFrameData(edit.image)
+                        data = persistence:encodeFrameData(edit.image)
                     }
                     gameData.tiles[newIdx] = {
                         id     = frameId,
@@ -1101,33 +697,5 @@ end
 
 -- Input handler for StartRaum
 function TileRoom:inputHandler()
-    return {
-    upButtonDown = function()
-        startDirectionHold("up")
-    end,
-    upButtonUp = function()
-        stopDirectionHold("up")
-    end,
-    downButtonDown = function()
-        startDirectionHold("down")
-    end,
-    downButtonUp = function()
-        stopDirectionHold("down")
-    end,
-    leftButtonDown = function()
-        startDirectionHold("left")
-    end,
-    leftButtonUp = function()
-        stopDirectionHold("left")
-    end,
-    rightButtonDown = function()
-        startDirectionHold("right")
-    end,
-    rightButtonUp = function()
-        stopDirectionHold("right")
-    end,
-    AButtonDown = function()
-        toggleCurrentCell()
-    end
-}
+    return editor:buildInputHandler(isOperationActive)
 end

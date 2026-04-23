@@ -8,6 +8,9 @@ import "CoreLibs/ui"
 import "CoreLibs/timer"
 import "CoreLibs/keyboard"
 import "PulpGameIO"
+import "loadingBar"
+import "RoomOperation"
+import "LoadRoomGrid"
 
 local gfx = playdate.graphics
 
@@ -24,15 +27,9 @@ local pendingOpenIsNew = false
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 90
 
-local directionHold = {
-    up = { active = false, nextMs = 0 },
-    down = { active = false, nextMs = 0 },
-    left = { active = false, nextMs = 0 },
-    right = { active = false, nextMs = 0 }
-}
-
 local gridView
 local updateMenuItems
+local roomGrid
 
 -- Konstanten
 local GRID_COLS = 3
@@ -44,29 +41,104 @@ local CELL_H    = 28
 local currentGameName = nil   -- Name des aktuell geöffneten Games
 local currentGameData = nil   -- v2 Game-Daten (rooms, tiles, frames)
 local currentPulpState = nil  -- Vollstaendiges Pulp-Dokument + Zuordnungen
-local roomNames       = {}    -- Array von Room-Namen für Anzeige
-local previewCache    = {}    -- {[roomIndex] = gfx.image|nil}, 1-basiert
+local roomLoadingBar  = loadingBar.new()
+local roomOperation = nil
+local shouldLoadGameOnEnter = false
+local currentGameIsNew = false
 
--- ── Hilfsfunktionen ──────────────────────────────────────────────────────────
-
--- Lädt Room-Previews aus dem Datastore.
-local function loadRoomPreviews()
-    previewCache = {}
-    if not currentGameData or not currentGameData.rooms then return end
-    for i, room in ipairs(currentGameData.rooms) do
-        previewCache[i] = playdate.datastore.readImage(
-            "saves/" .. currentGameName .. "_room" .. room.id .. "_preview"
-        )
-    end
+local function markDirty()
+    needsRedraw = true
 end
 
--- Aktualisiert die Room-Namen-Liste aus gameData.
-local function refreshRoomNames()
-    roomNames = {}
-    if not currentGameData or not currentGameData.rooms then return end
-    for _, room in ipairs(currentGameData.rooms) do
-        table.insert(roomNames, room.name or ("Room " .. (room.id + 1)))
+roomOperation = RoomOperation.new(roomLoadingBar, markDirty)
+
+local function isOperationActive()
+    return roomOperation and roomOperation:isActive() or false
+end
+
+local function startLoadOperation()
+    if currentGameIsNew or not currentGameName then
+        return
     end
+
+    roomOperation:start("Lade Spiel...", "Speicherstand lesen", function()
+        return coroutine.create(function()
+            local function yieldProgress(fraction, detail)
+                roomLoadingBar:updateFraction(fraction, detail)
+                needsRedraw = true
+                coroutine.yield()
+            end
+
+        coroutine.yield()
+
+        local saved = playdate.datastore.read("saves/" .. currentGameName)
+        if not saved then
+            currentGameData = nil
+            currentPulpState = nil
+            roomGrid:refreshRoomNames(currentGameData)
+            roomGrid:loadRoomPreviews(currentGameData, currentGameName)
+            gridView:setNumberOfRows(roomGrid:getGridRows())
+            gridView:setSelection(1, 1, 1)
+            updateMenuItems()
+            roomLoadingBar:updateFraction(1, "Kein Speicherstand gefunden")
+            needsRedraw = true
+            coroutine.yield()
+            return
+        end
+
+            roomLoadingBar:updateFraction(0.1, "Dokument analysieren")
+            needsRedraw = true
+            coroutine.yield()
+
+            local preparedGameData, preparedPulpState = PulpGameIO.prepareLoadedGame(
+                currentGameName,
+                saved,
+                function(phase, current, total, detail)
+                    if phase == "tiles" then
+                        local ratio = total > 0 and (current / total) or 1
+                        yieldProgress(0.15 + (0.35 * ratio), detail)
+                    elseif phase == "rooms" then
+                        local ratio = total > 0 and (current / total) or 1
+                        yieldProgress(0.5 + (0.2 * ratio), detail)
+                    elseif phase == "prepare" then
+                        yieldProgress(0.12, detail)
+                    elseif phase == "normalize" then
+                        yieldProgress(0.72, detail)
+                    elseif phase == "sparse-tiles" then
+                        yieldProgress(0.78, detail)
+                    elseif phase == "sparse-frames" then
+                        yieldProgress(0.82, detail)
+                    elseif phase == "finalize" then
+                        yieldProgress(0.86, detail)
+                    elseif phase == "done" then
+                        yieldProgress(0.9, detail)
+                    else
+                        local ratio = total > 0 and (current / total) or 1
+                        yieldProgress(0.7 + (0.15 * ratio), detail)
+                    end
+                end
+            )
+        currentGameData = preparedGameData
+        currentPulpState = preparedPulpState
+
+            roomLoadingBar:updateFraction(0.93, "Rooms aktualisieren")
+            roomGrid:refreshRoomNames(currentGameData)
+            needsRedraw = true
+            coroutine.yield()
+
+            roomLoadingBar:updateFraction(0.97, "Vorschaubilder laden")
+            roomGrid:loadRoomPreviews(currentGameData, currentGameName)
+            gridView:setNumberOfRows(roomGrid:getGridRows())
+            gridView:setSelection(1, 1, 1)
+            updateMenuItems()
+            needsRedraw = true
+            coroutine.yield()
+
+            roomLoadingBar:updateFraction(1, "Fertig")
+            needsRedraw = true
+            coroutine.yield()
+        end)
+    end)
 end
 
 -- Öffnet den TileRoom für einen bestimmten Room.
@@ -80,8 +152,6 @@ local function openTileRoom(roomIdx, isNew)
         -- gameData wird von TileRoom aktualisiert
         currentGameData = nextRoom:getGameData()
         currentPulpState = nextRoom:getPulpDocument()
-        -- Initial speichern
-        nextRoom:saveToFile()
     else
         nextRoom:setRoom(roomIdx)
     end
@@ -113,76 +183,22 @@ local function deleteRoom(roomIdx)
     -- Game speichern
     playdate.datastore.write(currentGameData, "saves/" .. currentGameName)
     -- Listen aktualisieren
-    refreshRoomNames()
-    loadRoomPreviews()
-end
-
--- Berechnet die benötigte Zeilenanzahl für das Grid.
-local function getGridRows()
-    return math.max(1, math.ceil((1 + #roomNames) / GRID_COLS))
-end
-
-local function moveSelection(direction)
-    if direction == "up" then
-        gridView:selectPreviousRow(true, true, true)
-    elseif direction == "down" then
-        gridView:selectNextRow(true, true, true)
-    elseif direction == "left" then
-        gridView:selectPreviousColumn(true, true, true)
-    elseif direction == "right" then
-        gridView:selectNextColumn(true, true, true)
-    else
-        return
-    end
-    updateMenuItems()
-    needsRedraw = true
-end
-
-local function startDirectionHold(direction)
-    local state = directionHold[direction]
-    if not state then return end
-    moveSelection(direction)
-    state.active = true
-    state.nextMs = playdate.getCurrentTimeMilliseconds() + HOLD_INITIAL_DELAY_MS
-end
-
-local function stopDirectionHold(direction)
-    local state = directionHold[direction]
-    if not state then return end
-    state.active = false
-end
-
-local function clearDirectionHold()
-    for _, state in pairs(directionHold) do
-        state.active = false
-    end
-end
-
-local function processDirectionHold()
-    local nowMs = playdate.getCurrentTimeMilliseconds()
-    local buttonByDirection = {
-        up = playdate.kButtonUp,
-        down = playdate.kButtonDown,
-        left = playdate.kButtonLeft,
-        right = playdate.kButtonRight
-    }
-    for direction, state in pairs(directionHold) do
-        if state.active then
-            local button = buttonByDirection[direction]
-            if not playdate.buttonIsPressed(button) then
-                state.active = false
-            elseif nowMs >= state.nextMs then
-                moveSelection(direction)
-                state.nextMs = nowMs + HOLD_REPEAT_MS
-            end
-        end
-    end
+    roomGrid:refreshRoomNames(currentGameData)
+    roomGrid:loadRoomPreviews(currentGameData, currentGameName)
 end
 
 -- ── GridView ──────────────────────────────────────────────────────────────────
 gridView = playdate.ui.gridview.new(CELL_W, CELL_H)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setCellPadding(1, 1, 1, 1)
+roomGrid = LoadRoomGrid.new({
+    gfx = gfx,
+    gridView = gridView,
+    gridCols = GRID_COLS,
+    maxRooms = MAX_ROOMS,
+    holdInitialDelayMs = HOLD_INITIAL_DELAY_MS,
+    holdRepeatMs = HOLD_REPEAT_MS
+})
 
 -- Aktualisiert das Systemmenü: immer "Zurueck", optional "Loeschen".
 updateMenuItems = function()
@@ -196,12 +212,13 @@ updateMenuItems = function()
     end)
     local _, row, col = gridView:getSelection()
     local linearIndex = (row - 1) * GRID_COLS + col
+    local roomNames = roomGrid:getRoomNames()
     if linearIndex > 1 and #roomNames > 1 then
         local roomIdx = linearIndex - 1
         if roomIdx <= #roomNames then
             menu:addMenuItem("loeschen", function()
                 deleteRoom(roomIdx)
-                gridView:setNumberOfRows(getGridRows())
+                gridView:setNumberOfRows(roomGrid:getGridRows())
                 gridView:setSelection(1, 1, 1)
                 updateMenuItems()
                 needsRedraw = true
@@ -212,52 +229,7 @@ end
 
 -- Zeichnet eine Zelle.
 function gridView:drawCell(section, row, column, selected, x, y, width, height)
-    local linearIndex = (row - 1) * GRID_COLS + column
-    local totalCells  = 1 + #roomNames
-    if linearIndex > totalCells then return end
-
-    if selected then
-        gfx.setColor(gfx.kColorBlack)
-        gfx.fillRect(x, y, width, height)
-    else
-        gfx.setColor(gfx.kColorWhite)
-        gfx.fillRect(x, y, width, height)
-        gfx.setColor(gfx.kColorBlack)
-        gfx.drawRect(x, y, width, height)
-    end
-
-    if linearIndex == 1 then
-        if selected then
-            gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-        else
-            gfx.setImageDrawMode(gfx.kDrawModeCopy)
-        end
-        gfx.drawTextAligned("+", x + width // 2, y + height // 2 - 5, kTextAlignment.center)
-    else
-        local roomIdx = linearIndex - 1
-        if roomIdx <= #roomNames then
-            local preview = previewCache[roomIdx]
-            if preview then
-                local px = x + (width  - 40) // 2
-                local py = y + (height - 24) // 2
-                if selected then
-                    gfx.setImageDrawMode(gfx.kDrawModeInverted)
-                else
-                    gfx.setImageDrawMode(gfx.kDrawModeCopy)
-                end
-                preview:drawScaled(px, py, 0.2)
-            else
-                if selected then
-                    gfx.setColor(gfx.kColorWhite)
-                else
-                    gfx.setColor(gfx.kColorBlack)
-                end
-                gfx.drawRect(x + (width - 30) // 2, y + (height - 18) // 2, 30, 18)
-            end
-        end
-    end
-
-    gfx.setImageDrawMode(gfx.kDrawModeCopy)
+    roomGrid:drawCell(section, row, column, selected, x, y, width, height)
 end
 
 -- ── Room-Lifecycle ────────────────────────────────────────────────────────────
@@ -273,27 +245,27 @@ end
 -- Lädt Game-Daten und bereitet Room-Liste vor.
 function LoadRoom:setGame(gameName, isNew)
     currentGameName = gameName
-    if isNew then
-        -- Neues Game: TileRoom erstellt die Daten, wir brauchen ein leeres Game
-        -- TileRoom:newMap() wird beim ersten Room-Öffnen aufgerufen
-        currentGameData = nil
-        currentPulpState = nil
-    else
-        local saved = playdate.datastore.read("saves/" .. gameName)
-        if saved then
-            local preparedGameData, preparedPulpState = PulpGameIO.prepareLoadedGame(gameName, saved)
-            currentGameData = preparedGameData
-            currentPulpState = preparedPulpState
-        end
-    end
-    refreshRoomNames()
+    currentGameIsNew = isNew and true or false
+    shouldLoadGameOnEnter = not currentGameIsNew
+    currentGameData = nil
+    currentPulpState = nil
+    roomGrid:refreshRoomNames(currentGameData)
 end
 
 function LoadRoom:update()
-    processDirectionHold()
+    if isOperationActive() then
+        roomOperation:resume(function(err)
+            print("LoadRoom operation failed:", tostring(err))
+        end)
+    else
+        roomGrid:processDirectionHold(function()
+            updateMenuItems()
+            needsRedraw = true
+        end)
+    end
 
     -- Verzögerter Room-Wechsel nach Keyboard-Close
-    if pendingOpenIdx and not playdate.keyboard.isVisible() then
+    if not isOperationActive() and pendingOpenIdx and not playdate.keyboard.isVisible() then
         local roomIdx = pendingOpenIdx
         local isNew = pendingOpenIsNew
         pendingOpenIdx = nil
@@ -310,40 +282,9 @@ function LoadRoom:update()
     end
 
     if needsRedraw or gridView.isScrolling then
-        gfx.clear(gfx.kColorWhite)
+        roomGrid:draw(currentGameName, playdate.keyboard.isVisible(), playdate.keyboard.text)
 
-        -- Titelzeile: Game-Name
-        local title = currentGameName or "Hans Dither"
-        gfx.drawText(title, 4, 2)
-        gfx.setColor(gfx.kColorBlack)
-        gfx.drawLine(0, 12, 199, 12)
-
-        -- Grid
-        gridView:drawInRect(1, 13, 198, 90)
-
-        -- Trennlinie unten
-        gfx.setColor(gfx.kColorBlack)
-        gfx.drawLine(0, 104, 199, 104)
-
-        -- Unterer Info-Bereich
-        local infoText
-        if playdate.keyboard.isVisible() then
-            local t = playdate.keyboard.text
-            infoText = "> " .. (t or "")
-        else
-            local _, row, col = gridView:getSelection()
-            local idx = (row - 1) * GRID_COLS + col
-            if idx == 1 then
-                if #roomNames >= MAX_ROOMS then
-                    infoText = "[Max. " .. MAX_ROOMS .. " Rooms erreicht]"
-                else
-                    infoText = "[+ Neuer Room]"
-                end
-            else
-                infoText = roomNames[idx - 1] or ""
-            end
-        end
-        gfx.drawText(infoText, 4, 108)
+        roomLoadingBar:draw()
 
         needsRedraw = false
     end
@@ -352,14 +293,9 @@ function LoadRoom:update()
 end
 
 function LoadRoom:entered()
-    clearDirectionHold()
+    roomGrid:clearDirectionHold()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
-    refreshRoomNames()
-    loadRoomPreviews()
-    gridView:setNumberOfRows(getGridRows())
-    gridView:setSelection(1, 1, 1)
-    updateMenuItems()
     -- Nach Rückkehr aus TileRoom: gameData aktualisieren (könnte gespeichert worden sein)
     if currentGameName and nextRoom and nextRoom.getGameData then
         local updatedData = nextRoom:getGameData()
@@ -368,9 +304,26 @@ function LoadRoom:entered()
             if nextRoom.getPulpDocument then
                 currentPulpState = nextRoom:getPulpDocument()
             end
-            refreshRoomNames()
-            loadRoomPreviews()
+            roomGrid:refreshRoomNames(currentGameData)
+            roomGrid:loadRoomPreviews(currentGameData, currentGameName)
         end
+    end
+
+    if currentGameIsNew then
+        roomGrid:refreshRoomNames(currentGameData)
+        roomGrid:loadRoomPreviews(currentGameData, currentGameName)
+        gridView:setNumberOfRows(roomGrid:getGridRows())
+        gridView:setSelection(1, 1, 1)
+        updateMenuItems()
+    elseif shouldLoadGameOnEnter then
+        shouldLoadGameOnEnter = false
+        startLoadOperation()
+    else
+        roomGrid:refreshRoomNames(currentGameData)
+        roomGrid:loadRoomPreviews(currentGameData, currentGameName)
+        gridView:setNumberOfRows(roomGrid:getGridRows())
+        gridView:setSelection(1, 1, 1)
+        updateMenuItems()
     end
     needsRedraw = true
     print("Entered LoadRoom")
@@ -381,32 +334,54 @@ end
 function LoadRoom:inputHandler()
     return {
         upButtonDown = function()
-            startDirectionHold("up")
+            if isOperationActive() then return end
+            roomGrid:startDirectionHold("up", function()
+                updateMenuItems()
+                needsRedraw = true
+            end)
         end,
         upButtonUp = function()
-            stopDirectionHold("up")
+            if isOperationActive() then return end
+            roomGrid:stopDirectionHold("up")
         end,
         downButtonDown = function()
-            startDirectionHold("down")
+            if isOperationActive() then return end
+            roomGrid:startDirectionHold("down", function()
+                updateMenuItems()
+                needsRedraw = true
+            end)
         end,
         downButtonUp = function()
-            stopDirectionHold("down")
+            if isOperationActive() then return end
+            roomGrid:stopDirectionHold("down")
         end,
         leftButtonDown = function()
-            startDirectionHold("left")
+            if isOperationActive() then return end
+            roomGrid:startDirectionHold("left", function()
+                updateMenuItems()
+                needsRedraw = true
+            end)
         end,
         leftButtonUp = function()
-            stopDirectionHold("left")
+            if isOperationActive() then return end
+            roomGrid:stopDirectionHold("left")
         end,
         rightButtonDown = function()
-            startDirectionHold("right")
+            if isOperationActive() then return end
+            roomGrid:startDirectionHold("right", function()
+                updateMenuItems()
+                needsRedraw = true
+            end)
         end,
         rightButtonUp = function()
-            stopDirectionHold("right")
+            if isOperationActive() then return end
+            roomGrid:stopDirectionHold("right")
         end,
         AButtonDown = function()
+            if isOperationActive() then return end
             local _, row, col = gridView:getSelection()
             local linearIndex = (row - 1) * GRID_COLS + col
+            local roomNames = roomGrid:getRoomNames()
             if linearIndex == 1 then
                 -- „+ Neuer Room": nur wenn MAX_ROOMS noch nicht erreicht
                 if #roomNames >= MAX_ROOMS then return end
@@ -426,6 +401,7 @@ function LoadRoom:inputHandler()
             end
         end,
         BButtonDown = function()
+            if isOperationActive() then return end
             -- Zurück zum GameRoom
             if backRoom and switchRoomFunction then
                 switchRoomFunction(backRoom)
