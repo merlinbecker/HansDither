@@ -54,3 +54,20 @@ Die Dateien unter plans/ und support/concepts dokumentieren die schrittweise Evo
 - dann Pulp-Kompatibilitaets-Refactoring.
 
 Nutzen: nachvollziehbare Entscheidungen und kontrollierte technische Schulden.
+
+## 8.6 Asynchrones Operationskonzept (Save/Load)
+
+- Langlaufende Save/Load-Aktionen werden room-lokal ueber RoomOperation gesteuert.
+- Die eigentliche Arbeit laeuft als Coroutine und wird pro Frame in update() fortgesetzt.
+- Waehrend einer aktiven Operation werden konkurrierende Eingaben blockiert.
+- Ein loadingBar-Overlay zeigt Titel, Detailtext und Fortschritt pro Phase.
+
+Nutzen: sichtbarer Fortschritt, bessere Responsivitaet waehrend Vorbereitungsschritten, weniger Duplikation zwischen Rooms.
+
+## 8.7 Modul-Splitting nach Verantwortungen
+
+- LoadRoom trennt Orchestrierung von Grid-UI durch LoadRoomGrid.
+- TileRoom trennt Interaktion (TileRoomEditor) von Persistenzlogik (TileRoomPersistence).
+- PulpGameIO trennt Fassade, Shared-Helfer, Save- und Load-Logik.
+
+Nutzen: kleinere Dateien, bessere Test- und Wartbarkeit, klarere Seiteneffekte pro Modul.

@@ -50,8 +50,6 @@ local function markDirty()
     needsRedraw = true
 end
 
-roomOperation = RoomOperation.new(roomLoadingBar, markDirty)
-
 local function isOperationActive()
     return roomOperation and roomOperation:isActive() or false
 end
@@ -199,6 +197,9 @@ roomGrid = LoadRoomGrid.new({
     holdInitialDelayMs = HOLD_INITIAL_DELAY_MS,
     holdRepeatMs = HOLD_REPEAT_MS
 })
+
+-- Nach gridView-Aufbau initialisieren, da isOperationActive von roomOperation abhaengt
+roomOperation = RoomOperation.new(roomLoadingBar, markDirty)
 
 -- Aktualisiert das Systemmenü: immer "Zurueck", optional "Loeschen".
 updateMenuItems = function()

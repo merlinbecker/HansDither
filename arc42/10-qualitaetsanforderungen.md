@@ -10,6 +10,7 @@
 | Performance | Interaktionen und Redraw bleiben auf Zielhardware responsiv. |
 | Wartbarkeit | Aenderungen in einem Room sollen andere Rooms nur minimal beeinflussen. |
 | Kompatibilitaet | Gespeicherte Dokumente bleiben Pulp-kompatibel und verlieren keine kritischen Felder. |
+| Transparenz bei Langlaeufern | Nutzer sieht bei Save/Load stets den aktuellen Fortschritt und Zustand. |
 
 ## 10.2 Qualitaetsszenarien
 
@@ -54,3 +55,15 @@
 - Stimulus: ZoomRoom wird ueber den TileRoom-Zoompfad geoeffnet.
 - Reaktion: Inter-tile Rasterlinien im ZoomRoom folgen exakt dem showGrid-Status des TileRoom.
 - Metrik: Kein Zustand, in dem TileRoom und ZoomRoom unterschiedliche Grid-Linienmodi zeigen.
+
+### QS-08 Save/Load-Fortschrittsfeedback
+- Kontext: grosses Spiel mit vielen Tiles/Rooms wird geladen oder gespeichert.
+- Stimulus: Nutzer startet Load in LoadRoom oder Save + Back in TileRoom.
+- Reaktion: loadingBar zeigt Phase, Detail und Fortschritt; UI bleibt stabil, ohne inkonsistente Zwischenzustaende.
+- Metrik: Sichtbarer Fortschritt ueber den gesamten Ablauf; kein unkontrollierter Room-Wechsel waehrend aktiver Operation.
+
+### QS-09 Aenderbarkeit durch Modulgrenzen
+- Kontext: Anpassung nur an Grid-Darstellung in LoadRoom.
+- Stimulus: UI-Aenderung an Grid-Rendering/Navigationsverhalten.
+- Reaktion: Aenderung bleibt weitgehend auf LoadRoomGrid begrenzt.
+- Metrik: Keine verpflichtenden Anpassungen in PulpGameIO- oder TileRoom-Persistenzmodulen.

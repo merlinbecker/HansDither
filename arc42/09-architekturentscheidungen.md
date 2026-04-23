@@ -55,3 +55,24 @@
 - Entscheidung: ZoomRoom commitet nur geaenderte Slots; TileRoom verarbeitet diese als Neu/Dedupe (findOrAppendImage + Hashvergleich).
 - Begruendung: Verhindert unnoetige Tile-Neuschreibungen und haelt das Verhalten konsistent mit dem bestehenden PixelRoom-Standardpfad.
 - Konsequenz: Originalbilder pro Slot muessen fuer den Vergleich im ZoomRoom vorgehalten werden.
+
+## 9.9 AD-009: Room-lokale Coroutine-Operationen fuer Save/Load
+
+- Status: umgesetzt
+- Entscheidung: Save- und Load-Aktionen werden als room-lokale Coroutine-Operationen ausgefuehrt (RoomOperation), nicht als monolithische Einzelframe-Funktionen.
+- Begruendung: CPU-lastige Vorbereitungsschritte sollen den Frame nicht dauerhaft blockieren; Fortschritt soll sichtbar sein.
+- Konsequenz: Eingaben waehrend aktiver Operation muessen gezielt gesperrt werden; Fehlerpfade brauchen expliziten Abschluss.
+
+## 9.10 AD-010: Einheitliches loadingBar-Overlay fuer Langlaeufer
+
+- Status: umgesetzt
+- Entscheidung: LoadRoom und TileRoom nutzen dieselbe loadingBar-Komponente fuer Fortschrittsdarstellung.
+- Begruendung: Konsistente UX und entkoppelte UI-Komponente ohne Persistenzwissen.
+- Konsequenz: Room-Rendering zeichnet Overlay zuletzt; Phasenbezeichnungen muessen pro Ablauf gepflegt werden.
+
+## 9.11 AD-011: Modulare Aufteilung grosser Room- und IO-Dateien
+
+- Status: umgesetzt
+- Entscheidung: Aufteilung nach Verantwortungen in LoadRoomGrid, TileRoomEditor, TileRoomPersistence sowie PulpGameIOShared/PulpGameIOSave/PulpGameIOLoad.
+- Begruendung: Reduzierte Dateigroesse, klarere Zustandsgrenzen, geringere Wartungskosten.
+- Konsequenz: Mehr Modulgrenzen und Schnittstellen, dafuer geringere lokale Komplexitaet.

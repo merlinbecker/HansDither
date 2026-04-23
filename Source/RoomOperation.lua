@@ -60,6 +60,8 @@ function RoomOperation.new(overlay, onStateChanged)
             end
         end
     end
+
+    return operation
 end
 
 return RoomOperation

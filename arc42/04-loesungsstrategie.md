@@ -6,12 +6,16 @@
 2. Tile-zentrierte Darstellung fuer effizientes Zeichnen und Speichern.
 3. Trennung zwischen interner Arbeitsstruktur und externem Pulp-Dokument.
 4. Schrittweise Feature-Erweiterung ueber klar begrenzte Konzepte (Grid, Tilemap, Picker, Save/Load, Rooms).
+5. Kooperative, frame-freundliche Save/Load-Abarbeitung per Coroutine statt monolithischer Einzelframe-Operation.
+6. Einheitliches Lade-/Speicherfeedback ueber ein room-uebergreifend nutzbares loadingBar-Overlay.
 
 ## 4.2 Begruendung
 
 - Die Room-Trennung reduziert Kopplung: Auswahl, Laden, Editieren und Pixel-Detailbearbeitung bleiben isoliert.
 - Tilemap/Imagetable reduziert Zeichenaufwand und passt zur Pulp-Denkweise.
 - Das PulpGameIO-Modul adressiert das zentrale Risiko der Formatinkompatibilitaet durch normalisieren, mappen und merge-basiertes Speichern.
+- JSON-lastige Save/Load-Schritte werden in fachliche Phasen zerlegt und ueber mehrere Frames verteilt; dadurch bleibt die UI waehrend der Vorbereitung reaktionsfaehig.
+- Ein gemeinsames RoomOperation-Muster verhindert doppelte Async-Steuerlogik in LoadRoom und TileRoom.
 - Konzeptplaene in plans/ und support/concepts zeigen die iterative Umsetzung und begruenden die aktuelle Architektur evolutionaer.
 
 ## 4.3 Qualitaetszielbezug
@@ -22,7 +26,7 @@
 | Bedienbarkeit | Konsistente Grid-Navigation in GameRoom/LoadRoom/TileRoom/ZoomRoom/PixelRoom. |
 | Pulp-Kompatibilitaet | Build/Prepare-Workflow in PulpGameIO mit Feld-Erhalt und Defaults. |
 | Wartbarkeit | Module pro Verantwortungsbereich, wenig globale Quervernetzung. |
-| Performance | needsRedraw-Ansatz, einfache 8x8-Tiles, limitierte Grid-Groessen. |
+| Performance | needsRedraw-Ansatz, einfache 8x8-Tiles, limitierte Grid-Groessen, kooperative Save/Load-Phasen. |
 
 ## 4.4 Nicht-Ziele der aktuellen Version
 

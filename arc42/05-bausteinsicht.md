@@ -15,7 +15,15 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 | TileRoom | Haupteditor fuer Room-Tiles, Picker, Save + Back, Grid-Logik. |
 | ZoomRoom | Zwischeneditor fuer 3x3 Tilekontext als 24x24 Pixelgrid inkl. Batch-Rueckgabe. |
 | PixelRoom | Detaileditor fuer einzelne 8x8-Tiles auf Pixel-Ebene. |
-| PulpGameIO | Normalisierung und Merge zwischen Arbeitsdaten und Pulp-Dokument. |
+| loadingBar | Einheitliches Overlay fuer Lade-/Speicherfortschritt. |
+| RoomOperation | Gemeinsame Coroutine-Orchestrierung fuer room-lokale Langlaeufer. |
+| LoadRoomGrid | UI-/Navigationshelfer fuer LoadRoom-Grid und Vorschauen. |
+| TileRoomPersistence | Persistenz- und Datenmodelllogik fuer TileRoom. |
+| TileRoomEditor | Interaktions- und Zeichnungslogik fuer TileRoom. |
+| PulpGameIO (Facade) | Oeffentliche API fuer Save/Load und Mapping. |
+| PulpGameIOShared | Gemeinsame Hilfslogik fuer Template, Normalisierung und Dokumentaufbau. |
+| PulpGameIOSave | Save-seitiger Dokumentaufbau. |
+| PulpGameIOLoad | Load-seitige Vorbereitung und Mapping. |
 
 ### Wichtige Schnittstellen
 
@@ -23,7 +31,8 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 - TileRoom:setGame(name, data, pulpState): Kontextuebergabe vor Room-Editing.
 - TileRoom:getTileContext3x3()/applyTileEditsBatch(edits): Kontextbereitstellung und Ruecknahme geaenderter Zoom-Slots.
 - ZoomRoom:setFromTileContext(context): Uebernahme des 3x3-Umfelds inkl. showGrid-Synchronisierung.
-- TileRoom:saveToFile(): Persistenz-Pipeline inkl. Kompaktierung, Mapping und Preview.
+- TileRoom:saveToFile(afterSave): asynchroner Persistenz-Trigger inkl. Callback fuer Folgeaktion.
+- RoomOperation:start()/resume(): generischer Ablauf fuer Coroutine + loadingBar-Lifecycle.
 - PulpGameIO.prepareLoadedGame()/buildSaveDocument(): Konvertierung zwischen Datenformen.
 
 ## 5.2 Ebene 2
@@ -58,9 +67,9 @@ Verantwortung:
 - Tile-Komprimierung und Persistenz-Aufbereitung.
 
 Besonders relevante interne Teile:
-- imageHash + findOrAppendImage zur Deduplizierung.
-- compactTileState() fuer remapping und Entfernen ungenutzter Tiles.
-- syncCurrentRoomToGameData() als Bruecke UI -> Datenmodell.
+- TileRoomEditor kapselt Cursor, Picker, Richtungshalten und Eingabelogik.
+- TileRoomPersistence kapselt Deduplizierung, Kompaktierung, Preview-Render und Room-Sync.
+- Save + Back nutzt RoomOperation + loadingBar fuer phasenweises Speichern.
 
 ### 5.2.4 Whitebox ZoomRoom
 
@@ -89,20 +98,31 @@ Interne Logik:
 ### 5.2.6 Whitebox PulpGameIO
 
 Verantwortung:
-- Laden und Mergerhaltung des Pulp-Dokuments.
-- Mapping interner kompakter IDs auf externe sparse IDs.
-- Auffuellen fehlender Pflichtbereiche aus Template.
+- Fassade fuer Save-/Load-Operationen und Mapping.
+- Aufteilung in Shared-/Save-/Load-Teile mit klaren Verantwortlichkeiten.
 
 Interne Logik:
-- prepareLoadedGame() normalisiert eingehende Daten.
-- buildSaveDocument() erzeugt konsistentes Ausgabedokument.
+- prepareLoadedGame() normalisiert eingehende Daten in mehreren Fortschrittsphasen.
+- buildSaveDocument() erzeugt konsistentes Ausgabedokument in schrittweisen Phasen.
 - remapTileMappings() passt Mapping nach Tile-Kompaktierung an.
+
+### 5.2.7 Whitebox LoadRoom
+
+Verantwortung:
+- Orchestriert Laden eines Spiels nach Room-Eintritt statt synchron beim Setzen des Kontexts.
+- Delegiert Grid-/Previewdarstellung an LoadRoomGrid.
+- Nutzt RoomOperation + loadingBar fuer sichtbaren Ladefortschritt.
+
+Interne Logik:
+- setGame() setzt nur Kontext und markiert, ob ein Load beim Eintritt noetig ist.
+- entered() startet fuer bestehende Spiele die Ladeoperation.
+- update() resume't laufende Operationen und blockiert konkurrierende Navigation.
 
 ## 5.3 Ebene 3 (fokussiert)
 
 ### 5.3.1 Persistenz-Substruktur in TileRoom
 - Input: aktueller Room-State + gameData + pulpState
-- Verarbeitung: sync -> compact -> rebuild tiles/frames -> buildSaveDocument
+- Verarbeitung: sync -> compact (inkrementell) -> rebuild tiles/frames -> buildSaveDocument (inkrementell)
 - Output: datastore-JSON + Room-/Game-Previewbilder
 
 ### 5.3.2 Mapping-Substruktur in PulpGameIO

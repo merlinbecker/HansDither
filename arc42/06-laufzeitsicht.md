@@ -7,8 +7,10 @@
 3. A in TitleRoom wechselt zu GameRoom.
 4. Nutzer waehlt bestehendes Game oder erstellt neues.
 5. Wechsel zu LoadRoom mit gesetztem Game-Kontext.
-6. Nutzer waehlt Room oder erstellt neuen Room.
-7. Wechsel zu TileRoom mit geladenen gameData/pulpState.
+6. Bei bestehendem Game startet LoadRoom die Ladeoperation mit loadingBar.
+7. PulpGameIO.prepareLoadedGame verarbeitet Dokument und Mapping in Fortschrittsphasen.
+8. Nutzer waehlt Room oder erstellt neuen Room.
+9. Wechsel zu TileRoom mit geladenen gameData/pulpState.
 
 Ergebnis: Der Editor ist mit konsistentem Spiel- und Room-Kontext aktiv.
 
@@ -35,12 +37,13 @@ Ergebnis: Mehrere Tile-Aenderungen sind im Room sichtbar und dedupliziert fuer s
 ## 6.4 Szenario: Save + Back
 
 1. Nutzer waehlt im Systemmenue des TileRoom "Save + Back".
-2. TileRoom synchronisiert aktuellen Room in gameData.
-3. Kompaktierung entfernt ungenutzte Tiles und remappt Room-Indizes.
-4. PulpGameIO baut aus gameData + pulpState ein vollstaendiges Speicherdokument.
-5. Datastore schreibt Hauptdokument unter saves/<game>.
-6. Room-Preview und Game-Preview werden erzeugt/aktualisiert.
-7. Wechsel zurueck zu LoadRoom.
+2. TileRoom startet eine RoomOperation und blendet loadingBar ein.
+3. Phase "Synchronisieren": aktueller Room wird nach gameData uebernommen.
+4. Phase "Kompaktieren": ungenutzte Tiles werden entfernt und Indizes remappt.
+5. Phase "Dokument": PulpGameIO.buildSaveDocument erstellt das Speicherdokument in Teilschritten.
+6. Phase "Finalisieren": Datastore schreibt Hauptdokument unter saves/<game>.
+7. Phase "Previews": Room-Preview und Game-Preview werden erzeugt/aktualisiert.
+8. Nach erfolgreichem Abschluss erfolgt der Wechsel zurueck zu LoadRoom.
 
 Ergebnis: Persistenter Zustand ist konsistent gespeichert; UIs koennen Vorschauen anzeigen.
 
@@ -50,3 +53,4 @@ Ergebnis: Persistenter Zustand ist konsistent gespeichert; UIs koennen Vorschaue
 - Unbekanntes Legacy-Format: Warnung, keine erzwungene Konvertierung.
 - Inkonsistente Tile-Referenz nach Mapping: Fallback auf Basistile.
 - Keyboard-Abbruch bei neuer Game-Erstellung: keine Neuerstellung, Grid wird sauber aktualisiert.
+- Fehler in laufender RoomOperation: Overlay zeigt Fehlerstatus; Room bleibt stabil bedienbar.
