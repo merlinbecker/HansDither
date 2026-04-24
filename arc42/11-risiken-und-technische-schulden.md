@@ -14,6 +14,7 @@
 | R-08 | Restblockierung bei finalem Datastore read/write | Kurzzeitige Hiccups trotz inkrementeller Vorbereitung | Finale Phase sichtbar markieren, Datenmengen beobachten, ggf. spaeter alternatives Persistenzformat evaluieren |
 | R-09 | Importer-Schemaabweichungen bei Fremd-JSON | Import erzeugt unvollstaendige/ungueltige Struktur | Strikte JSON-Validierung, klare Fehlermeldungen, defensive Defaults |
 | R-10 | Hash-Paritaet zwischen Lua- und JS-Pfad driftet | Unterschiedliches Dedupe-Verhalten im Editor vs. Importer | Hash-/Dedupe-Regeln dokumentieren und mit Referenzfaellen querpruefen |
+| R-11 | Drift zwischen nativer Anzeigeebene und Pulp-Datenraum | Falsche Cursor-/Tile-Zuordnung oder inkonsistente Previewdarstellung | Render- und Persistenzpfade getrennt halten, Koordinatenwechsel explizit dokumentieren und manuell querpruefen |
 
 ## 11.2 Technische Schulden
 
@@ -27,9 +28,10 @@
 | T-06 | Pixelvergleich im ZoomRoom ist linear pro Commit | Einfache Implementierung fuer robuste Aenderungserkennung | Spaeter optional Hash-Caching pro Slot einfuehren |
 | T-07 | Statische Analyzer-Warnungen bei Playdate-APIs | Typ-/Nilability-Modell kennt Runtime-Objekte nur begrenzt | Gezielte lokale Guards/Annotationen oder Analyzer-Profile fuer SDK definieren |
 | T-08 | Importer hat nur manuelle Regressionstests | Browser-Tool entwickelt sich getrennt vom Runtime-Code | Kleine Testfaellsammlung mit bekannten JSON/PNG-Paaren versionieren |
+| T-09 | Duales Koordinatenmodell nur implizit im Code verteilt | Anzeige-Scaling steckt in Konstanten, Buffer-Rendering und Room-spezifischen Geometrien | Mittelfristig zentrale Render-/Geometry-Konstanten oder DisplayConfig einfuehren |
 
 ## 11.3 Priorisierung
 
-- Kurzfristig: R-01, R-05, R-08, R-09, T-05, T-07
-- Mittelfristig: T-04, R-04
+- Kurzfristig: R-01, R-05, R-08, R-09, R-11, T-05, T-07
+- Mittelfristig: T-04, R-04, T-09
 - Langfristig: T-03, T-01, T-06, R-10, T-08

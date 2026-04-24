@@ -6,7 +6,7 @@ Hans Dither ist ein lokal laufendes Single-Device-System auf Playdate.
 
 | Infrastrukturelement | Rolle |
 |---|---|
-| Playdate Device/Simulator Runtime | Ausfuehrung des Lua-Codes, Rendering, Input, Menues |
+| Playdate Device/Simulator Runtime | Ausfuehrung des Lua-Codes, Rendering auf nativen 400x240, Input, Menues |
 | .pdx Bundle | Enthält Lua-Quellen, Bildassets, Launcher-Assets, JSON-Template |
 | Lokaler Datastore | Persistente Saves und Previewbilder unter saves/ |
 | Lokaler Browser (Importer) | Ausfuehrung des Offline-Importtools unter Tools/Importer |
@@ -39,5 +39,6 @@ Hans Dither ist ein lokal laufendes Single-Device-System auf Playdate.
 
 - Keine Netzabhaengigkeit, daher robust gegen Offline-Szenarien.
 - Geringe Latenz durch lokale Datenhaltung.
+- Runtime und Persistenz arbeiten bewusst auf unterschiedlichen Darstellungsebenen: Anzeige nativ 400x240, Tile-/Previewdaten weiter im Pulp-Arbeitsraum.
 - Hardwaregrenzen (CPU/RAM) erzwingen einfache Datenstrukturen und gezielte Redraw-Strategien.
 - Import-Workflows bleiben vom Device getrennt und beeinflussen die Runtime-Performance nicht direkt.

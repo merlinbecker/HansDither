@@ -11,8 +11,8 @@ local needsRedraw
 -- am rand sind dann 20 pixel, die gefuellt werden müssen
 local GRID_COLS = 8
 local GRID_ROWS = 8
-local CELL_SIZE = 15 -- 15x15 Pixel pro Zelle, wenn die Skalierung aus ist, 8x8
-local PADDING=40
+local CELL_SIZE = 30 -- 30x30 Pixel pro Zelle (native 400x240, entspricht 2x Pulp-Pixel)
+local PADDING = 80   -- (400 - 8*30) / 2 = 80 px Seitenrand
 
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
@@ -225,7 +225,7 @@ function PixelRoom:update()
         -- draw a background
         gfx.clear(gfx.kColorWhite)
         gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
-        gfx.fillRect(0,0, 200, 120)
+        gfx.fillRect(0, 0, 400, 240)
         -- Example: Draw the title screen here
         gridView:drawInRect(PADDING, 0, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
         

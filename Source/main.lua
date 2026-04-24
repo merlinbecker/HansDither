@@ -15,10 +15,7 @@ import "ZoomRoom"
 
 
 local gfx = playdate.graphics
--- Playdate Skalierung: 2 -> logische Größe 200x120 (Pulp-Auflösung)
-playdate.display.setScale(2)
-
-
+playdate.display.setScale(1)
 --import "Source/ZweiterRaum"
 --import "DritterRaum"
 

@@ -12,6 +12,7 @@
 | Kompatibilitaet | Gespeicherte Dokumente bleiben Pulp-kompatibel und verlieren keine kritischen Felder. |
 | Transparenz bei Langlaeufern | Nutzer sieht bei Save/Load stets den aktuellen Fortschritt und Zustand. |
 | Importintegritaet | PNG-Import erzeugt nur gueltige room/tile/frame-Beziehungen und bleibt reproduzierbar. |
+| Anzeige-/Datenkonsistenz | Native UI-Aufloesung und Pulp-Datenraum duerfen keine widerspruechlichen Koordinaten- oder Renderingsichten erzeugen. |
 
 ## 10.2 Qualitaetsszenarien
 
@@ -32,6 +33,12 @@
 - Stimulus: Erstnutzung mit Blick auf Titel, Grid und Statuszeile.
 - Reaktion: Nutzer kann Game anlegen, Room oeffnen, Pixel setzen und speichern.
 - Metrik: Grundworkflow ohne externe Hilfe in wenigen Minuten durchfuehrbar.
+
+### QS-03a Eingabeprioritaet im TileRoom
+- Kontext: Nutzer haelt B im TileRoom fuer einen Moduswechsel.
+- Stimulus: Innerhalb der 1.5s Long-Press-Phase wird der Crank bewegt.
+- Reaktion: Der pending Long-Press wird verworfen und der Zoompfad bleibt verfuegbar.
+- Metrik: Kein unbeabsichtigter Mode-Switch bei erfolgreichem B+Crank-Zoom.
 
 ### QS-04 Aenderbarkeit
 - Kontext: Erweiterung um neues Menuefeature in PixelRoom.
@@ -80,3 +87,9 @@
 - Stimulus: Import in ein bereits grosses Dokument.
 - Reaktion: Bestehende Tiles werden ueber Hashvergleich wiederverwendet; neue Tiles nur bei echten Hash-Misses.
 - Metrik: Anzahl neu angelegter Tiles bleibt deutlich unter 375, wenn Musterwiederholungen vorliegen.
+
+### QS-12 Anzeigeebenen-Konsistenz
+- Kontext: Runtime laeuft auf 400x240, Tile-Daten bleiben in 8x8-/200x120-Strukturen organisiert.
+- Stimulus: Nutzer bearbeitet Tiles, zoomt zwischen Rooms und speichert anschliessend.
+- Reaktion: Tiles, Cursor, Picker, Previews und Persistenzdaten bleiben in beiden Aufloesungsebenen konsistent.
+- Metrik: Keine Verschiebungen zwischen sichtbarer Position, gespeichertem Tile und Room-Preview.

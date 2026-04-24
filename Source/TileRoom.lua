@@ -27,9 +27,10 @@ local needsRedraw
 
 local GRID_COLS = 25
 local GRID_ROWS = 15
-local CELL_SIZE = 8 -- 8x8 Pixel pro Zelle, wenn die Skalierung aus ist, 16x16
-local SCREEN_W = 200 -- Playdate-Bildschirmbreite in Pixeln
-local SCREEN_H = 120 -- Playdate-Bildschirmhoehe in Pixeln (bei display scale 2)
+local CELL_SIZE = 8         -- 8x8 Pixel pro Tile (Datengröße, unveränderlich für JSON/Save/Load)
+local DISPLAY_CELL_SIZE = 16 -- 16x16 Pixel pro Zelle im GridView (2x Pulp-Pixel auf nativem Display)
+local SCREEN_W = 400        -- Playdate-Bildschirmbreite in Pixeln (native Auflösung)
+local SCREEN_H = 240        -- Playdate-Bildschirmhoehe in Pixeln (native Auflösung)
 
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
@@ -49,8 +50,8 @@ local PICKER_TIMEOUT_MS = 3000 -- Fenster verschwindet nach 3s ohne Crank
 local B_LONG_PRESS_MS = 1500
 local ANIMATION_PLACEHOLDER_FRAME_COUNT = 8
 local MODE_BADGE_DURATION_MS = 1500
-local WIN_SIZE = 22            -- 1px Border + 2px Padding + 16px Tile (8x2) + 2px Padding + 1px Border
-local WIN_MARGIN = 4           -- Abstand der Fensterecke zum Bildschirmrand
+local WIN_SIZE = 44            -- 1px Border + 6px Padding + 32px Tile (8x4) + 6px Padding + 1px Border
+local WIN_MARGIN = 8           -- Abstand der Fensterecke zum Bildschirmrand
 local tilePickerIndex = 3      -- aktuell angezeigter Tile-Index (min. 3, Tiles 1+2 werden übersprungen)
 local tilePickerVisible = false
 local tilePickerLastCrankMs = 0
@@ -62,7 +63,8 @@ local modeBadgeUntilMs = 0
 local bPressTracking = {
     isDown = false,
     downStartMs = 0,
-    longPressTriggered = false
+    longPressTriggered = false,
+    longPressCancelled = false
 }
 local bShortPressPending = false
 
@@ -151,7 +153,7 @@ for y = 1, GRID_ROWS do
 end
 
 -- GridView bleibt für Cursor-Handling erhalten
-local gridView = playdate.ui.gridview.new(CELL_SIZE, CELL_SIZE)
+local gridView = playdate.ui.gridview.new(DISPLAY_CELL_SIZE, DISPLAY_CELL_SIZE)
 gridView:setNumberOfSections(1)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setNumberOfRowsInSection(1, GRID_ROWS)
@@ -167,12 +169,16 @@ persistenceConfig.tilemap = tilemap
 persistenceConfig.origImagetable = origImagetable
 persistenceConfig.blackTile = blackTile
 
+-- Offscreen-Buffer für Tilemap: 8x8-Tiles werden in 200x120-Buffer gerendert
+-- und dann 2x skaliert auf das native 400x240-Display gezogen.
+local tilemapBuffer = gfx.image.new(GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE, gfx.kColorWhite)
+
 editor = TileRoomEditor.new({
     gfx = gfx,
     tilemap = tilemap,
     gridView = gridView,
     cursorBlinker = cursorBlinker,
-    cellSize = CELL_SIZE,
+    cellSize = DISPLAY_CELL_SIZE,
     screenW = SCREEN_W,
     screenH = SCREEN_H,
     gridCols = GRID_COLS,
@@ -336,6 +342,12 @@ local function resetBPressTracking()
     bPressTracking.isDown = false
     bPressTracking.downStartMs = 0
     bPressTracking.longPressTriggered = false
+    bPressTracking.longPressCancelled = false
+end
+
+local function cancelBLongPress()
+    if not bPressTracking.isDown then return end
+    bPressTracking.longPressCancelled = true
 end
 
 local function updateBPressTiming()
@@ -351,15 +363,16 @@ local function updateBPressTiming()
         bPressTracking.isDown = true
         bPressTracking.downStartMs = nowMs
         bPressTracking.longPressTriggered = false
+        bPressTracking.longPressCancelled = false
     elseif isDownNow and bPressTracking.isDown then
-        if nowMs - bPressTracking.downStartMs >= B_LONG_PRESS_MS then
+        if not bPressTracking.longPressCancelled and nowMs - bPressTracking.downStartMs >= B_LONG_PRESS_MS then
             bPressTracking.longPressTriggered = true
             events.longPress = true
             -- Solange B gehalten wird, nach jeweils 1.5s erneut ein Long-Press-Event ausloesen.
             bPressTracking.downStartMs = nowMs
         end
     elseif not isDownNow and bPressTracking.isDown then
-        if not bPressTracking.longPressTriggered then
+        if not bPressTracking.longPressTriggered and not bPressTracking.longPressCancelled then
             events.shortPress = true
         end
         resetBPressTracking()
@@ -595,11 +608,23 @@ function TileRoom:update()
         lastBlinkState = cursorBlinker.on
         needsRedraw = true
     end
-    -- Zoom-Trigger: D-Pad Up gehalten + Crank
+    -- Zoom-Trigger: B gehalten + Crank
     if isOperationActive() then
         ticks = 0
         resetBPressTracking()
     else
+        local nowMs = playdate.getCurrentTimeMilliseconds()
+        local crankTicks = playdate.getCrankTicks(4) or 0
+        local zoomHeld = playdate.buttonIsPressed(playdate.kButtonB)
+        if zoomHeld and crankTicks ~= 0 then
+            if not bPressTracking.isDown then
+                bPressTracking.isDown = true
+                bPressTracking.downStartMs = nowMs
+                bPressTracking.longPressTriggered = false
+            end
+            cancelBLongPress()
+        end
+
         local bEvents = updateBPressTiming()
         if bEvents.longPress then
             TileRoom:toggleEditMode()
@@ -611,9 +636,7 @@ function TileRoom:update()
             TileRoom:pickTileFromCurrentCell()
         end
 
-        local zoomHeld = playdate.buttonIsPressed(playdate.kButtonUp)
         if zoomHeld then
-            local crankTicks = playdate.getCrankTicks(4) or 0
             ticks += crankTicks
             if ticks >=4 then
                 ticks=0
@@ -625,10 +648,9 @@ function TileRoom:update()
             end
         else
             ticks = 0
-            local crankTicks = playdate.getCrankTicks(4)
             if TileRoom:isTilePickerMode() then
                 -- Tile Picker: Crank ohne B-Taste scrollt durch Tiles ab Index 3
-                -- getCrankTicks ist stateful – wird nur hier aufgerufen, wenn B NICHT gehalten ist
+                -- getCrankTicks ist stateful – wird pro Frame genau einmal ausgelesen
                 if crankTicks ~= 0 and cellImagetable:getLength() >= 3 then
                     local maxTile = cellImagetable:getLength()
                     -- Index in Richtung des Crank-Ticks verschieben (+1 oder -1)
@@ -657,10 +679,13 @@ function TileRoom:update()
 
     if needsRedraw then
         gfx.clear(gfx.kColorWhite)
-        -- Schritt 5: Tilemap zeichnen (Grid)
-        tilemap:draw(0, 0)
-        -- Cursor-Overlay via gridView (ruft drawCell für selektierte Zelle auf)
-        gridView:drawInRect(0, 0, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
+            -- Tilemap in 200x120-Buffer zeichnen, dann 2x auf natives 400x240-Display skalieren
+            gfx.lockFocus(tilemapBuffer)
+                tilemap:draw(0, 0)
+            gfx.unlockFocus()
+            tilemapBuffer:drawScaled(0, 0, 2.0)
+            -- Cursor-Overlay via gridView mit 16x16-Zellen (DISPLAY_CELL_SIZE)
+            gridView:drawInRect(0, 0, GRID_COLS * DISPLAY_CELL_SIZE, GRID_ROWS * DISPLAY_CELL_SIZE)
         -- Tile Picker Popup (erscheint bei Crank ohne B, verschwindet nach 3s)
         editor:drawTilePickerWindow()
         if modeBadgeText then

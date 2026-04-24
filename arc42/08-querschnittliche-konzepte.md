@@ -7,8 +7,8 @@
 - Bedienmuster sind konsistent:
   - D-Pad fuer Navigation,
   - A fuer Auswahl/Setzen,
-  - B als Modus-/Rueckkehr-Modifier,
-  - Crank fuer Picker oder Zoom-Trigger.
+  - B als Pipette-, Modus- oder Rueckkehr-Modifier,
+  - Crank fuer Picker, Zoom oder Rueckgabe aus PixelRoom.
 
 - Der Editing-Flow ist gestuft:
   - TileRoom (roomweite Tilemap),
@@ -17,14 +17,26 @@
 
 Nutzen: klare mentale Modelle fuer Nutzer und saubere Trennung je Room.
 
+TileRoom besitzt dabei eine explizite Prioritaetsregel fuer B: kurzer Druck = Pipette, langer Druck = Moduswechsel, B+Crank = Zoom. Crank-Eingabe waehrend der 1.5s Long-Press-Phase annulliert den pending Moduswechsel.
+
 ## 8.2 Rendering- und Redraw-Konzept
 
 - Rendering ist zustandsbasiert ueber needsRedraw.
-- TileRoom nutzt tilemap fuer flaechiges Rendering und gridview fuer Cursoroverlay.
+- TileRoom nutzt tilemap fuer flaechiges Rendering, zeichnet diese zuerst in einen 200x120-Offscreen-Buffer und rendert den Buffer dann 2x skaliert; gridview liefert das Cursoroverlay auf nativer 400x240-Ebene.
 - ZoomRoom zeichnet Pixelinhalt plus Tilegrenzen; inter-tile Rasterlinien werden ueber showGrid synchron zu TileRoom ein-/ausgeblendet.
+- PixelRoom und ZoomRoom vergroessern Pulp-Pixel direkt ueber groessere Zellgeometrien statt ueber globale Display-Skalierung.
+- loadingBar und Bauchbinde bleiben geometrisch kompakt und nutzen die native Aufloesung fuer schaerfere Text- und UI-Darstellung.
 - Blink-/Timer-Updates laufen zentral im Update-Loop.
 
 Nutzen: geringer Overhead auf limitierter Hardware, gut steuerbare Darstellung.
+
+## 8.2.1 Duales Aufloesungskonzept
+
+- Persistente Tile-/Frame-Daten bleiben im Pulp-Format (8x8 Pixel pro Tile, 25x15 Tiles pro Room, Previews in 200x120).
+- Die Runtime laeuft auf nativer 400x240-Aufloesung (`playdate.display.setScale(1)`).
+- Editorrooms uebersetzen den Pulp-Arbeitsraum explizit in eine vergroesserte Anzeige, statt die gesamte Runtime global zu skalieren.
+
+Nutzen: Pulp-Kompatibilitaet bleibt erhalten, waehrend Texte und allgemeine UI-Elemente auf nativer Aufloesung scharf bleiben.
 
 ## 8.3 Persistenz- und Formatkonzept
 

@@ -34,8 +34,8 @@ local updateMenuItems
 -- Konstanten
 local GRID_COLS = 3
 local MAX_GAMES = 6
-local CELL_W    = 64
-local CELL_H    = 28
+local CELL_W    = 128
+local CELL_H    = 56
 
 -- Datenliste und Vorschau-Cache
 local savedGames   = {}   -- Array von Game-Namen {"game1", "game2", …}
@@ -235,21 +235,21 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
         if name then
             local preview = previewCache[name]
             if preview then
-                local px = x + (width  - 40) // 2
-                local py = y + (height - 24) // 2
+                    local px = x + (width  - 80) // 2
+                    local py = y + (height - 48) // 2
                 if selected then
                     gfx.setImageDrawMode(gfx.kDrawModeInverted)
                 else
                     gfx.setImageDrawMode(gfx.kDrawModeCopy)
                 end
-                preview:drawScaled(px, py, 0.2)
+                    preview:drawScaled(px, py, 0.4)
             else
                 if selected then
                     gfx.setColor(gfx.kColorWhite)
                 else
                     gfx.setColor(gfx.kColorBlack)
                 end
-                gfx.drawRect(x + (width - 30) // 2, y + (height - 18) // 2, 30, 18)
+                    gfx.drawRect(x + (width - 60) // 2, y + (height - 36) // 2, 60, 36)
             end
         end
     end
@@ -290,14 +290,14 @@ function GameRoom:update()
         -- Titelzeile
         gfx.drawText("Hans Dither", 4, 2)
         gfx.setColor(gfx.kColorBlack)
-        gfx.drawLine(0, 12, 199, 12)
+            gfx.drawLine(0, 24, 399, 24)
 
         -- Grid
-        gridView:drawInRect(1, 13, 198, 90)
+            gridView:drawInRect(1, 25, 398, 182)
 
         -- Trennlinie unten
         gfx.setColor(gfx.kColorBlack)
-        gfx.drawLine(0, 104, 199, 104)
+            gfx.drawLine(0, 208, 399, 208)
 
         -- Unterer Info-Bereich
         local infoText
@@ -317,7 +317,7 @@ function GameRoom:update()
                 infoText = savedGames[idx - 1] or ""
             end
         end
-        gfx.drawText(infoText, 4, 108)
+            gfx.drawText(infoText, 4, 216)
 
         needsRedraw = false
     end

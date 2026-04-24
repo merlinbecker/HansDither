@@ -8,11 +8,11 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 
 | Baustein | Verantwortung |
 |---|---|
-| main.lua | Initialisierung, Room-Verdrahtung, zentrales playdate.update, Terminate-Hook. |
+| main.lua | Initialisierung, native Display-Skalierung, Room-Verdrahtung, zentrales playdate.update, Terminate-Hook. |
 | TitleRoom | Einfacher Einstieg/Startbildschirm. |
 | GameRoom | Auswahl/Anlage/Loeschen von Games inklusive Vorschauen. |
 | LoadRoom | Auswahl/Anlage/Loeschen von Rooms innerhalb eines Games. |
-| TileRoom | Haupteditor fuer Room-Tiles, Picker, Save + Back, Grid-Logik. |
+| TileRoom | Haupteditor fuer Room-Tiles, Picker, Save + Back, Grid-Logik und 2x-Anzeigeskalierung eines Pulp-Arbeitsraums. |
 | ZoomRoom | Zwischeneditor fuer 3x3 Tilekontext als 24x24 Pixelgrid inkl. Batch-Rueckgabe. |
 | PixelRoom | Detaileditor fuer einzelne 8x8-Tiles auf Pixel-Ebene. |
 | loadingBar | Einheitliches Overlay fuer Lade-/Speicherfortschritt. |
@@ -48,6 +48,7 @@ Verantwortung:
 
 Interne Logik:
 - currentRoom als Single-Point-of-Truth fuer Update und Input.
+- Display-Scale ist auf 1 gesetzt; Rooms arbeiten damit auf nativen 400x240.
 - Beim Raumwechsel werden Input-Handler ausgetauscht, danach entered() aufgerufen.
 
 ### 5.2.2 Whitebox Navigationsrooms (TitleRoom, GameRoom, LoadRoom)
@@ -67,10 +68,11 @@ Verantwortung:
 - Haupt-Arbeitsflaeche fuer Tiles im Room.
 - Cursor, Hintergrundmodus (Show Grid), Tile Picker per Crank.
 - Zwei Editiermodi: TilePickerMode (Tile-Auswahl) und AnimationMode (Frame-Platzhalter).
-- B-Input-Semantik: kurzer Druck als Pipette, langer Druck (>=1.5s) als Moduswechsel.
+- B-Input-Semantik: kurzer Druck als Pipette, langer Druck (>=1.5s) als Moduswechsel, B+Crank als Zoom-Trigger mit Vorrang vor dem Long-Press.
 - Tile-Komprimierung und Persistenz-Aufbereitung.
 
 Besonders relevante interne Teile:
+- Tilemap wird in einen 200x120-Offscreen-Buffer gerendert und anschliessend 2x auf 400x240 skaliert; Cursor und UI-Overlays liegen darueber auf nativer Aufloesung.
 - TileRoomEditor kapselt Cursor, Picker, Richtungshalten und Eingabelogik.
 - TileRoomPersistence kapselt Deduplizierung, Kompaktierung, Preview-Render und Room-Sync.
 - Save + Back nutzt RoomOperation + loadingBar fuer phasenweises Speichern.
@@ -97,7 +99,7 @@ Verantwortung:
 Interne Logik:
 - gridState als boolesches Pixelraster.
 - Menueaktionen: All Similar, Invert.
-- B+Crank-Pattern fuer Ruecksprung und Uebergabe.
+- B+Crank-Pattern fuer Ruecksprung und Uebergabe; Darstellung als 240x240 Grid mit seitlichem 80px Padding auf nativen 400x240.
 
 ### 5.2.6 Whitebox PulpGameIO
 
@@ -135,6 +137,17 @@ Interne Logik:
 - Hash-Cache wird aus vorhandenen Tiles aufgebaut; neue Tiles werden nur bei Hash-Miss angelegt.
 - editor.sortedTiles wird robust behandelt und neue Tile-IDs werden in Gruppe 4 ergänzt.
 - Das Tool schreibt nie in bestehende Dateien, sondern nur ueber Download der Exportdatei.
+
+### 5.2.9 Whitebox Rendering-Modell ueber Aufloesungsebenen
+
+Verantwortung:
+- Trennung zwischen Pulp-kompatibler Datenaufloesung und nativer Displayaufloesung.
+
+Interne Logik:
+- Tile-/Frame-Daten bleiben 8x8; Room-Vorschauen bleiben 200x120.
+- TileRoom rendert die Tilemap in einen 200x120-Offscreen-Buffer und zeichnet diesen skaliert auf 400x240.
+- ZoomRoom und PixelRoom rendern ihre Pulp-Pixel direkt mit verdoppelten Zellgroessen (10px bzw. 30px).
+- loadingBar und Bauchbinde bleiben in ihrer bisherigen physischen Groesse und profitieren von der nativen Schaerfe statt von zusaetzlicher Skalierung.
 
 ## 5.3 Ebene 3 (fokussiert)
 

@@ -20,6 +20,8 @@ Hans Dither ist ein lokaler Pixel-Editor fuer Playdate. Externe Interaktionen en
 | Assets im Bundle | imagetable/pdi/json/pdxinfo | Basistiles, Launchergrafiken, Template-Dokument |
 | Lokaler Browser (Importer) | HTML/CSS/JavaScript in Tools/Importer | Offline-Import von PNG in bestehende Pulp-JSON |
 
+Anmerkung zur Anzeigeebene: Die Runtime arbeitet technisch auf nativen 400x240, haelt aber fuer Tile-Editing und Persistenz einen Pulp-kompatiblen 200x120-Arbeitsraum bei.
+
 ## 3.3 Mapping fachlich -> technisch
 
 | Fachlicher Vorgang | Technische Umsetzung |

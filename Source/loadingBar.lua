@@ -5,8 +5,8 @@ local gfx = playdate.graphics
 loadingBar = {}
 loadingBar.__index = loadingBar
 
-local SCREEN_W = 200
-local SCREEN_H = 120
+local SCREEN_W = 400
+local SCREEN_H = 240
 local BOX_W = 140
 local BOX_H = 46
 local BAR_W = 110

@@ -5,7 +5,7 @@
 | Randbedingung | Beschreibung |
 |---|---|
 | Zielplattform | Playdate-Konsole mit Lua-Runtime und Playdate SDK CoreLibs. |
-| Aufloesung/Skalierung | Runtime nutzt Display-Scale 2, damit logisch mit 200x120 gearbeitet wird. |
+| Aufloesung/Skalierung | Runtime nutzt Display-Scale 1 auf nativen 400x240. Editor-Daten bleiben trotzdem im Pulp-Arbeitsraum (200x120 bzw. 8x8 Tiles) und werden fuer die Anzeige gezielt 2x vergroessert. |
 | Eingabegeraete | D-Pad, A/B-Buttons und Crank sind zentrale Bedienkomponenten. |
 | Persistenz | Speicherung erfolgt ueber playdate.datastore und Dateisystempfade unter saves/. |
 | Grafikmodell | Tile-basierte Darstellung mit imagetable und tilemap; zusaetzlich offscreen erzeugte Tiles. |

@@ -34,8 +34,8 @@ local roomGrid
 -- Konstanten
 local GRID_COLS = 3
 local MAX_ROOMS = 6
-local CELL_W    = 64
-local CELL_H    = 28
+local CELL_W    = 128
+local CELL_H    = 56
 
 -- Game-Kontext
 local currentGameName = nil   -- Name des aktuell geöffneten Games

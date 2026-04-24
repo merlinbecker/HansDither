@@ -18,10 +18,10 @@ local TILE_SIZE  = 8   -- Pixel pro Tile (8×8)
 local SLOTS      = 3   -- Raster: 3×3 Tile-Slots
 local GRID_COLS  = TILE_SIZE * SLOTS  -- 24 Zellen
 local GRID_ROWS  = TILE_SIZE * SLOTS  -- 24 Zellen
-local CELL_SIZE  = 5   -- px pro Zelle (logisch, Display-Scale 2)
+local CELL_SIZE  = 10  -- px pro Zelle (native 400x240, 2x Pulp-Pixel)
 
--- Grid zentriert: (200 - 120) / 2 = 40 px links, 0 px oben (passt exakt in 200×120)
-local OFFSET_X   = 40
+-- Grid zentriert: (400 - 240) / 2 = 80 px links, 0 px oben (passt exakt in 400×240)
+local OFFSET_X   = 80
 local OFFSET_Y   = 0
 
 -- Strichelung für Pixel-Grenzen (Dash/Gap in Zellen-Einheiten × CELL_SIZE)

@@ -9,8 +9,11 @@
 | ZoomRoom | Zwischenraum zwischen TileRoom und PixelRoom, der einen 3x3 Tilebereich als 24x24 Pixelraster bearbeitbar macht. |
 | GridView | UI-Komponente fuer Rasternavigation und Zellrendering. |
 | Pulp-Dokument | Vollstaendige JSON-Struktur fuer Pulp-kompatible Spielinhalte. |
+| Pulp-Arbeitsraum | Interne fachliche Arbeitsaufloesung des Editors: 25x15 Tiles bzw. 200x120 Pixel auf Room-Ebene. |
+| Native Anzeigeebene | Physische Runtime-Aufloesung 400x240 bei `playdate.display.setScale(1)`. |
 | gameData | Interne, kompakte Arbeitsdarstellung des Editors (rooms/tiles/frames). |
 | pulpState | Persistente Mapping- und Dokumentdaten fuer kompatibles Speichern. |
+| Offscreen-Buffer | Zwischengerendertes Bild, das TileRoom in 200x120 zeichnet und anschliessend 2x skaliert auf dem Display ausgibt. |
 | Kompaktierung | Entfernen ungenutzter Tiles und Neuabbildung der Referenzen. |
 | Preview | Gespeichertes Vorschaubild eines Games oder Rooms im Datastore. |
 | Save + Back | Systemmenue-Aktion: Speichern des aktuellen Zustands und Rueckkehr zu LoadRoom. |

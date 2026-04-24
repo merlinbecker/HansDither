@@ -49,7 +49,7 @@ function TileRoomEditor:drawTilePickerWindow()
     self.config.gfx.drawRect(px, py, self.config.winSize, self.config.winSize)
     local tile = self.config.getCellImagetable():getImage(self.config.getTilePickerIndex())
     if tile then
-        tile:drawScaled(px + 3, py + 3, 2.0)
+           tile:drawScaled(px + 6, py + 6, 4.0)
     end
 
     self:drawBauchbinde("tilePicker", px)

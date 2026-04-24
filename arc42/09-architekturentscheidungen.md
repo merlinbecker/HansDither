@@ -94,6 +94,13 @@
 ## 9.14 AD-014: EditMode-Modell im TileRoom mit wiederverwendbarer Bauchbinde
 
 - Status: umgesetzt
-- Entscheidung: TileRoom verwendet zwei Modi (TilePickerMode/AnimationMode). B kurz fungiert als Pipette, B lang (>=1.5s) toggelt den Modus. Die Modusrueckmeldung wird ueber die wiederverwendbare Bauchbinde-Komponente angezeigt.
+- Entscheidung: TileRoom verwendet zwei Modi (TilePickerMode/AnimationMode). B kurz fungiert als Pipette, B lang (>=1.5s) toggelt den Modus, B+Crank startet den Zoom und bricht dabei einen pending Long-Press ab. Die Modusrueckmeldung wird ueber die wiederverwendbare Bauchbinde-Komponente angezeigt.
 - Begruendung: Entkoppelt unmittelbare Tile-Auswahl von kuenftigen Animationsfunktionen, reduziert Eingabekonflikte und schafft ein einheitliches UI-Muster fuer Hinweise.
-- Konsequenz: Zusaetzlicher Zustandsautomat fuer B-Short/Long-Press und Mode-State notwendig; Zoom-Trigger wurde auf D-Pad Up + Crank umgelegt, damit B fuer Pipette/Modewechsel exklusiv bleibt.
+- Konsequenz: Zusaetzlicher Zustandsautomat fuer B-Short/Long-Press, Cancel-Pfad und Mode-State notwendig; die Prioritaet zwischen Pipette, Moduswechsel und Zoom muss explizit im Update-Pfad abgesichert werden.
+
+## 9.15 AD-015: Native Runtime-Aufloesung bei beibehaltener Pulp-Datenaufloesung
+
+- Status: umgesetzt
+- Entscheidung: Die Runtime arbeitet auf nativer Display-Aufloesung 400x240 (`setScale(1)`), waehrend Tile-/Frame-Daten und Room-Previews weiterhin im Pulp-Arbeitsraum (8x8 Tiles, 200x120) verbleiben.
+- Begruendung: Allgemeine UI und Schrift sollen schaerfer dargestellt werden, ohne die Persistenz- und Importkompatibilitaet des Pulp-Datenmodells aufzugeben.
+- Konsequenz: TileRoom benoetigt einen Offscreen-Buffer fuer skalierte Tilemap-Darstellung; ZoomRoom und PixelRoom arbeiten mit vergroesserten Zellgroessen; Dokumentation und Tests muessen zwei koordinative Ebenen auseinanderhalten.

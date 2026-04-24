@@ -127,13 +127,13 @@ function LoadRoomGrid:drawCell(section, row, column, selected, x, y, width, heig
         if roomIdx <= #self.roomNames then
             local preview = self.previewCache[roomIdx]
             if preview then
-                local px = x + (width - 40) // 2
-                local py = y + (height - 24) // 2
+                    local px = x + (width - 80) // 2
+                    local py = y + (height - 48) // 2
                 gfx.setImageDrawMode(selected and gfx.kDrawModeInverted or gfx.kDrawModeCopy)
-                preview:drawScaled(px, py, 0.2)
+                    preview:drawScaled(px, py, 0.4)
             else
                 gfx.setColor(selected and gfx.kColorWhite or gfx.kColorBlack)
-                gfx.drawRect(x + (width - 30) // 2, y + (height - 18) // 2, 30, 18)
+                    gfx.drawRect(x + (width - 60) // 2, y + (height - 36) // 2, 60, 36)
             end
         end
     end
@@ -145,9 +145,9 @@ function LoadRoomGrid:draw(gameName, keyboardVisible, keyboardText)
     gfx.clear(gfx.kColorWhite)
     gfx.drawText(gameName or "Hans Dither", 4, 2)
     gfx.setColor(gfx.kColorBlack)
-    gfx.drawLine(0, 12, 199, 12)
-    self.config.gridView:drawInRect(1, 13, 198, 90)
-    gfx.drawLine(0, 104, 199, 104)
+        gfx.drawLine(0, 24, 399, 24)
+        self.config.gridView:drawInRect(1, 25, 398, 182)
+        gfx.drawLine(0, 208, 399, 208)
 
     local infoText
     if keyboardVisible then
@@ -165,7 +165,7 @@ function LoadRoomGrid:draw(gameName, keyboardVisible, keyboardText)
             infoText = self.roomNames[idx - 1] or ""
         end
     end
-    gfx.drawText(infoText, 4, 108)
+        gfx.drawText(infoText, 4, 216)
 end
 
 return LoadRoomGrid

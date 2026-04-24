@@ -20,19 +20,21 @@ Ergebnis: Der Editor ist mit konsistentem Spiel- und Room-Kontext aktiv.
 2. A toggelt Tile an Cursorposition zwischen Hintergrundtile und Picker-Tile.
 3. Optional wird Picker per Crank angepasst (Index 3..n).
 4. Kurzes B uebernimmt per Pipette das Tile aus der selektierten Zelle als aktives Picker-Tile.
-5. Langes B (>=1.5s) toggelt zwischen TilePickerMode und AnimationMode.
+5. Langes B (>=1.5s) toggelt zwischen TilePickerMode und AnimationMode, solange der B-Hold nicht durch Crank-Eingabe fuer einen Zoom uebersteuert wird.
 6. needsRedraw markiert, Update zeichnet Tilemap, Cursor und ggf. Pickerfenster/Bauchbinde.
 
 Ergebnis: Der Room-Zustand ist visuell aktualisiert und intern in Tilemap vorhanden.
 
 ## 6.3 Szenario: Zoom-Bearbeitung zwischen TileRoom und PixelRoom
 
-1. Im TileRoom wird D-Pad Up gehalten und der Crank-Trigger erreicht.
+1. Im TileRoom wird B gehalten und der Crank-Trigger erreicht.
 2. TileRoom erzeugt den 3x3-Kontext um den Cursor (inkl. showGrid-Status) und uebergibt ihn an ZoomRoom.
 3. ZoomRoom rendert ein 24x24 Pixelgrid, erlaubt Bearbeitung mehrerer Slots und optionalen Zoom in PixelRoom.
 4. In PixelRoom wird ein einzelner 8x8-Slot detailliert geaendert und an ZoomRoom zurueckgegeben.
 5. Bei Zoom-Out (ZoomRoom -> TileRoom) werden nur geaenderte Slots committed.
 6. TileRoom uebernimmt diese Slots per applyTileEditsBatch ueber findOrAppendImage (Dedupe/Hashvergleich).
+
+Wichtig: Wenn der Crank waehrend eines laufenden B-Holds betaetigt wird, bricht TileRoom den pending Long-Press fuer den Moduswechsel ab und gibt dem Zoom-Trigger Vorrang.
 
 Ergebnis: Mehrere Tile-Aenderungen sind im Room sichtbar und dedupliziert fuer spaeteres Speichern vorbereitet.
 
