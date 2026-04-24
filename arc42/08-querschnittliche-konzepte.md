@@ -61,6 +61,7 @@ Nutzen: nachvollziehbare Entscheidungen und kontrollierte technische Schulden.
 - Die eigentliche Arbeit laeuft als Coroutine und wird pro Frame in update() fortgesetzt.
 - Waehrend einer aktiven Operation werden konkurrierende Eingaben blockiert.
 - Ein loadingBar-Overlay zeigt Titel, Detailtext und Fortschritt pro Phase.
+- JSON-/Datastore read/write bleiben als einzelne Runtime-Aufrufe blockierend; diese Phasen werden explizit als finale Schritte markiert.
 
 Nutzen: sichtbarer Fortschritt, bessere Responsivitaet waehrend Vorbereitungsschritten, weniger Duplikation zwischen Rooms.
 
@@ -71,3 +72,12 @@ Nutzen: sichtbarer Fortschritt, bessere Responsivitaet waehrend Vorbereitungssch
 - PulpGameIO trennt Fassade, Shared-Helfer, Save- und Load-Logik.
 
 Nutzen: kleinere Dateien, bessere Test- und Wartbarkeit, klarere Seiteneffekte pro Modul.
+
+## 8.8 Import-Integritaetskonzept (Tools/Importer)
+
+- Das Browser-Tool behandelt Imports strikt offline und exportbasiert (kein in-place Ueberschreiben).
+- Die Pipeline ist deterministisch: 200x120 Normalisierung -> Binarisierung -> 8x8-Slicing -> Hash-Dedupe -> Room/Tile/Frame-Mutation.
+- Dedupe folgt demselben Prinzip wie im Lua-Editorpfad (Hashvergleich vor Neuanlage).
+- editor.sortedTiles wird defensiv aktualisiert, ohne bestehende Gruppenstrukturen zu zerstoeren.
+
+Nutzen: reproduzierbare Importergebnisse, geringeres Risiko inkonsistenter Referenzen und klare Trennung zur Device-Runtime.

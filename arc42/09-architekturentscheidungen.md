@@ -76,3 +76,17 @@
 - Entscheidung: Aufteilung nach Verantwortungen in LoadRoomGrid, TileRoomEditor, TileRoomPersistence sowie PulpGameIOShared/PulpGameIOSave/PulpGameIOLoad.
 - Begruendung: Reduzierte Dateigroesse, klarere Zustandsgrenzen, geringere Wartungskosten.
 - Konsequenz: Mehr Modulgrenzen und Schnittstellen, dafuer geringere lokale Komplexitaet.
+
+## 9.12 AD-012: PNG-Import als separates lokales Browser-Tool
+
+- Status: umgesetzt
+- Entscheidung: Der PNG->Room-Import bleibt ausserhalb der Playdate-Runtime in Tools/Importer (HTML/CSS/JS).
+- Begruendung: Keine zusaetzliche Runtime-Last auf dem Device, schnellere Iteration bei Importlogik, klarer Offline-Workflow.
+- Konsequenz: Architektur hat zwei Ausfuehrungskontexte (Device-Runtime und Browser-Tool); Import-/Save-Kompatibilitaet muss ueber gemeinsame Datenregeln abgesichert werden.
+
+## 9.13 AD-013: Kein erzwungener Save beim Room-Anlegen in LoadRoom
+
+- Status: umgesetzt
+- Entscheidung: Beim Erzeugen eines neuen Rooms in LoadRoom erfolgt kein sofortiger Persistenzschritt; es wird direkt zu TileRoom gewechselt.
+- Begruendung: Room-Erzeugung ist zunaechst eine in-memory Aktion; unmittelbare IO auf einem UX-kritischen Uebergang wird vermieden.
+- Konsequenz: Persistenz passiert explizit spaeter ueber Save-Trigger in TileRoom; Nutzerfeedback und Datenintegritaet bleiben ueber den normalen Save-Pfad kontrollierbar.

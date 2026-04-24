@@ -54,3 +54,15 @@ Ergebnis: Persistenter Zustand ist konsistent gespeichert; UIs koennen Vorschaue
 - Inkonsistente Tile-Referenz nach Mapping: Fallback auf Basistile.
 - Keyboard-Abbruch bei neuer Game-Erstellung: keine Neuerstellung, Grid wird sauber aktualisiert.
 - Fehler in laufender RoomOperation: Overlay zeigt Fehlerstatus; Room bleibt stabil bedienbar.
+
+## 6.6 Szenario: Offline-Import PNG -> neuer Room (Tools/Importer)
+
+1. Nutzer oeffnet Tools/Importer/index.html lokal im Browser.
+2. Nutzer laedt eine bestehende Pulp-JSON; die Struktur wird gegen rooms/tiles/frames validiert.
+3. Nutzer laedt eine PNG; das Tool normalisiert auf 200x120 mit Letterboxing/Pillarboxing.
+4. Das normalisierte Bild wird in 25x15 Tiles zu je 8x8 zerlegt und binarisiert.
+5. Pro Tile wird ein FNV-1a-Hash berechnet; vorhandene Tiles werden wiederverwendet, neue Tiles/Frames nur bei Hash-Miss angelegt.
+6. Das Tool erzeugt einen neuen Room mit 375 Tile-Referenzen und ergaenzt neue Tile-IDs in editor.sortedTiles[4].
+7. Export liefert eine neue JSON-Datei; Originaldateien bleiben unveraendert.
+
+Ergebnis: Konsistente Erweiterung eines Pulp-Dokuments um einen importierten Room ohne direkten In-Place-Schreibzugriff.

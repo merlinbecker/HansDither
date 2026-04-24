@@ -9,6 +9,7 @@ Hans Dither ist ein lokaler Pixel-Editor fuer Playdate. Externe Interaktionen en
 | Spieler | D-Pad, A/B, Crank, Bildschirmtastatur | UI-Rueckmeldung, Cursor/Tile-Rendering, Save/Load-Effekte |
 | Playdate Datastore | Dateinamen und serialisierte Datenobjekte | Persistente Spielstaende und Vorschaubilder |
 | Pulp-kompatible JSON-Welt | Bestehende Dokumentstruktur als Input beim Laden | aktualisierte, kompatible Dokumente beim Speichern |
+| Lokaler Importer-Anwender | Pulp-JSON + PNG als Eingabe im Browser-Tool | aktualisierte Pulp-JSON mit neuem Room/Tiles/Frames |
 
 ## 3.2 Technischer Kontext
 
@@ -17,6 +18,7 @@ Hans Dither ist ein lokaler Pixel-Editor fuer Playdate. Externe Interaktionen en
 | Playdate Runtime | Lua + CoreLibs (graphics, ui, timer, crank, keyboard) | Rendering, Input, Navigation, Menues |
 | Dateisystem | playdate.file + playdate.datastore | Lesen/Schreiben von Saves und Preview-Bildern |
 | Assets im Bundle | imagetable/pdi/json/pdxinfo | Basistiles, Launchergrafiken, Template-Dokument |
+| Lokaler Browser (Importer) | HTML/CSS/JavaScript in Tools/Importer | Offline-Import von PNG in bestehende Pulp-JSON |
 
 ## 3.3 Mapping fachlich -> technisch
 
@@ -29,3 +31,4 @@ Hans Dither ist ein lokaler Pixel-Editor fuer Playdate. Externe Interaktionen en
 | Pixelgenaue Bearbeitung | PixelRoom mit 8x8 Grid-State und Rueckschreiben ins Tile |
 | Speichern | TileRoom:saveToFile() + PulpGameIO.buildSaveDocument() |
 | Laden | PulpGameIO.prepareLoadedGame() + Imagetable-Rekonstruktion |
+| PNG als Room importieren | Tools/Importer/app.js (Skalierung, 8x8-Slicing, FNV-1a-Dedupe, JSON-Export) |

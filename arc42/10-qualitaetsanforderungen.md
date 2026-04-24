@@ -11,6 +11,7 @@
 | Wartbarkeit | Aenderungen in einem Room sollen andere Rooms nur minimal beeinflussen. |
 | Kompatibilitaet | Gespeicherte Dokumente bleiben Pulp-kompatibel und verlieren keine kritischen Felder. |
 | Transparenz bei Langlaeufern | Nutzer sieht bei Save/Load stets den aktuellen Fortschritt und Zustand. |
+| Importintegritaet | PNG-Import erzeugt nur gueltige room/tile/frame-Beziehungen und bleibt reproduzierbar. |
 
 ## 10.2 Qualitaetsszenarien
 
@@ -67,3 +68,15 @@
 - Stimulus: UI-Aenderung an Grid-Rendering/Navigationsverhalten.
 - Reaktion: Aenderung bleibt weitgehend auf LoadRoomGrid begrenzt.
 - Metrik: Keine verpflichtenden Anpassungen in PulpGameIO- oder TileRoom-Persistenzmodulen.
+
+### QS-10 Import-Pipeline-Korrektheit
+- Kontext: Nutzer importiert ein PNG ueber Tools/Importer in ein bestehendes Pulp-Dokument.
+- Stimulus: Import starten und anschliessend Export ausfuehren.
+- Reaktion: Neuer Room enthaelt genau 375 Tile-Eintraege; referenzierte Tile- und Frame-IDs existieren; editor.sortedTiles bleibt gueltig.
+- Metrik: Exportiertes JSON ist erneut ladbar (Importer/Runtime) und zeigt den importierten Room ohne Referenzfehler.
+
+### QS-11 Import-Dedupe-Effizienz
+- Kontext: PNG enthaelt viele sich wiederholende 8x8-Muster.
+- Stimulus: Import in ein bereits grosses Dokument.
+- Reaktion: Bestehende Tiles werden ueber Hashvergleich wiederverwendet; neue Tiles nur bei echten Hash-Misses.
+- Metrik: Anzahl neu angelegter Tiles bleibt deutlich unter 375, wenn Musterwiederholungen vorliegen.

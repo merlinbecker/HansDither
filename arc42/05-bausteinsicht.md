@@ -24,6 +24,7 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 | PulpGameIOShared | Gemeinsame Hilfslogik fuer Template, Normalisierung und Dokumentaufbau. |
 | PulpGameIOSave | Save-seitiger Dokumentaufbau. |
 | PulpGameIOLoad | Load-seitige Vorbereitung und Mapping. |
+| Tools/Importer (index.html, app.js) | Lokales Browser-Tool fuer PNG-Import in Pulp-JSON inkl. Dedupe und Export. |
 
 ### Wichtige Schnittstellen
 
@@ -117,6 +118,20 @@ Interne Logik:
 - setGame() setzt nur Kontext und markiert, ob ein Load beim Eintritt noetig ist.
 - entered() startet fuer bestehende Spiele die Ladeoperation.
 - update() resume't laufende Operationen und blockiert konkurrierende Navigation.
+
+### 5.2.8 Whitebox Tools/Importer
+
+Verantwortung:
+- Laedt Pulp-JSON und PNG lokal im Browser.
+- Rendert Rooms und Tile-Palette zur Sichtpruefung.
+- Fuehrt PNG->Tile-Pipeline durch (200x120 Normalisierung, 25x15 x 8x8-Slicing, FNV-1a-Dedupe).
+- Erzeugt neuen Room sowie ggf. neue tiles/frames und bietet Export als neue JSON-Datei an.
+
+Interne Logik:
+- app.js validiert die Kernstruktur (rooms/tiles/frames) defensiv.
+- Hash-Cache wird aus vorhandenen Tiles aufgebaut; neue Tiles werden nur bei Hash-Miss angelegt.
+- editor.sortedTiles wird robust behandelt und neue Tile-IDs werden in Gruppe 4 ergänzt.
+- Das Tool schreibt nie in bestehende Dateien, sondern nur ueber Download der Exportdatei.
 
 ## 5.3 Ebene 3 (fokussiert)
 
