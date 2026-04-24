@@ -1,8 +1,17 @@
+import "Bauchbinde"
+
 TileRoomEditor = {}
 TileRoomEditor.__index = TileRoomEditor
 
 function TileRoomEditor.new(config)
-    return setmetatable({ config = config }, TileRoomEditor)
+    return setmetatable({
+        config = config,
+        bauchbinde = Bauchbinde.new(config.gfx, {
+            margin = config.winMargin,
+            height = config.winSize,
+            paddingX = 4
+        })
+    }, TileRoomEditor)
 end
 
 function TileRoomEditor:drawCell(section, row, column, selected, x, y, width, height)
@@ -42,6 +51,28 @@ function TileRoomEditor:drawTilePickerWindow()
     if tile then
         tile:drawScaled(px + 3, py + 3, 2.0)
     end
+
+    self:drawBauchbinde("tilePicker", px)
+end
+
+function TileRoomEditor:drawBauchbinde(text, pickerX)
+    if not text or text == "" then return end
+
+    -- Bauchbinde immer auf die gegenueberliegende Seite des Picker-Fensters setzen.
+    local pickerIsLeft = pickerX <= (self.config.screenW // 2)
+    local side
+    if pickerIsLeft then
+        side = "right"
+    else
+        side = "left"
+    end
+
+    self.bauchbinde:drawBottom(text, side, self.config.screenW, self.config.screenH)
+end
+
+function TileRoomEditor:drawModeBauchbinde(text, side)
+    if not text or text == "" then return end
+    self.bauchbinde:drawBottom(text, side or "left", self.config.screenW, self.config.screenH)
 end
 
 function TileRoomEditor:getBackgroundTile()

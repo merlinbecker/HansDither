@@ -29,9 +29,13 @@ local GRID_COLS = 25
 local GRID_ROWS = 15
 local CELL_SIZE = 8 -- 8x8 Pixel pro Zelle, wenn die Skalierung aus ist, 16x16
 local SCREEN_W = 200 -- Playdate-Bildschirmbreite in Pixeln
+local SCREEN_H = 120 -- Playdate-Bildschirmhoehe in Pixeln (bei display scale 2)
 
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
+
+local EDIT_MODE_TILE_PICKER = "tile_picker"
+local EDIT_MODE_ANIMATION = "animation"
 
 local directionHold = {
     up = { active = false, nextMs = 0 },
@@ -42,11 +46,25 @@ local directionHold = {
 
 -- Tile Picker: zeigt das aktuell gewählte Tile beim Crank-Drehen in einer Ecke an
 local PICKER_TIMEOUT_MS = 3000 -- Fenster verschwindet nach 3s ohne Crank
+local B_LONG_PRESS_MS = 1500
+local ANIMATION_PLACEHOLDER_FRAME_COUNT = 8
+local MODE_BADGE_DURATION_MS = 1500
 local WIN_SIZE = 22            -- 1px Border + 2px Padding + 16px Tile (8x2) + 2px Padding + 1px Border
 local WIN_MARGIN = 4           -- Abstand der Fensterecke zum Bildschirmrand
 local tilePickerIndex = 3      -- aktuell angezeigter Tile-Index (min. 3, Tiles 1+2 werden übersprungen)
 local tilePickerVisible = false
 local tilePickerLastCrankMs = 0
+local currentEditMode = EDIT_MODE_TILE_PICKER
+local animationFramePlaceholderIndex = 1
+local modeBadgeText = nil
+local modeBadgeUntilMs = 0
+
+local bPressTracking = {
+    isDown = false,
+    downStartMs = 0,
+    longPressTriggered = false
+}
+local bShortPressPending = false
 
 -- Datei-Verwaltung
 local currentFileName = nil    -- Name des aktuell geöffneten Games (ohne Pfad)
@@ -156,6 +174,7 @@ editor = TileRoomEditor.new({
     cursorBlinker = cursorBlinker,
     cellSize = CELL_SIZE,
     screenW = SCREEN_W,
+    screenH = SCREEN_H,
     gridCols = GRID_COLS,
     winSize = WIN_SIZE,
     winMargin = WIN_MARGIN,
@@ -226,6 +245,127 @@ end
 -- LoadRoom nutzt diesen Zustand, damit spaetere Saves vorhandene Pulp-Attribute behalten.
 function TileRoom:getPulpDocument()
     return pulpState
+end
+
+function TileRoom:getEditMode()
+    return currentEditMode
+end
+
+function TileRoom:isTilePickerMode()
+    return currentEditMode == EDIT_MODE_TILE_PICKER
+end
+
+function TileRoom:isAnimationMode()
+    return currentEditMode == EDIT_MODE_ANIMATION
+end
+
+function TileRoom:setEditMode(mode)
+    if mode == EDIT_MODE_TILE_PICKER or mode == EDIT_MODE_ANIMATION then
+        currentEditMode = mode
+        if currentEditMode == EDIT_MODE_ANIMATION then
+            tilePickerVisible = false
+        end
+        needsRedraw = true
+    end
+end
+
+function TileRoom:toggleEditMode()
+    if currentEditMode == EDIT_MODE_TILE_PICKER then
+        currentEditMode = EDIT_MODE_ANIMATION
+        tilePickerVisible = false
+        modeBadgeText = "animationMode"
+        modeBadgeUntilMs = (playdate.getCurrentTimeMilliseconds() or 0) + MODE_BADGE_DURATION_MS
+    else
+        currentEditMode = EDIT_MODE_TILE_PICKER
+        modeBadgeText = "tileMode"
+        modeBadgeUntilMs = (playdate.getCurrentTimeMilliseconds() or 0) + MODE_BADGE_DURATION_MS
+    end
+    needsRedraw = true
+end
+
+function TileRoom:getAnimationFramePlaceholderIndex()
+    return animationFramePlaceholderIndex
+end
+
+function TileRoom:setAnimationFramePlaceholderIndex(value)
+    if not value then return end
+    animationFramePlaceholderIndex = value
+    needsRedraw = true
+end
+
+function TileRoom:consumeBShortPress()
+    if bShortPressPending then
+        bShortPressPending = false
+        return true
+    end
+    return false
+end
+
+function TileRoom:showTilePicker()
+    tilePickerVisible = true
+    tilePickerLastCrankMs = playdate.getCurrentTimeMilliseconds() or 0
+    needsRedraw = true
+end
+
+function TileRoom:updateTilePickerTimeout()
+    if not tilePickerVisible then return end
+    local nowMs = playdate.getCurrentTimeMilliseconds() or 0
+    if nowMs - tilePickerLastCrankMs > PICKER_TIMEOUT_MS then
+        tilePickerVisible = false
+        needsRedraw = true
+    end
+end
+
+function TileRoom:pickTileFromCurrentCell()
+    local _, selRow, selCol = gridView:getSelection()
+    if not selRow or not selCol then return false end
+
+    local pickedIndex = tilemap:getTileAtPosition(selCol, selRow)
+    if not pickedIndex then return false end
+
+    local maxTile = cellImagetable and cellImagetable:getLength() or 0
+    if maxTile < 1 then return false end
+    if pickedIndex < 1 or pickedIndex > maxTile then return false end
+
+    tilePickerIndex = pickedIndex
+    TileRoom:showTilePicker()
+    return true
+end
+
+local function resetBPressTracking()
+    bPressTracking.isDown = false
+    bPressTracking.downStartMs = 0
+    bPressTracking.longPressTriggered = false
+end
+
+local function updateBPressTiming()
+    local nowMs = playdate.getCurrentTimeMilliseconds()
+    local isDownNow = playdate.buttonIsPressed(playdate.kButtonB)
+    local events = {
+        isDown = isDownNow,
+        shortPress = false,
+        longPress = false
+    }
+
+    if isDownNow and not bPressTracking.isDown then
+        bPressTracking.isDown = true
+        bPressTracking.downStartMs = nowMs
+        bPressTracking.longPressTriggered = false
+    elseif isDownNow and bPressTracking.isDown then
+        if nowMs - bPressTracking.downStartMs >= B_LONG_PRESS_MS then
+            bPressTracking.longPressTriggered = true
+            events.longPress = true
+            -- Solange B gehalten wird, nach jeweils 1.5s erneut ein Long-Press-Event ausloesen.
+            bPressTracking.downStartMs = nowMs
+        end
+    elseif not isDownNow and bPressTracking.isDown then
+        if not bPressTracking.longPressTriggered then
+            events.shortPress = true
+        end
+        resetBPressTracking()
+    end
+
+    return events
 end
 
 -- Speichert den aktuellen Room-State in gameData zurück und lädt einen anderen Room.
@@ -456,46 +596,63 @@ function TileRoom:update()
         needsRedraw = true
     end
     -- Zoom-Trigger: D-Pad Up gehalten + Crank
-    local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
     if isOperationActive() then
         ticks = 0
-    elseif bHeld then
-        local crankTicks = playdate.getCrankTicks(4) or 0
-        ticks += crankTicks
-        if ticks >=4 then
-            ticks=0
-            if switchRoomFunction then
-                local context = TileRoom:getTileContext3x3()
-                nextRoom:setFromTileContext(context)
-                switchRoomFunction(nextRoom)
-            end
-        end
+        resetBPressTracking()
     else
-        ticks = 0
-        -- Tile Picker: Crank ohne B-Taste scrollt durch Tiles ab Index 3
-        -- getCrankTicks ist stateful – wird nur hier aufgerufen, wenn B NICHT gehalten ist
-        local crankTicks = playdate.getCrankTicks(4)
-        if crankTicks ~= 0 and cellImagetable:getLength() >= 3 then
-            local maxTile = cellImagetable:getLength()
-            -- Index in Richtung des Crank-Ticks verschieben (+1 oder -1)
-            tilePickerIndex = tilePickerIndex + (crankTicks > 0 and 1 or -1)
-            -- Wrap: Index bleibt zwischen 3 und maxTile
-            if tilePickerIndex > maxTile then
-                tilePickerIndex = 3
-            elseif tilePickerIndex < 3 then
-                tilePickerIndex = maxTile
-            end
-            tilePickerVisible = true
-            tilePickerLastCrankMs = playdate.getCurrentTimeMilliseconds()
-            needsRedraw = true
+        local bEvents = updateBPressTiming()
+        if bEvents.longPress then
+            TileRoom:toggleEditMode()
         end
-        -- Timeout-Prüfung: Fenster ausblenden, wenn 3s kein Crank
-        if tilePickerVisible then
-            if playdate.getCurrentTimeMilliseconds() - tilePickerLastCrankMs > PICKER_TIMEOUT_MS then
-                tilePickerVisible = false
+        if bEvents.shortPress then
+            bShortPressPending = true
+        end
+        if TileRoom:consumeBShortPress() and TileRoom:isTilePickerMode() then
+            TileRoom:pickTileFromCurrentCell()
+        end
+
+        local zoomHeld = playdate.buttonIsPressed(playdate.kButtonUp)
+        if zoomHeld then
+            local crankTicks = playdate.getCrankTicks(4) or 0
+            ticks += crankTicks
+            if ticks >=4 then
+                ticks=0
+                if switchRoomFunction then
+                    local context = TileRoom:getTileContext3x3()
+                    nextRoom:setFromTileContext(context)
+                    switchRoomFunction(nextRoom)
+                end
+            end
+        else
+            ticks = 0
+            local crankTicks = playdate.getCrankTicks(4)
+            if TileRoom:isTilePickerMode() then
+                -- Tile Picker: Crank ohne B-Taste scrollt durch Tiles ab Index 3
+                -- getCrankTicks ist stateful – wird nur hier aufgerufen, wenn B NICHT gehalten ist
+                if crankTicks ~= 0 and cellImagetable:getLength() >= 3 then
+                    local maxTile = cellImagetable:getLength()
+                    -- Index in Richtung des Crank-Ticks verschieben (+1 oder -1)
+                    tilePickerIndex = tilePickerIndex + (crankTicks > 0 and 1 or -1)
+                    -- Wrap: Index bleibt zwischen 3 und maxTile
+                    if tilePickerIndex > maxTile then
+                        tilePickerIndex = 3
+                    elseif tilePickerIndex < 3 then
+                        tilePickerIndex = maxTile
+                    end
+                    TileRoom:showTilePicker()
+                end
+            elseif TileRoom:isAnimationMode() and crankTicks ~= 0 then
+                animationFramePlaceholderIndex = animationFramePlaceholderIndex + (crankTicks > 0 and 1 or -1)
+                if animationFramePlaceholderIndex > ANIMATION_PLACEHOLDER_FRAME_COUNT then
+                    animationFramePlaceholderIndex = 1
+                elseif animationFramePlaceholderIndex < 1 then
+                    animationFramePlaceholderIndex = ANIMATION_PLACEHOLDER_FRAME_COUNT
+                end
                 needsRedraw = true
             end
         end
+
+        TileRoom:updateTilePickerTimeout()
     end
 
     if needsRedraw then
@@ -506,6 +663,14 @@ function TileRoom:update()
         gridView:drawInRect(0, 0, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
         -- Tile Picker Popup (erscheint bei Crank ohne B, verschwindet nach 3s)
         editor:drawTilePickerWindow()
+        if modeBadgeText then
+            local nowMs = playdate.getCurrentTimeMilliseconds() or 0
+            if nowMs <= modeBadgeUntilMs then
+                editor:drawModeBauchbinde(modeBadgeText, "left")
+            else
+                modeBadgeText = nil
+            end
+        end
         roomLoadingBar:draw()
         needsRedraw = false
     end
@@ -517,6 +682,8 @@ end
 function TileRoom:entered()
     editor:clearDirectionHold()
     needsRedraw = true
+    resetBPressTracking()
+    bShortPressPending = false
     -- Tile Picker zurücksetzen, damit kein altes Fenster beim Raumeintritt sichtbar ist
     tilePickerVisible = false
     -- Systemmenü: alte Items entfernen, dann "Save + Back" hinzufügen (nur wenn Dateiname gesetzt)
