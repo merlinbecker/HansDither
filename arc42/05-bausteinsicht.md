@@ -20,6 +20,7 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 | LoadRoomGrid | UI-/Navigationshelfer fuer LoadRoom-Grid und Vorschauen. |
 | TileRoomPersistence | Persistenz- und Datenmodelllogik fuer TileRoom. |
 | TileRoomEditor | Interaktions- und Zeichnungslogik fuer TileRoom. |
+| Bauchbinde | Wiederverwendbare UI-Komponente fuer kontextuelle Hinweisbaender. |
 | PulpGameIO (Facade) | Oeffentliche API fuer Save/Load und Mapping. |
 | PulpGameIOShared | Gemeinsame Hilfslogik fuer Template, Normalisierung und Dokumentaufbau. |
 | PulpGameIOSave | Save-seitiger Dokumentaufbau. |
@@ -65,6 +66,8 @@ Spezifische Verantwortung:
 Verantwortung:
 - Haupt-Arbeitsflaeche fuer Tiles im Room.
 - Cursor, Hintergrundmodus (Show Grid), Tile Picker per Crank.
+- Zwei Editiermodi: TilePickerMode (Tile-Auswahl) und AnimationMode (Frame-Platzhalter).
+- B-Input-Semantik: kurzer Druck als Pipette, langer Druck (>=1.5s) als Moduswechsel.
 - Tile-Komprimierung und Persistenz-Aufbereitung.
 
 Besonders relevante interne Teile:

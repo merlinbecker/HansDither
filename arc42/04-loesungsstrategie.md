@@ -9,6 +9,8 @@
 5. Kooperative, frame-freundliche Save/Load-Abarbeitung per Coroutine statt monolithischer Einzelframe-Operation.
 6. Einheitliches Lade-/Speicherfeedback ueber ein room-uebergreifend nutzbares loadingBar-Overlay.
 7. Separates lokales Importer-Tool fuer PNG->Room-Transformation, ohne Runtime-Komplexitaet auf dem Device zu erhoehen.
+8. Editiermodi im TileRoom (TilePickerMode/AnimationMode) mit klarer Input-Semantik (B kurz = Pipette, B lang = Moduswechsel).
+9. Wiederverwendbare UI-Bauchbinde als eigenstaendiger Baustein fuer mode- und kontextbezogene Hinweise.
 
 ## 4.2 Begruendung
 
@@ -18,6 +20,8 @@
 - JSON-lastige Save/Load-Schritte werden in fachliche Phasen zerlegt und ueber mehrere Frames verteilt; dadurch bleibt die UI waehrend der Vorbereitung reaktionsfaehig.
 - Ein gemeinsames RoomOperation-Muster verhindert doppelte Async-Steuerlogik in LoadRoom und TileRoom.
 - Der lokale Importer folgt derselben Tile-Dedupe-Idee (Hashvergleich) wie der Editorpfad und reduziert dadurch Inkonsistenzen zwischen Tooling und Runtime.
+- Die Trennung von TilePickerMode und AnimationMode reduziert Eingabekonflikte und schafft einen erweiterbaren Pfad fuer spaetere Animationsfunktionen.
+- Eine zentrale Bauchbinde-Komponente verhindert UI-Duplikate und vereinheitlicht die visuelle Rueckmeldung im Editor.
 - Konzeptplaene in plans/ und support/concepts zeigen die iterative Umsetzung und begruenden die aktuelle Architektur evolutionaer.
 
 ## 4.3 Qualitaetszielbezug

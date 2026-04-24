@@ -90,3 +90,10 @@
 - Entscheidung: Beim Erzeugen eines neuen Rooms in LoadRoom erfolgt kein sofortiger Persistenzschritt; es wird direkt zu TileRoom gewechselt.
 - Begruendung: Room-Erzeugung ist zunaechst eine in-memory Aktion; unmittelbare IO auf einem UX-kritischen Uebergang wird vermieden.
 - Konsequenz: Persistenz passiert explizit spaeter ueber Save-Trigger in TileRoom; Nutzerfeedback und Datenintegritaet bleiben ueber den normalen Save-Pfad kontrollierbar.
+
+## 9.14 AD-014: EditMode-Modell im TileRoom mit wiederverwendbarer Bauchbinde
+
+- Status: umgesetzt
+- Entscheidung: TileRoom verwendet zwei Modi (TilePickerMode/AnimationMode). B kurz fungiert als Pipette, B lang (>=1.5s) toggelt den Modus. Die Modusrueckmeldung wird ueber die wiederverwendbare Bauchbinde-Komponente angezeigt.
+- Begruendung: Entkoppelt unmittelbare Tile-Auswahl von kuenftigen Animationsfunktionen, reduziert Eingabekonflikte und schafft ein einheitliches UI-Muster fuer Hinweise.
+- Konsequenz: Zusaetzlicher Zustandsautomat fuer B-Short/Long-Press und Mode-State notwendig; Zoom-Trigger wurde auf D-Pad Up + Crank umgelegt, damit B fuer Pipette/Modewechsel exklusiv bleibt.
