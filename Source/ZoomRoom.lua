@@ -1,12 +1,12 @@
 -- ZoomRoom.lua
 -- Mittlerer Zoom-Raum zwischen TileRoom (25×15 Tiles) und PixelRoom (8×8 Pixel).
 -- Zeigt 3×3 Tiles rund um den aktuellen Cursor als 24×24 editierbare Zellen an.
--- Jede Zelle entspricht einem Pixel des Tiles (5×5 px auf dem Bildschirm, bei Scale 2).
+-- Jede Zelle entspricht einem Pixel des Tiles (10×10 px auf dem nativen 400x240-Display).
 
 import "CoreLibs/graphics"
 import "CoreLibs/ui"
-import "CoreLibs/animation"
 import "CoreLibs/crank"
+import "PencilCursor"
 
 local gfx = playdate.graphics
 
@@ -62,11 +62,6 @@ local contextCursorTileCol = 1
 local contextCursorTileRow = 1
 
 local needsRedraw = true
-
--- Blinker analog TileRoom / PixelRoom
-local cursorBlinker = playdate.graphics.animation.blinker.new(500, 500, true, nil, true)
-cursorBlinker:startLoop()
-local lastBlinkState = cursorBlinker.on
 
 -- Crank-Akkumulator (analog zu TileRoom/PixelRoom)
 local ticks  = 0
@@ -219,19 +214,10 @@ local function drawGrid()
         gfx.drawLine(OFFSET_X, y, OFFSET_X + totalW - 1, y)
     end
 
-    -- 4. Cursor zeichnen (invertierter 3×3-Pixel-Dot, nur wenn Blinker an)
-    if cursorBlinker.on then
-        local cx = OFFSET_X + (cursorCol - 1) * CELL_SIZE
-        local cy = OFFSET_Y + (cursorRow - 1) * CELL_SIZE
-        local isBlack = gridState[cursorRow][cursorCol]
-        if isBlack then
-            gfx.setColor(gfx.kColorWhite)
-        else
-            gfx.setColor(gfx.kColorBlack)
-        end
-        -- Zentraler Dot: 3×3 px innerhalb der 5×5-Zelle (1px Rand)
-        gfx.fillRect(cx + 1, cy + 1, CELL_SIZE - 2, CELL_SIZE - 2)
-    end
+    -- 4. Cursor zeichnen
+    local cx = OFFSET_X + (cursorCol - 1) * CELL_SIZE
+    local cy = OFFSET_Y + (cursorRow - 1) * CELL_SIZE
+    PencilCursor.draw(cx, cy, CELL_SIZE, CELL_SIZE)
 end
 
 -- ── Interne Aktionen ──────────────────────────────────────────────────────────
@@ -469,12 +455,6 @@ end
 
 function ZoomRoom:update()
     processDirectionHold()
-
-    cursorBlinker:updateAll()
-    if cursorBlinker.on ~= lastBlinkState then
-        lastBlinkState = cursorBlinker.on
-        needsRedraw = true
-    end
 
     -- Zoom-Trigger: B gehalten + Crank
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)

@@ -157,13 +157,7 @@ local gridView = playdate.ui.gridview.new(DISPLAY_CELL_SIZE, DISPLAY_CELL_SIZE)
 gridView:setNumberOfSections(1)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setNumberOfRowsInSection(1, GRID_ROWS)
-
--- Cursor-Blinker (immer looping)
-local cursorBlinker = playdate.graphics.animation.blinker.new(500, 500, true, nil, true)
-cursorBlinker:startLoop()
-
-local lastBlinkState = cursorBlinker.on
-local needsRedraw = true
+needsRedraw = true
 
 persistenceConfig.tilemap = tilemap
 persistenceConfig.origImagetable = origImagetable
@@ -177,7 +171,6 @@ editor = TileRoomEditor.new({
     gfx = gfx,
     tilemap = tilemap,
     gridView = gridView,
-    cursorBlinker = cursorBlinker,
     cellSize = DISPLAY_CELL_SIZE,
     screenW = SCREEN_W,
     screenH = SCREEN_H,
@@ -603,11 +596,6 @@ function TileRoom:update()
         editor:processDirectionHold()
     end
 
-    cursorBlinker:updateAll()
-    if cursorBlinker.on ~= lastBlinkState then
-        lastBlinkState = cursorBlinker.on
-        needsRedraw = true
-    end
     -- Zoom-Trigger: B gehalten + Crank
     if isOperationActive() then
         ticks = 0
@@ -700,7 +688,7 @@ function TileRoom:update()
         needsRedraw = false
     end
 
-    -- Timer-Update für CoreLib-Timer und GridView (z.B. Scroll- und Blinker-Handling)
+    -- Timer-Update für CoreLib-Timer und GridView
     playdate.timer.updateTimers()
 end
 

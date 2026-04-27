@@ -1,4 +1,5 @@
 import "Bauchbinde"
+import "PencilCursor"
 
 TileRoomEditor = {}
 TileRoomEditor.__index = TileRoomEditor
@@ -18,16 +19,8 @@ function TileRoomEditor:drawCell(section, row, column, selected, x, y, width, he
     local cfg = self.config
     local selSection, selRow, selCol = cfg.gridView:getSelection()
     local isCursor = (section == selSection and row == selRow and column == selCol)
-    if isCursor and cfg.cursorBlinker.on then
-        local tileIndex = cfg.tilemap:getTileAtPosition(column, row)
-        local tile = cfg.getCellImagetable():getImage(tileIndex)
-        local centerPixel = tile and tile:sample(cfg.cellSize // 2, cfg.cellSize // 2) or cfg.gfx.kColorWhite
-        if centerPixel == cfg.gfx.kColorBlack then
-            cfg.gfx.setColor(cfg.gfx.kColorWhite)
-        else
-            cfg.gfx.setColor(cfg.gfx.kColorBlack)
-        end
-        cfg.gfx.fillCircleAtPoint(x + width / 2, y + height / 2, 2)
+    if isCursor then
+        PencilCursor.draw(x, y, width, height)
     end
 end
 

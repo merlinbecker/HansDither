@@ -1,5 +1,6 @@
 -- StartRaum.lua
 import "CoreLibs/graphics"
+import "PencilCursor"
 local gfx = playdate.graphics
 
 PixelRoom = {}
@@ -40,12 +41,6 @@ gridView:setNumberOfColumns(GRID_COLS)
 gridView:setNumberOfRowsInSection(1, GRID_ROWS)
 gridView:setSelection(1, math.floor(GRID_ROWS / 2) + 1, math.floor(GRID_COLS / 2) + 1)
 
-
--- Cursor-Blinker (immer looping)
-local cursorBlinker = playdate.graphics.animation.blinker.new(500, 500, true, nil, true)
-cursorBlinker:startLoop()
-local lastBlinkState = cursorBlinker.on
-
 -- Zeichne eine Zelle und optional Cursor, bei Auswahl
 function gridView:drawCell(section, row, column, selected, x, y, width, height)
     local selSection, selRow, selCol = gridView:getSelection()
@@ -62,16 +57,8 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
         end
     -- Cursor immer in der selektierten Zelle zeichnen
     local isCursor = (section == selSection and row == selRow and column == selCol)
-    if isCursor and cursorBlinker.on then
-        local cx = x + width / 2
-        local cy = y + height / 2
-        if isBlack then
-            gfx.setColor(gfx.kColorWhite)
-        else
-            gfx.setColor(gfx.kColorBlack)
-        end
-        gfx.fillCircleAtPoint(cx, cy, 2)
-        gfx.setImageDrawMode(gfx.kDrawModeCopy)
+    if isCursor then
+        PencilCursor.draw(x, y, width, height)
     end
 end
 
@@ -179,12 +166,6 @@ end
 -- Update logic for StartRaum
 function PixelRoom:update()
     processDirectionHold()
-
-    cursorBlinker:updateAll()
-    if cursorBlinker.on ~= lastBlinkState then
-        lastBlinkState = cursorBlinker.on
-        needsRedraw = true
-    end
 
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
     if bHeld then
