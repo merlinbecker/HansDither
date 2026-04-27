@@ -371,10 +371,8 @@ function GameRoom:inputHandler()
             if linearIndex == 1 then
                 -- „+ Neues Game": nur wenn MAX_GAMES noch nicht erreicht
                 if #savedGames >= MAX_GAMES then return end
-                playdate.display.setScale(1)
                 playdate.keyboard.show("")
                 playdate.keyboard.keyboardWillHideCallback = function(confirmed)
-                    playdate.display.setScale(2)
                     if confirmed then
                         local name = playdate.keyboard.text
                         if name and #name > 0 then

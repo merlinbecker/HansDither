@@ -16,8 +16,6 @@ import "ZoomRoom"
 
 local gfx = playdate.graphics
 playdate.display.setScale(1)
---import "Source/ZweiterRaum"
---import "DritterRaum"
 
 -- Shared data table
 local sharedData = {}
@@ -28,6 +26,8 @@ local currentRoom = nil
 function switchRoom(newRoom)
     -- Transition to a new room
     currentRoom = newRoom
+    -- Alle Räume nutzen natives 400x240-Rendering.
+    playdate.display.setScale(1)
     playdate.inputHandlers.pop() -- Remove the current input handler
     playdate.inputHandlers.push(currentRoom.inputHandler()) -- Add the new input handler
     currentRoom:entered() -- Call the entered function of the new rooms
@@ -60,7 +60,3 @@ function playdate.gameWillTerminate()
         TileRoom:saveToFile()
     end
 end
-
--- Example transitions (to be implemented in room-specific input handlers)
--- switchRoom(ZweiterRaum)
--- switchRoom(DritterRaum)
