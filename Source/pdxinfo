@@ -3,6 +3,6 @@ author=Merlin Becker
 description=an 1-bit pixel and tile editor 
 bundleID=de.merlinbecker.hansdither
 version=0.2.0
-buildNumber=6
+buildNumber=9
 imagePath=./images/launcher
 contentWarning=This game contains pixelart
