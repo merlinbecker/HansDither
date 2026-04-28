@@ -143,7 +143,7 @@ end
 function LoadRoomGrid:draw(gameName, keyboardVisible, keyboardText)
     local gfx = self.config.gfx
     gfx.clear(gfx.kColorWhite)
-    gfx.drawText(gameName or "Hans Dither", 4, 2)
+    gfx.drawText(gameName or "Hans-Dither", 4, 2)
     gfx.setColor(gfx.kColorBlack)
         gfx.drawLine(0, 24, 399, 24)
         self.config.gridView:drawInRect(1, 25, 398, 182)
@@ -157,7 +157,7 @@ function LoadRoomGrid:draw(gameName, keyboardVisible, keyboardText)
         local idx = (row - 1) * self.config.gridCols + col
         if idx == 1 then
             if #self.roomNames >= self.config.maxRooms then
-                infoText = "[Max. " .. self.config.maxRooms .. " Rooms erreicht]"
+                infoText = "[Max. " .. self.config.maxRooms .. " Rooms reached]"
             else
                 infoText = "[+ Neuer Room]"
             end

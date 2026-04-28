@@ -36,7 +36,7 @@ end
 function loadingBar.new()
     local instance = setmetatable({}, loadingBar)
     instance.visible = false
-    instance.title = "Bitte warten..."
+    instance.title = "Loading..."
     instance.detail = ""
     instance.progress = 0
     instance.failed = false
@@ -46,7 +46,7 @@ end
 function loadingBar:show(title, detailText)
     self.visible = true
     self.failed = false
-    self.title = title or self.title or "Bitte warten..."
+    self.title = title or self.title or "Loading..."
     self.detail = detailText or ""
     self.progress = 0
 end
@@ -89,7 +89,7 @@ function loadingBar:fail(detailText)
     self.visible = true
     self.failed = true
     self.progress = 1
-    self.detail = detailText or "Fehler"
+    self.detail = detailText or "Error"
 end
 
 function loadingBar:isVisible()
@@ -121,7 +121,7 @@ function loadingBar:draw()
 
     local detailText = self.detail
     if self.failed then
-        detailText = "Fehler: " .. tostring(detailText or "")
+        detailText = "Error: " .. tostring(detailText or "")
     end
     gfx.drawTextAligned(truncateText(detailText, 28), SCREEN_W // 2, boxY + 31, kTextAlignment.center)
 end

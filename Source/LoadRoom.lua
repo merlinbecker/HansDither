@@ -59,7 +59,7 @@ local function startLoadOperation()
         return
     end
 
-    roomOperation:start("Lade Spiel...", "Speicherstand lesen", function()
+    roomOperation:start("Loading...", "reading save", function()
         return coroutine.create(function()
             local function yieldProgress(fraction, detail)
                 roomLoadingBar:updateFraction(fraction, detail)
@@ -78,13 +78,13 @@ local function startLoadOperation()
             gridView:setNumberOfRows(roomGrid:getGridRows())
             gridView:setSelection(1, 1, 1)
             updateMenuItems()
-            roomLoadingBar:updateFraction(1, "Kein Speicherstand gefunden")
+            roomLoadingBar:updateFraction(1, "no save found")
             needsRedraw = true
             coroutine.yield()
             return
         end
 
-            roomLoadingBar:updateFraction(0.1, "Dokument analysieren")
+            roomLoadingBar:updateFraction(0.1, "analyzing...")
             needsRedraw = true
             coroutine.yield()
 
@@ -119,12 +119,12 @@ local function startLoadOperation()
         currentGameData = preparedGameData
         currentPulpState = preparedPulpState
 
-            roomLoadingBar:updateFraction(0.93, "Rooms aktualisieren")
+            roomLoadingBar:updateFraction(0.93, "updating rooms")
             roomGrid:refreshRoomNames(currentGameData)
             needsRedraw = true
             coroutine.yield()
 
-            roomLoadingBar:updateFraction(0.97, "Vorschaubilder laden")
+            roomLoadingBar:updateFraction(0.97, "loading previews")
             roomGrid:loadRoomPreviews(currentGameData, currentGameName)
             gridView:setNumberOfRows(roomGrid:getGridRows())
             gridView:setSelection(1, 1, 1)
@@ -132,7 +132,7 @@ local function startLoadOperation()
             needsRedraw = true
             coroutine.yield()
 
-            roomLoadingBar:updateFraction(1, "Fertig")
+            roomLoadingBar:updateFraction(1, "Done")
             needsRedraw = true
             coroutine.yield()
         end)
@@ -206,7 +206,7 @@ updateMenuItems = function()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
     -- "Zurueck" zum GameRoom (immer sichtbar)
-    menu:addMenuItem("Zurueck", function()
+    menu:addMenuItem("Back", function()
         if backRoom and switchRoomFunction then
             switchRoomFunction(backRoom)
         end

@@ -36,7 +36,7 @@ local function extractWorkingStateFromDocument(document, gameName, progressCallb
         }
 
         if progressCallback and (internalIndex == totalTiles or internalIndex == 1 or internalIndex % 8 == 0) then
-            progressCallback("tiles", internalIndex, totalTiles, "Lade Tiles " .. internalIndex .. " von " .. totalTiles)
+            progressCallback("tiles", internalIndex, totalTiles, "tiles " .. internalIndex .. " / " .. totalTiles)
         end
     end
 
@@ -52,7 +52,7 @@ local function extractWorkingStateFromDocument(document, gameName, progressCallb
             tiles = mappedTiles
         }
         if progressCallback then
-            progressCallback("rooms", roomIndex, totalRooms, "Lade Rooms " .. roomIndex .. " von " .. totalRooms)
+            progressCallback("rooms", roomIndex, totalRooms, "Rooms " .. roomIndex .. " / " .. totalRooms)
         end
     end
 

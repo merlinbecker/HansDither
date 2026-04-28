@@ -309,9 +309,9 @@ function GameRoom:update()
             local idx = (row - 1) * GRID_COLS + col
             if idx == 1 then
                 if #savedGames >= MAX_GAMES then
-                    infoText = "[Max. " .. MAX_GAMES .. " Games erreicht]"
+                    infoText = "[Max. " .. MAX_GAMES .. " Games reached]"
                 else
-                    infoText = "[+ Neues Game]"
+                    infoText = "[+ New Game]"
                 end
             else
                 infoText = savedGames[idx - 1] or ""
