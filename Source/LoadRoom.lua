@@ -217,7 +217,7 @@ updateMenuItems = function()
     if linearIndex > 1 and #roomNames > 1 then
         local roomIdx = linearIndex - 1
         if roomIdx <= #roomNames then
-            menu:addMenuItem("loeschen", function()
+            menu:addMenuItem("delete", function()
                 deleteRoom(roomIdx)
                 gridView:setNumberOfRows(roomGrid:getGridRows())
                 gridView:setSelection(1, 1, 1)
