@@ -1,3 +1,8 @@
+---
+publish_url: https://merlinbecker.itch.io/hans-dither/devlog/1471690/no-more-excuses-how-the-playdate-led-me-to-pixel-art-and-pulp
+publish_date: 2026-03-27
+---
+
 # No More Excuses: How the Playdate Led Me to Pixel Art and Pulp
 
 When I held the [*Playdate*](https://play.date/) in my hands at the end of 2025, it wasn’t the design by [*Teenage Engineering*](https://teenage.engineering/) or the innovative crank control that fascinated me. It was the 1-bit graphics—this minimalist aesthetic—that instantly transported me back to my childhood: to the Game Boy, to the Macintosh SE where I once typed school assignments. The well-documented SDK in Lua and C made it clear: I wanted to create something on this device. While I had no shortage of ideas and software development was my daily bread, I lacked the artistic component. I had never created pixel art myself.
