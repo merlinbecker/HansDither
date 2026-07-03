@@ -10,7 +10,18 @@ Hans Dither ist ein minimalistischer 1-Bit-Pixel- und Tile-Editor fuer Playdate.
 
 Das Projekt adressiert bewusst einen Lern- und Kreativkontext: Pixelart-Entwicklung direkt auf Hardware, mit reduzierten Mitteln und klaren Interaktionen.
 
-Stand dieser Dokumentation: Architektur- und Implementierungsstand fuer Version 0.8. Die arc42 beschreibt damit den aktuellen Codezustand als Grundlage fuer den naechsten Planungsschnitt.
+Stand dieser Dokumentation: Architektur- und Implementierungsstand der Version 0.2.x. Die arc42 beschreibt den aktuellen Codezustand als Grundlage fuer den Planungsschnitt v0.3.0.
+
+### Planungsschnitt v0.3.0 (beschlossen, in Umsetzung)
+Mit v0.3.0 wird das Konzept grundlegend neu ausgerichtet (siehe AD-016 bis AD-020 in Kapitel 9 sowie die Feature-Specs unter `specs/`):
+
+- Native Zielaufloesung 400x240 mit 16x16-Tiles (statt Pulp-Arbeitsraum 200x120 mit 8x8-Tiles).
+- Speicherformat: PDI-Tilemap (deduplizierte Tiles) + Positions-JSON je Animationsframe; das Pulp-JSON-Format entfaellt.
+- Wegfall der Games/Rooms-Hierarchie: flache Bilder, direkter Editor-Einstieg, 3x3-Kreis-Auswahlscreen mit endlosem Scrollen.
+- Animation: Crank steuert Frames (max. 12); B+Crank zoomt durch drei Zoomstufen (2x2-Malen im Zoom Room, 1x1 im Pixel Room).
+- SDK-first-Prinzip und native Formate sind in der Projekt-Constitution (`.specify/memory/constitution.md`) verankert.
+
+Kapitel, die den Ist-Zustand beschreiben (3, 5-8, 10), werden je Umsetzungsschnitt der v0.3.0-Features aktualisiert.
 
 ### Quellen im Projekt
 - README (Projektidee, Bedienung, Zielsetzung)

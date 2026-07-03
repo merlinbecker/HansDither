@@ -30,8 +30,18 @@
 | T-08 | Importer hat nur manuelle Regressionstests | Browser-Tool entwickelt sich getrennt vom Runtime-Code | Kleine Testfaellsammlung mit bekannten JSON/PNG-Paaren versionieren |
 | T-09 | Duales Koordinatenmodell nur implizit im Code verteilt | Anzeige-Scaling steckt in Konstanten, Buffer-Rendering und Room-spezifischen Geometrien | Mittelfristig zentrale Render-/Geometry-Konstanten oder DisplayConfig einfuehren |
 
-## 11.3 Priorisierung
+## 11.3 Risiken aus dem v0.3.0-Planungsschnitt
 
-- Kurzfristig: R-01, R-05, R-08, R-09, R-11, T-05, T-07
-- Mittelfristig: T-04, R-04, T-09
-- Langfristig: T-03, T-01, T-06, R-10, T-08
+| ID | Risiko | Auswirkung | Gegenmassnahme |
+|---|---|---|---|
+| R-12 | JSON-Positionsablage je Frame koennte bei 12 Frames x 375 Positionen zu gross/langsam werden | Lange Save-/Ladezeiten, Speicherverbrauch | Alternative Ablageformen in der Planungsphase von Spec 001 evaluieren (offene Konzeptfrage); Ergebnis als AD dokumentieren |
+| R-13 | Unbegrenzte Bildanzahl + bis zu 12 Frames pro Bild | Wachsende PDI-/JSON-Groessen, laengere Ladezeiten im Auswahlscreen | Vorschaubilder separat persistieren, Bilder lazy laden, Fortschrittsanzeige beibehalten |
+| R-14 | Verlust der Pulp-Interoperabilitaet durch Formatwechsel | Alte Saves und Importer-Tool sind mit v0.3.0 nicht nutzbar | Bewusst akzeptiert (Nicht-Ziel Migration); alte Dateien werden ignoriert, nicht geloescht; Importer-Anpassung als spaeteres Vorhaben |
+
+Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die Playdate-Hardware ist 400x240, "420x240" war ein Versprecher (siehe AD-016). Mit Umsetzung von AD-016 entfallen R-11 und T-09; mit AD-018 entfaellt R-04; mit AD-017 entfallen R-02 und R-10.
+
+## 11.4 Priorisierung
+
+- Kurzfristig: R-01, R-05, R-08, R-09, R-11, R-12, T-05, T-07
+- Mittelfristig: T-04, R-04, R-13, T-09
+- Langfristig: T-03, T-01, T-06, R-10, R-14, T-08

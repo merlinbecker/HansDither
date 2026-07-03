@@ -29,3 +29,15 @@
 | Datenmodell extern | Speichern muss bestehende Pulp-Strukturen/Felder erhalten (Merge-Ansatz). |
 | Basistiles | Basis-Tiles 1..3 bleiben erhalten und werden bei Kompaktierung nicht entfernt. |
 | Grenzen | Maximale Anzahl Games und Rooms ist derzeit funktional begrenzt (jeweils 6 im UI). |
+
+## 2.4 Randbedingungen aus der Constitution (gueltig ab v0.3.0)
+
+Quelle: `.specify/memory/constitution.md` (Version 1.0.0).
+
+| Randbedingung | Beschreibung |
+|---|---|
+| SDK-first | Vor jeder Eigenimplementierung wird geprueft, ob das offizielle Playdate SDK die Funktion bietet oder abbilden kann; SDK-Entscheidungen werden in Kapitel 9 dokumentiert. |
+| Native Formate & PDI | Persistenz ueber PDI-Tilemap + Positions-JSON je Frame; Tiles via Hashing dedupliziert; kein Pulp-JSON-Speicherformat mehr. |
+| Native Aufloesung | 400x240 Pixel, 16x16-Tiles (25x15-Raster); kein separater Pulp-Arbeitsraum mehr. |
+| Harte Grenzen | Maximal 12 Animationsframes pro Bild; Anzahl der Bilder unbegrenzt. |
+| arc42-Pflege | Betroffene arc42-Kapitel werden im selben Aenderungsschnitt aktualisiert. |

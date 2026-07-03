@@ -42,6 +42,18 @@
 
 - Kein Cloud-Sync oder externer Datenaustausch.
 - Kein Undo/Redo-Stack.
-- Keine komplexen Multi-Frame-Animationstools im Editor-UI.
 - Keine Netzwerk- oder Mehrbenutzerfunktionen.
 - Keine direkte Runtime-Integration des Importers ins Playdate-UI (bewusst separates Offline-Werkzeug).
+- Keine Migration alter Pulp-Spielstaende nach v0.3.0 (bewusst ausserhalb des Umfangs).
+
+## 4.5 Strategische Neuausrichtung v0.3.0 (beschlossen)
+
+Der Planungsschnitt v0.3.0 ersetzt die Leitentscheidungen 3 und 10 sowie Teile von 8:
+
+1. SDK-first (Constitution Prinzip I): Das offizielle SDK wird maximal ausgenutzt; Eigenimplementierungen nur, wenn das SDK die Funktion nicht abdeckt. SDK-Entscheidungen werden hier und in Kapitel 9 benannt.
+2. Eine einzige Aufloesungsebene: Daten und Anzeige arbeiten nativ auf 400x240 mit 16x16-Tiles (25x15-Raster). Das duale Aufloesungskonzept (Pulp-Arbeitsraum + Anzeige-Scaling) entfaellt.
+3. Natives Speicherformat: PDI-Tilemap (deduplizierte Tiles) + Positions-JSON je Frame ersetzt das Pulp-JSON-Dokument samt Merge-Logik (PulpGameIO* entfaellt).
+4. Verkuerzter Workflow: Startscreen -> ein Auswahlscreen (3x3-Kreisraster, endloses Scrollen, unbegrenzt viele Bilder) -> Editor. Die Rooms-Ebene und der globale Tile-Picker entfallen.
+5. Animation als Kernfeature: Crank steuert Frames (max. 12, Kopie-Semantik, Rotation); B+Crank steuert die drei Zoomstufen (Malbreite 16x16-Tile / 2x2-Block / 1x1-Pixel).
+
+Damit entfaellt das bisherige Nicht-Ziel "keine Multi-Frame-Animationstools"; die Frame-Verwaltung wird bewusst minimal gehalten (Prinzip IV der Constitution). Die Feature-Spezifikationen liegen unter `specs/001-pdi-storage-format`, `specs/002-start-selection-screen` und `specs/003-editor-animation-zoom`.
