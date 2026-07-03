@@ -1,50 +1,120 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+- Version change: (Template, unversioniert) → 1.0.0
+- Modified principles: alle Platzhalter ersetzt (Erstausfüllung des Templates)
+- Added sections:
+  - I. SDK-First (NICHT VERHANDELBAR)
+  - II. Native Formate & PDI
+  - III. Architekturdokumentation in arc42
+  - IV. Einfachheit vor Ausbau
+  - Technische Randbedingungen
+  - Entwicklungs-Workflow
+  - Governance (konkretisiert)
+- Removed sections: keine (Template-Kommentare entfernt)
+- Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md (Constitution Check ist generisch, kompatibel)
+  - ✅ .specify/templates/spec-template.md (keine constitution-spezifischen Pflichtabschnitte nötig)
+  - ✅ .specify/templates/tasks-template.md (keine neuen Task-Kategorien erforderlich)
+- Follow-up TODOs: keine
+-->
+
+# Hans Dither Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. SDK-First (NICHT VERHANDELBAR)
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+Das offizielle Playdate SDK MUSS maximal ausgenutzt werden. Vor jeder
+Eigenimplementierung MUSS geprüft werden, ob das SDK die Funktion bereits
+bietet oder ob sie sich mit SDK-Mitteln (CoreLibs: graphics, sprites,
+imagetable, tilemap, animation, ui, crank, timer, datastore, file, json)
+abbilden lässt. Es DARF nur Code außerhalb des SDK entstehen, wenn das SDK
+die Funktion nachweislich nicht abdeckt; diese Abweichung MUSS begründet
+werden. Jede wesentliche SDK-Nutzung und jede Entscheidung für oder gegen
+eine SDK-Funktion MUSS in der arc42-Dokumentation benannt werden
+(insbesondere Kapitel 4 Lösungsstrategie und Kapitel 9
+Architekturentscheidungen).
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+Begründung: So wenig wie möglich außerhalb des SDK zu coden reduziert
+Wartungsaufwand, Fehlerquellen und Performance-Risiken auf der begrenzten
+Zielhardware und hält das Projekt nahe an der offiziellen Plattform.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### II. Native Formate & PDI
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+Hans Dither hält sich an die nativen Playdate-Formate. Konkret:
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+- Zielauflösung ist nativ 400×240 Pixel; ein Tile ist 16×16 Pixel.
+- Persistenz erfolgt NICHT mehr im Pulp-JSON-Format. Das Speicherformat
+  ist eine PDI-Tilemap (deduplizierte Tiles als PDI/Imagetable) plus eine
+  JSON-Datei mit den Positionen der 16×16-Tiles je Animationsframe.
+- Tiles MÜSSEN vor dem Speichern via Hashing dedupliziert werden; kein
+  Tile wird doppelt abgelegt.
+- Neue Datenformate MÜSSEN PDI-fähig sein oder auf SDK-Serialisierung
+  (playdate.datastore / playdate.json) aufbauen.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Begründung: Native Formate laden schnell über SDK-Funktionen, vermeiden
+eigene Parser und machen den Editor unabhängig vom Pulp-Ökosystem.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### III. Architekturdokumentation in arc42
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+Die Architektur wird in `arc42/` auf Deutsch gepflegt. Jede
+Architekturentscheidung (insbesondere SDK-Nutzung, Formatentscheidungen,
+Modulschnitte) MUSS als Architekturentscheidung in Kapitel 9 festgehalten
+werden. Bei Änderungen am Systemverhalten MÜSSEN die betroffenen
+arc42-Kapitel im selben Änderungsschnitt aktualisiert werden, sodass die
+Dokumentation den Ist-Zustand des Codes beschreibt.
+
+Begründung: Als Einzelentwickler-Lernprojekt ist die arc42-Doku das
+Gedächtnis des Projekts; veraltete Doku verliert ihren Zweck.
+
+### IV. Einfachheit vor Ausbau
+
+Features werden in kleinen, klar begrenzten Inkrementen entwickelt
+(YAGNI). Harte, einfache Grenzen sind erlaubt und erwünscht (z. B. maximal
+12 Animationsframes). Komplexität, die nicht direkt einem Editor-Workflow
+dient, MUSS vermieden oder begründet werden. Bestehende bewährte Muster
+(Room-Architektur mit switchRoom, zustandsbasiertes Redraw via
+needsRedraw, Coroutine-basierte Langläufer mit Fortschrittsanzeige)
+SOLLEN wiederverwendet statt neu erfunden werden.
+
+Begründung: Einzelentwicklung mit begrenzter Zeit; Lesbarkeit und
+Iterationsgeschwindigkeit schlagen Feature-Vollständigkeit.
+
+## Technische Randbedingungen
+
+- Sprache/Runtime: Lua auf Playdate (Device und Simulator), Build über
+  das offizielle Playdate SDK (`pdc`).
+- Eingaben: D-Pad, A/B-Buttons und Crank sind die einzigen
+  Eingabegeräte; jede Funktion MUSS damit erreichbar sein.
+- Persistenz: ausschließlich über `playdate.file` / `playdate.datastore`
+  unter dem App-Datenverzeichnis; keine Netzwerkabhängigkeiten.
+- Performance: Interaktionen müssen auf der Zielhardware flüssig bleiben;
+  langlaufende Save/Load-Operationen laufen kooperativ (Coroutine +
+  Fortschrittsanzeige), nicht blockierend in einem Frame.
+- Dokumentationssprache: Deutsch für arc42; Code-Bezeichner und
+  UI-Texte Englisch.
+
+## Entwicklungs-Workflow
+
+- Änderungen folgen dem Spec-Kit-Ablauf: Constitution → Spec → Plan →
+  Tasks → Implementierung.
+- Jede Feature-Spezifikation MUSS gegen die Prinzipien I–IV geprüft
+  werden (Constitution Check im Plan); Verstöße erfordern eine explizit
+  dokumentierte Begründung oder eine Anpassung des Designs.
+- Verifikation erfolgt mindestens im Playdate Simulator; hardware-nahe
+  Funktionen (Crank-Feinverhalten, Performance) werden zusätzlich auf
+  dem Gerät geprüft.
+- arc42 wird im selben Feature-Branch mitgezogen (Prinzip III).
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+Diese Constitution hat Vorrang vor allen anderen Projektpraktiken.
+Änderungen an der Constitution erfordern: (1) dokumentierte Begründung,
+(2) Versionserhöhung nach semantischer Versionierung (MAJOR:
+Prinzip-Entfernung oder -Umdeutung; MINOR: neues Prinzip oder wesentliche
+Erweiterung; PATCH: Klarstellungen), (3) Prüfung der abhängigen Templates
+unter `.specify/templates/` auf Konsistenz. Reviews von Plans und Specs
+MÜSSEN die Einhaltung der Prinzipien verifizieren; nicht begründbare
+Komplexität wird abgelehnt.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-03
