@@ -213,6 +213,20 @@ function TileRoom:setFileName(name)
     currentFileName = name
 end
 
+-- Setzt die Bild-ID für den neuen v0.3.0-Workflow (Stub für Spec 002/003)
+-- Wird von SelectionRoom aufgerufen, um ein Bild zu laden
+function TileRoom:setImage(id)
+    if not id then return end
+    
+    -- Speichere die Bild-ID für zukünftiges Speichern
+    currentImageId = id
+    
+    -- TODO: Hier sollte später der neue ImageStoreCodec.newLoadOperation aufgerufen werden
+    -- Für Spec 002: nur die ID speichern und Text anzeigen
+    print("TileRoom: Loading image with id:", id)
+    currentFileName = id
+end
+
 -- Setzt Game-Kontext: name + v2-Daten, baut Imagetable aus tiles/frames auf.
 -- Wird von LoadRoom aufgerufen, bevor ein Room geladen wird.
 function TileRoom:setGame(name, data, externalPulpState)

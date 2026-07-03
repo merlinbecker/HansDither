@@ -21,11 +21,30 @@ local function getMetadataRows()
     }
 end
 
+local backgroundImage = nil
+
 local function drawCheckerBackground()
     -- Dithered background using Bayer 8x8
     gfx.setDitherPattern(0.5, gfx.image.kDitherTypeBayer8x8)
     gfx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
     gfx.setColor(gfx.kColorBlack)
+end
+
+-- Zeichnet den Hintergrund (letztes bearbeitetes Bild oder Dither-Fallback)
+function TitleRoom:drawBackground()
+    -- Versuche, das zuletzt bearbeitete Bild zu laden
+    import "Source/ImageStore"
+    local preview = ImageStore.getLastEditedPreview()
+    
+    if preview then
+        -- Zeichne das Preview-Bild vollflächig
+        gfx.drawImage(preview, 0, 0)
+        backgroundImage = preview
+    else
+        -- Fallback: Bayer-Dither
+        drawCheckerBackground()
+        backgroundImage = nil
+    end
 end
 
 local function drawPanelLine(text, x, y, w)
@@ -48,9 +67,10 @@ end
 -- Update logic for StartRaum
 function TitleRoom:update()
     if needsRedraw then
-        drawCheckerBackground()
+        -- Zeichne Hintergrund (letztes bearbeitetes Bild oder Dither-Fallback)
+        TitleRoom:drawBackground()
 
-        drawPanelLine("Hans-Dither", 88, 26, 224)
+        drawPanelLine("Hans Dither, 1 bit Pixel 'n Tile Editor", 88, 26, 224)
         drawPanelLine(metadataRows[1], 28, 66, 344)
         drawPanelLine(metadataRows[2], 28, 90, 344)
         drawPanelLine(metadataRows[3], 28, 114, 344)
@@ -59,7 +79,7 @@ function TitleRoom:update()
         gfx.setColor(gfx.kColorWhite)
         gfx.fillRect(8, footerY, SCREEN_WIDTH - 16, 16)
         gfx.setColor(gfx.kColorBlack)
-        gfx.drawText("still under development, press (A)", 12, footerY + 3)
+        gfx.drawText(metadataRows[3] .. " - still under development - Press A", 12, footerY + 3)
         print("Drawing TitleRoom")
         needsRedraw = false
     end
@@ -67,6 +87,7 @@ end
 
 function TitleRoom:entered()
     metadataRows = getMetadataRows()
+    backgroundImage = nil  -- Reset Hintergrund-Cache
     needsRedraw = true
     print("Entered TitleRoom")
 end
