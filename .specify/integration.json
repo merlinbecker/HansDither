@@ -1,0 +1,25 @@
+{
+  "version": "0.11.3.dev0",
+  "integration_state_schema": 1,
+  "installed_integrations": [
+    "copilot",
+    "claude",
+    "vibe"
+  ],
+  "integration_settings": {
+    "copilot": {
+      "script": "sh",
+      "invoke_separator": "."
+    },
+    "claude": {
+      "script": "sh",
+      "invoke_separator": "-"
+    },
+    "vibe": {
+      "script": "sh",
+      "invoke_separator": "-"
+    }
+  },
+  "integration": "copilot",
+  "default_integration": "copilot"
+}

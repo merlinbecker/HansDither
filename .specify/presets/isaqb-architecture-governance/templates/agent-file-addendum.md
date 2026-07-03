@@ -1,0 +1,21 @@
+## iSAQB Architecture Governance Agent Guidance
+
+- Treat architecture as an explicit work product when a task affects
+  structure, interfaces, quality attributes, runtime behavior,
+  deployment, or long-term maintainability.
+- Use lightweight iSAQB/CPSA-F and arc42-compatible documentation under
+  `docs/architecture/`.
+- Prefer concrete quality scenarios over generic quality claims.
+- Create ADRs for architecturally significant decisions and record
+  alternatives considered.
+- Record architecture risks and technical debt with mitigation and review
+  trigger.
+- Keep this preset separate from secure architecture. If trust
+  boundaries, threat modeling, Zero Trust, or security program maturity
+  are involved, also apply `architecture-governance`.
+- Document every `N/A` decision with rationale.
+
+## Audit-Ready Spec-Kit Evidence
+
+- When this preset applies, generated or updated Markdown evidence must include the Spec-Kit run, owner/reviewer, evidence path, applicability decision, N/A rationale where relevant, and open follow-up tracking.
+- Do not treat an unfilled starter template as evidence. Evidence exists only after the current run has recorded concrete decisions, paths, and rationale.

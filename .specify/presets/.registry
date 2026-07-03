@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "presets": {
+    "isaqb-architecture-governance": {
+      "version": "0.2.0",
+      "source": "local",
+      "manifest_hash": "sha256:4c17697f7cb865da6ad2ac7386a37250c7ac642833dd2c30a2a6919ef998f655",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.specify",
+          "speckit.plan",
+          "speckit.tasks"
+        ],
+        "copilot": [
+          "speckit.specify",
+          "speckit.plan",
+          "speckit.tasks"
+        ],
+        "vibe": [
+          "speckit.specify",
+          "speckit.plan",
+          "speckit.tasks"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-07-03T18:56:05.756955+00:00"
+    }
+  }
+}
