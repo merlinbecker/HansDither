@@ -1,3 +1,6 @@
+-- loadingBar.lua — modales Fortschritts-Overlay für Save/Load-Operationen.
+-- Wird von RoomOperation gesteuert (show/setDetail/finish/fail) und vom
+-- jeweiligen Raum in dessen draw() gezeichnet.
 import "CoreLibs/graphics"
 
 local gfx = playdate.graphics

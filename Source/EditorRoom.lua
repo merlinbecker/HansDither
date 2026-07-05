@@ -1,616 +1,552 @@
 -- EditorRoom.lua
--- Neuer 16x16-Tile-Editor für Hans Dither v0.3.0
--- Ersetzt den alten TileRoom mit Pulp-Kopplung
+-- Nativer 16x16-Tile-Editor für Hans Dither v0.3.0 (AD-016/AD-019):
+-- 25x15-Raster auf 400x240, Crank = Animationsframes, B+Crank = Zoomkette.
+-- Ersetzt den alten TileRoom mit Pulp-Kopplung.
 
 import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/timer"
+import "CoreLibs/crank"
 import "CoreLibs/object"
+import "Bauchbinde"
+import "PencilCursor"
+import "ImageStoreCodec"
+import "RoomOperation"
+import "loadingBar"
 
 local gfx = playdate.graphics
 
 EditorRoom = {}
 
--- Abhängigkeiten (werden über init() injiziert)
+-- ── Konstanten ────────────────────────────────────────────────────────────────
+
+local GRID_COLS = 25
+local GRID_ROWS = 15
+local TILE_PX = 16
+local MAX_FRAMES = 12
+
+-- Zoom-Trigger: Tick-Akkumulation bei gehaltenem B, Schwelle wie ZoomRoom/PixelRoom
+local ZOOM_TICK_THRESHOLD = 4
+
+-- SDK-Key-Repeat (Constitution I) statt eigener Timer-Ketten
+local KEY_REPEAT_DELAY_MS = 300
+local KEY_REPEAT_MS = 100
+
+local STATUS_MESSAGE_MS = 4000
+
+-- ── Abhängigkeiten (via init() injiziert) ─────────────────────────────────────
+
 local switchRoomFunction
 local zoomRoom
 local selectionRoom
 
--- Zustand (gemäß data-model.md)
-local imageData = nil           -- {id, name, imagetable, frames, hashIndex}
-local currentFrame = 1          -- 1..#frames
-local tilemap = nil             -- playdate.graphics.tilemap (25x15)
-local cursor = {x = 1, y = 1}    -- 1..25 / 1..15 (tile-koordinaten)
-local activeTile = nil          -- number/nil: Pipetten-Auswahl; nil = Toggle-Modus
-local zoomTickAccu = 0          -- Tick-Akkumulator für B+Crank
-local showGrid = true           -- Grid-Overlay an/aus
-local savingOperation = nil    -- aktuelle Save-Operation
-local loadingOperation = nil    -- aktuelle Load-Operation
+-- ── Zustand (data-model.md "EditorRoom-Zustand") ──────────────────────────────
+
+local imageData = nil            -- {id, name, imagetable, frames, hashIndex}
+local currentFrame = 1           -- 1..#frames
+local tilemap = nil              -- playdate.graphics.tilemap (25x15)
+local cursor = { x = 1, y = 1 }  -- Tile-Koordinaten 1..25 / 1..15
+local activeTile = nil           -- number/nil: Pipetten-Auswahl; nil = Toggle-Modus
+local zoomTickAccu = 0           -- Tick-Akkumulator für B+Crank; Reset bei B-Release
+local bUsedForZoom = false       -- Crank während B-Hold unterdrückt die Pipette
+local showGrid = true            -- Grid-Overlay an/aus (Checkmark-Menüeintrag)
+local loadingOperation = nil     -- RoomOperation während des Ladens
+local savingOperation = nil      -- RoomOperation während "save + exit"
 local needsRedraw = true
-local pendingImageId = nil      -- ID für asynchrones Laden
+local pendingImageId = nil       -- via setImage(id), geladen in entered()
+local statusMessage = nil        -- Fehlerstatus (Bauchbinde links)
+local statusUntilMs = 0
 
--- B-Throw Variablen
-local zoomBTimer = nil
-local zoomBHeld = false
-
--- Richtungshalten für Cursor-Bewegung
-local moveTimer = nil
-local moveDirection = nil
-local moveRepeatDelay = 0.3     -- Sekunden bis zur Wiederholung
-local moveRepeatInterval = 0.1 -- Sekunden zwischen Wiederholungen
-
--- Lädt die Bauchbinde für Frame-Anzeige
-import "Source/Bauchbinde"
+local overlay = loadingBar.new()
 local bauchbinde = Bauchbinde.new(gfx)
 
--- Lädt den PencilCursor
-import "Source/PencilCursor"
+-- keyRepeat-Timer je Richtung
+local moveTimers = {}
 
--- Initialisiert den Room
-function EditorRoom:init(switchRoom, zoomRoomReference, selectionRoomReference)
-    switchRoomFunction = switchRoom
-    zoomRoom = zoomRoomReference
-    selectionRoom = selectionRoomReference
+-- ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+
+local function cursorCellIndex()
+    return (cursor.y - 1) * GRID_COLS + cursor.x
+end
+
+local function operationRunning()
+    return loadingOperation ~= nil or savingOperation ~= nil
+end
+
+local function inputBlocked()
+    return operationRunning() or imageData == nil
+end
+
+-- Sichtbarkeits-Vergleich zweier Tiles: gemeinsame Implementierung im Codec
+local imagesEqual = ImageStoreCodec.imagesVisiblyEqual
+
+local function showStatus(text)
+    statusMessage = text
+    statusUntilMs = playdate.getCurrentTimeMilliseconds() + STATUS_MESSAGE_MS
     needsRedraw = true
-    
-    -- Initialisiere Bauchbinde
-    bauchbinde:init()
-    
-    print("EditorRoom initialized")
 end
 
--- Setzt die Bild-ID für den Editor
-function EditorRoom:setImage(id)
-    if not id then return end
-    
-    -- Speichere die ID für späteres Laden
-    pendingImageId = id
-    print("EditorRoom: Image ID set to:", id)
-end
-
--- Wird aufgerufen, wenn der Room betreten wird
-function EditorRoom:entered()
-    print("Entered EditorRoom")
-    
-    -- Startet Load-Operation wenn eine Bild-ID gesetzt ist
-    if pendingImageId then
-        EditorRoom:startLoadOperation(pendingImageId)
-        pendingImageId = nil
-    else
-        -- Kein Bild geladen - zurück zum Auswahlscreen
-        if switchRoomFunction and selectionRoom then
-            switchRoomFunction(selectionRoom)
-        end
+local function updateTilemapFrame()
+    if not tilemap or not imageData then return end
+    local frame = imageData.frames[currentFrame]
+    if frame and #frame == GRID_COLS * GRID_ROWS then
+        tilemap:setTiles(frame, GRID_COLS)
     end
 end
 
--- Startet die Load-Operation
-function EditorRoom:startLoadOperation(id)
-    import "Source/ImageStoreCodec"
-    import "Source/RoomOperation"
-    import "Source/loadingBar"
-    
-    -- Erstelle LoadingBar
-    local loadingBarInstance = loadingBar.new()
-    
-    -- Erstelle RoomOperation
-    local operation = RoomOperation.new(loadingBarInstance)
-    
-    -- Starte Load-Operation
-    local loadCo = ImageStoreCodec.newLoadOperation(id)
-    
-    operation:start("Lade Bild...", "Bitte warten", function()
-        return loadCo
-    end, function()
-        -- Erfolg: imageData ist geladen
-        local success, result = coroutine.resume(loadCo)
-        
-        while coroutine.status(loadCo) == "suspended" do
-            local phase = coroutine.resume(loadCo)
-            if phase then
-                loadingBarInstance:setDetail(phase)
-            end
-            success, result = coroutine.resume(loadCo)
+-- Hängt ein Tile an die Imagetable an; wächst die Table notfalls durch Neuaufbau.
+local function appendTileImage(img)
+    local it = imageData.imagetable
+    local n = it:getLength()
+    local ok = pcall(function() it:setImage(n + 1, img) end)
+    if not ok or it:getLength() < n + 1 then
+        local grown = gfx.imagetable.new(n + 1)
+        for i = 1, n do
+            grown:setImage(i, it:getImage(i))
         end
-        
-        if success and result then
-            EditorRoom:handleLoadSuccess(result)
-        else
-            EditorRoom:handleLoadError(result or "Unknown error")
+        grown:setImage(n + 1, img)
+        imageData.imagetable = grown
+        if tilemap then
+            tilemap:setImageTable(grown)
         end
-    end)
-    
-    loadingOperation = operation
+    end
+    return n + 1
 end
 
--- Behandelt erfolgreichen Load
-function EditorRoom:handleLoadSuccess(imageDataResult)
-    imageData = imageDataResult
-    currentFrame = 1
-    activeTile = nil
-    zoomTickAccu = 0
+-- ── Mal-Operationen (data-model.md) ───────────────────────────────────────────
+
+local function setCell(idx)
+    imageData.frames[currentFrame][cursorCellIndex()] = idx
+    tilemap:setTileAtPosition(cursor.x, cursor.y, idx)
     needsRedraw = true
-    
-    -- Tilemap aufbauen
-    EditorRoom:buildTilemap()
-    
-    -- Systemmenü aufbauen
-    EditorRoom:buildSystemMenu()
-    
-    -- Bauchbinde aktualisieren
-    EditorRoom:updateBauchbinde()
-    
-    -- PencilCursor Position setzen (wird beim Zeichnen verwendet)
-    
-    loadingOperation = nil
-    print("EditorRoom: Load successful, image:", imageData.id, "frames:", #imageData.frames)
 end
 
--- Behandelt Load-Fehler
-function EditorRoom:handleLoadError(error)
+-- Pencil-Strich (FR-004): Der A-Druck legt fest, was der ganze Strich malt.
+-- Steht der Cursor beim Drücken auf dem aktiven Zeichen-Tile (bzw. Schwarz),
+-- malt der Strich Weiß (Radierer) — sonst das Zeichen-Tile (bzw. Schwarz).
+-- Solange A gehalten bleibt, malen auch Cursor-Bewegungen mit diesem Wert,
+-- statt jede Zelle einzeln zu invertieren.
+local strokeTileIdx = nil  -- Tile-Index des laufenden A-Strichs; nil = kein Strich
+
+local function beginStroke()
+    local current = imageData.frames[currentFrame][cursorCellIndex()]
+    if activeTile then
+        strokeTileIdx = (current == activeTile) and 1 or activeTile
+    else
+        strokeTileIdx = (current == 1) and 2 or 1
+    end
+    setCell(strokeTileIdx)
+end
+
+local function endStroke()
+    strokeTileIdx = nil
+end
+
+-- B (kurz): Pipette; auf Weiß (Index 1) -> Abwahl (FR-003, research.md R4)
+local function pipette()
+    local idx = imageData.frames[currentFrame][cursorCellIndex()]
+    if idx == 1 then
+        activeTile = nil
+    else
+        activeTile = idx
+    end
+    needsRedraw = true
+end
+
+-- ── Frame-Operationen (FR-006/FR-007, data-model.md) ──────────────────────────
+
+local function tickForward()
+    local frames = imageData.frames
+    if currentFrame < #frames then
+        currentFrame = currentFrame + 1
+    elseif #frames < MAX_FRAMES then
+        local copy = {}
+        for i, tileIndex in ipairs(frames[currentFrame]) do
+            copy[i] = tileIndex
+        end
+        frames[#frames + 1] = copy
+        currentFrame = currentFrame + 1
+    else
+        currentFrame = 1
+    end
+    updateTilemapFrame()
+    needsRedraw = true
+end
+
+local function tickBackward()
+    if currentFrame > 1 then
+        currentFrame = currentFrame - 1
+    else
+        currentFrame = #imageData.frames
+    end
+    updateTilemapFrame()
+    needsRedraw = true
+end
+
+-- FR-008a: aktiven Frame löschen, Nachrücker aktiv; letzter Frame gesperrt
+local function deleteCurrentFrame()
+    if inputBlocked() then return end
+    local frames = imageData.frames
+    if #frames <= 1 then return end
+    table.remove(frames, currentFrame)
+    if currentFrame > #frames then
+        currentFrame = #frames
+    end
+    updateTilemapFrame()
+    needsRedraw = true
+end
+
+-- ── Zoomkette (FR-009/FR-010, contracts Abschnitt 3) ──────────────────────────
+
+-- 3x3-Slot-Kontext um den Cursor + 24x24-gridState (2x2-Blockauslese des
+-- 48x48-Pixelkontexts); out-of-bounds-Slots sind markiert und nicht editierbar.
+local function buildZoomContext()
+    local frame = imageData.frames[currentFrame]
+    local slots = {}
+    for dr = -1, 1 do
+        local row = {}
+        for dc = -1, 1 do
+            local tx = cursor.x + dc
+            local ty = cursor.y + dr
+            local slot = { tileX = tx, tileY = ty }
+            if tx >= 1 and tx <= GRID_COLS and ty >= 1 and ty <= GRID_ROWS then
+                slot.oob = false
+                slot.frameIndexPos = (ty - 1) * GRID_COLS + tx
+                slot.originalIndex = frame[slot.frameIndexPos]
+                slot.originalImage = imageData.imagetable:getImage(slot.originalIndex)
+            else
+                slot.oob = true
+            end
+            row[dc + 2] = slot
+        end
+        slots[dr + 2] = row
+    end
+
+    local gridState = {}
+    for r = 1, 24 do
+        gridState[r] = {}
+        for c = 1, 24 do
+            local slot = slots[math.ceil(r / 8)][math.ceil(c / 8)]
+            if slot.oob or not slot.originalImage then
+                gridState[r][c] = false
+            else
+                local localR = ((r - 1) % 8)
+                local localC = ((c - 1) % 8)
+                gridState[r][c] = (slot.originalImage:sample(localC * 2, localR * 2) == gfx.kColorBlack)
+            end
+        end
+    end
+
+    return {
+        slots = slots,
+        gridState = gridState,
+        showGrid = showGrid,
+        imageData = imageData
+    }
+end
+
+local function zoomIn()
+    if not zoomRoom or inputBlocked() then return end
+    zoomRoom:setFromEditorContext(buildZoomContext())
+    switchRoomFunction(zoomRoom)
+end
+
+-- Commit beim Rauszoomen: Dedup über hashIndex + Pixelvergleich, sonst neues Tile;
+-- schreibt ausschließlich frames[currentFrame] (FR-012/FR-013).
+function EditorRoom:applyTileEdits(edits)
+    if not imageData then return end
+    local frame = imageData.frames[currentFrame]
+    for _, edit in ipairs(edits or {}) do
+        local hash = ImageStoreCodec.hashTile(edit.newImage)
+        local existing = imageData.hashIndex[hash]
+        local idx
+        if existing and imagesEqual(imageData.imagetable:getImage(existing), edit.newImage) then
+            idx = existing
+        else
+            idx = appendTileImage(edit.newImage)
+            imageData.hashIndex[hash] = idx
+        end
+        frame[edit.frameIndexPos] = idx
+    end
+    updateTilemapFrame()
+    needsRedraw = true
+end
+
+-- ── Load / Save (Contract E-01/E-02, research.md R1/R6/R7) ────────────────────
+
+local function handleLoadError(err)
     loadingOperation = nil
-    print("EditorRoom: Load failed:", error)
-    
-    -- Zurück zum Auswahlscreen
+    print("EditorRoom: Load failed:", tostring(err))
     if switchRoomFunction and selectionRoom then
         switchRoomFunction(selectionRoom)
     end
 end
 
--- Baut die Tilemap auf
-function EditorRoom:buildTilemap()
-    if not imageData or not imageData.imagetable then
+local function handleLoadSuccess(result)
+    loadingOperation = nil
+    if not result then
+        handleLoadError("Load lieferte keine Daten")
         return
     end
-    
-    -- Erstelle neue Tilemap
+    imageData = result
+    currentFrame = 1
+    activeTile = nil
+    zoomTickAccu = 0
+    cursor.x = 1
+    cursor.y = 1
+
     tilemap = gfx.tilemap.new()
     tilemap:setImageTable(imageData.imagetable)
-    tilemap:setSize(25, 15)
-    
-    -- Setze die Tiles für den aktuellen Frame
-    EditorRoom:updateTilemap()
+    tilemap:setSize(GRID_COLS, GRID_ROWS)
+    updateTilemapFrame()
+
+    needsRedraw = true
+    print("EditorRoom: Load successful, image:", imageData.id, "frames:", #imageData.frames)
 end
 
--- Aktualisiert die Tilemap mit dem aktuellen Frame
-function EditorRoom:updateTilemap()
-    if not tilemap or not imageData or not imageData.frames then
-        return
-    end
-    
-    local frame = imageData.frames[currentFrame]
-    if frame and #frame == 375 then
-        tilemap:setTiles(frame, 25)
-    end
+local function startLoadOperation(id)
+    local operation = RoomOperation.new(overlay)
+    loadingOperation = operation
+    operation:start("Loading...", "", function()
+        return ImageStoreCodec.newLoadOperation(id)
+    end, function(result)
+        handleLoadSuccess(result)
+    end)
 end
 
--- Baut das Systemmenü auf
-function EditorRoom:buildSystemMenu()
-    playdate.getSystemMenu():removeAllMenuItems()
-    
+local function handleSaveAndExit()
+    if inputBlocked() then return end
+    local operation = RoomOperation.new(overlay)
+    savingOperation = operation
+    operation:start("Saving...", "", function()
+        return ImageStoreCodec.newSaveOperation(imageData)
+    end, function()
+        savingOperation = nil
+        if switchRoomFunction and selectionRoom then
+            switchRoomFunction(selectionRoom)
+        end
+    end)
+end
+
+-- ── Systemmenü (research.md R6: genau 3 Slots) ────────────────────────────────
+
+local function buildSystemMenu()
     local menu = playdate.getSystemMenu()
-    
-    -- "save + exit" Menüpunkt
+    menu:removeAllMenuItems()
     menu:addMenuItem("save + exit", function()
-        EditorRoom:handleSaveAndExit()
+        handleSaveAndExit()
     end)
-    
-    -- "delete frame" Menüpunkt (nur bei > 1 Frame)
     menu:addMenuItem("delete frame", function()
-        EditorRoom:handleDeleteFrame()
+        deleteCurrentFrame()
     end)
-    
-    -- "show grid" Menüpunkt mit Checkmark
     menu:addCheckmarkMenuItem("show grid", showGrid, function(checked)
         showGrid = checked
         needsRedraw = true
     end)
 end
 
--- Aktualisiert die Bauchbinde
-function EditorRoom:updateBauchbinde()
-    if not imageData or not imageData.frames then return end
-    
-    return string.format("Frame %d/%d", currentFrame, #imageData.frames)
-end
+-- ── Cursor (FR-002: D-Pad, Halten wiederholt via SDK-keyRepeatTimer) ──────────
 
--- Behandelt Save + Exit
-function EditorRoom:handleSaveAndExit()
-    if not imageData then return end
-    
-    import "Source/ImageStoreCodec"
-    import "Source/RoomOperation"
-    import "Source/loadingBar"
-    
-    -- Erstelle LoadingBar
-    local loadingBarInstance = loadingBar.new()
-    
-    -- Erstelle RoomOperation
-    local operation = RoomOperation.new(loadingBarInstance)
-    savingOperation = operation
-    
-    -- Starte Save-Operation
-    local saveCo = ImageStoreCodec.newSaveOperation(EditorRoom:getImageData())
-    
-    operation:start("Speichere Bild...", "Bitte warten", function()
-        return saveCo
-    end, function()
-        -- Erfolg: zurück zum Auswahlscreen
-        EditorRoom:handleSaveSuccess()
-    end)
-end
-
--- Behandelt erfolgreichen Save
-function EditorRoom:handleSaveSuccess()
-    savingOperation = nil
-    
-    -- Zurück zum Auswahlscreen
-    if switchRoomFunction and selectionRoom then
-        switchRoomFunction(selectionRoom)
-    end
-end
-
--- Behandelt Löschen eines Frames
-function EditorRoom:handleDeleteFrame()
-    if not imageData or not imageData.frames or #imageData.frames <= 1 then
-        return  -- Kann letzten Frame nicht löschen
-    end
-    
-    -- Frame löschen
-    table.remove(imageData.frames, currentFrame)
-    
-    -- Anpassen currentFrame wenn nötig
-    if currentFrame > #imageData.frames then
-        currentFrame = #imageData.frames
-    end
-    
-    -- Tilemap aktualisieren
-    EditorRoom:updateTilemap()
-    
-    -- Bauchbinde aktualisieren
-    EditorRoom:updateBauchbinde()
-    
-    needsRedraw = true
-end
-
--- Gibt die aktuellen ImageData zurück (für Terminate-Hook)
-function EditorRoom:getImageData()
-    return imageData
-end
-
--- Hauptupdate-Funktion
-function EditorRoom:update()
-    if needsRedraw then
-        EditorRoom:draw()
-        needsRedraw = false
-    end
-    
-    -- LoadingBar-Updates während des Ladens
-    if loadingOperation then
-        loadingOperation:resume()
-    end
-    
-    -- SavingBar-Updates während des Speicherns
-    if savingOperation then
-        savingOperation:resume()
-    end
-end
-
--- Zeichnet den Editor
-function EditorRoom:draw()
-    -- Hintergrund
-    gfx.setColor(gfx.kColorWhite)
-    gfx.fillRect(0, 0, 400, 240)
-    
-    -- Tilemap zeichnen
-    if tilemap then
-        tilemap:draw(0, 0)
-    end
-    
-    -- Grid-Overlay zeichnen (wenn aktiviert)
-    if showGrid then
-        EditorRoom:drawGrid()
-    end
-    
-    -- PencilCursor zeichnen (statische Methode)
-    PencilCursor.draw((cursor.x - 1) * 16, (cursor.y - 1) * 16, 16, 16)
-    
-    -- Bauchbinde zeichnen
-    local frameText = EditorRoom:updateBauchbinde()
-    if bauchbinde and frameText then
-        bauchbinde:drawBottom(frameText, "right", 400, 240)
-    end
-end
-
--- Zeichnet das Grid-Overlay
-function EditorRoom:drawGrid()
-    gfx.setColor(gfx.kColorBlack)
-    
-    -- Vertikale Linien
-    for x = 1, 24 do
-        local px = x * 16
-        gfx.drawLine(px, 0, px, 240)
-    end
-    
-    -- Horizontale Linien  
-    for y = 1, 14 do
-        local py = y * 16
-        gfx.drawLine(0, py, 400, py)
-    end
-end
-
--- Eingabehandler
-function EditorRoom:inputHandler()
-    return {
-        AButtonDown = function()
-            EditorRoom:handleAButton()
-        end,
-        BButtonDown = function()
-            EditorRoom:handleBButtonDown()
-        end,
-        BButtonUp = function()
-            EditorRoom:handleBButtonUp()
-        end,
-        upButtonDown = function()
-            EditorRoom:handleUpButton()
-        end,
-        downButtonDown = function()
-            EditorRoom:handleDownButton()
-        end,
-        leftButtonDown = function()
-            EditorRoom:handleLeftButton()
-        end,
-        rightButtonDown = function()
-            EditorRoom:handleRightButton()
-        end,
-        upButtonUp = function()
-            EditorRoom:handleButtonUp()
-        end,
-        downButtonUp = function()
-            EditorRoom:handleButtonUp()
-        end,
-        leftButtonUp = function()
-            EditorRoom:handleButtonUp()
-        end,
-        rightButtonUp = function()
-            EditorRoom:handleButtonUp()
-        end
-    }
-end
-
--- Behandelt A-Taste (Zeichnen/Toggle)
-function EditorRoom:handleAButton()
-    if savingOperation or loadingOperation then return end
-    
-    -- Berechne Zellenposition
-    local cellIndex = (cursor.y - 1) * 25 + cursor.x
-    
-    if activeTile then
-        -- Mit aktivem Tile: setzen oder zurück auf Weiß
-        if imageData.frames and imageData.frames[currentFrame] then
-            if imageData.frames[currentFrame][cellIndex] == activeTile then
-                -- Rücksetzen auf Weiß (Index 1)
-                imageData.frames[currentFrame][cellIndex] = 1
-            else
-                -- Setze aktives Tile
-                imageData.frames[currentFrame][cellIndex] = activeTile
-            end
-        end
-    else
-        -- Ohne aktives Tile: Toggle Weiß(1) ↔ Schwarz(2)
-        if imageData.frames and imageData.frames[currentFrame] then
-            if imageData.frames[currentFrame][cellIndex] == 1 then
-                imageData.frames[currentFrame][cellIndex] = 2  -- Schwarz
-            else
-                imageData.frames[currentFrame][cellIndex] = 1  -- Weiß
-            end
-        end
-    end
-    
-    -- Tilemap aktualisieren
-    EditorRoom:updateTilemap()
-    needsRedraw = true
-end
-
--- Behandelt B-Taste (Pipette oder Zoom-Trigger)
-function EditorRoom:handleBButtonDown()
-    if savingOperation or loadingOperation then return end
-    
-    -- Starte Timer für Richtungshalten
-    if moveTimer then
-        moveTimer:remove()
-        moveTimer = nil
-    end
-    
-    -- Starte Timer für B-Throw (Zoom-Trigger)
-    zoomBTimer = playdate.timer.new(moveRepeatDelay * 1000, function()
-        zoomBHeld = true
-    end)
-end
-
-function EditorRoom:handleBButtonUp()
-    if zoomBTimer then
-        zoomBTimer:remove()
-        zoomBTimer = nil
-    end
-    
-    if not zoomBHeld then
-        -- Kurzes B: Pipette
-        EditorRoom:handlePipette()
-    end
-    
-    zoomBHeld = false
-end
-
--- Behandelt Pipette (B kurz)
-function EditorRoom:handlePipette()
-    if savingOperation or loadingOperation then return end
-    
-    -- Berechne Zellenposition
-    local cellIndex = (cursor.y - 1) * 25 + cursor.x
-    
-    if imageData.frames and imageData.frames[currentFrame] then
-        local tileIndex = imageData.frames[currentFrame][cellIndex]
-        if tileIndex == 1 then
-            -- Abwahl (Weiß)
-            activeTile = nil
-        else
-            -- Pipette: aktives Tile setzen
-            activeTile = tileIndex
-        end
-    end
-    
-    print("Pipette: activeTile =", activeTile or "nil")
-    needsRedraw = true
-end
-
--- Behandelt Richtungstasten
-function EditorRoom:handleUpButton()
-    if savingOperation or loadingOperation then return end
-    EditorRoom:moveCursor(0, -1)
-end
-
-function EditorRoom:handleDownButton()
-    if savingOperation or loadingOperation then return end
-    EditorRoom:moveCursor(0, 1)
-end
-
-function EditorRoom:handleLeftButton()
-    if savingOperation or loadingOperation then return end
-    EditorRoom:moveCursor(-1, 0)
-end
-
-function EditorRoom:handleRightButton()
-    if savingOperation or loadingOperation then return end
-    EditorRoom:moveCursor(1, 0)
-end
-
-function EditorRoom:handleButtonUp()
-    if moveTimer then
-        moveTimer:remove()
-        moveTimer = nil
-    end
-    moveDirection = nil
-end
-
--- Bewegt den Cursor
-function EditorRoom:moveCursor(dx, dy)
-    local newX = cursor.x + dx
-    local newY = cursor.y + dy
-    
-    -- Randbehandlung
-    if newX < 1 then newX = 1 end
-    if newX > 25 then newX = 25 end
-    if newY < 1 then newY = 1 end
-    if newY > 15 then newY = 15 end
-    
+local function moveCursor(dx, dy)
+    if inputBlocked() then return end
+    local newX = math.max(1, math.min(GRID_COLS, cursor.x + dx))
+    local newY = math.max(1, math.min(GRID_ROWS, cursor.y + dy))
     if newX ~= cursor.x or newY ~= cursor.y then
         cursor.x = newX
         cursor.y = newY
-        
-        -- PencilCursor aktualisieren (wird direkt beim Zeichnen verwendet)
-        
-        -- Richtungshalten einrichten
-        moveDirection = {dx, dy}
-        if not moveTimer then
-            moveTimer = playdate.timer.new(moveRepeatDelay * 1000, function()
-                EditorRoom:moveCursor(moveDirection[1], moveDirection[2])
-                -- Wiederhole alle moveRepeatInterval
-                moveTimer = playdate.timer.new(moveRepeatInterval * 1000, function()
-                    EditorRoom:moveCursor(moveDirection[1], moveDirection[2])
-                end)
-            end)
+        -- Laufender A-Strich: neue Zelle mit dem Strichwert malen
+        -- (SDK: playdate.buttonIsPressed fragt den Live-Zustand ab)
+        if strokeTileIdx and playdate.buttonIsPressed(playdate.kButtonA) then
+            setCell(strokeTileIdx)
         end
-        
         needsRedraw = true
     end
 end
 
--- Behandelt Crank-Eingaben (wird separatgerufen)
-function EditorRoom:handleCrank()
-    if savingOperation or loadingOperation then return end
-    
-    -- Prüfe ob B gehalten wird (für Zoom)
-    if zoomBHeld then
-        -- B+Crank: Zoom-Trigger
-        local crankChange = playdate.getCrankTicks(4)
-        if crankChange > 0 then
-            -- Vorwärts: in den ZoomRoom
-            EditorRoom:zoomIn()
-        elseif crankChange < 0 then
-            -- Rückwärts: aus dem ZoomRoom (falls wir dort sind)
-            -- Da wir im EditorRoom sind, gibt es nichts zu tun
-        end
-        return
+local function startMove(direction, dx, dy)
+    if moveTimers[direction] then
+        moveTimers[direction]:remove()
     end
-    
-    -- Normale Crank-Nutzung (ohne B): Frame-Wechsel
-    local crankChange = playdate.getCrankTicks(4)
-    if crankChange == 0 then return end
-    
-    -- Verarbeite jeden Tick einzeln
-    for i = 1, math.abs(crankChange) do
-        if crankChange > 0 then
-            EditorRoom:tickForward()
-        else
-            EditorRoom:tickBackward()
+    moveTimers[direction] = playdate.timer.keyRepeatTimerWithDelay(
+        KEY_REPEAT_DELAY_MS, KEY_REPEAT_MS,
+        function() moveCursor(dx, dy) end
+    )
+end
+
+local function stopMove(direction)
+    if moveTimers[direction] then
+        moveTimers[direction]:remove()
+        moveTimers[direction] = nil
+    end
+end
+
+local function clearMoveTimers()
+    for direction in pairs(moveTimers) do
+        stopMove(direction)
+    end
+end
+
+-- ── Crank (FR-005/FR-006/FR-009): ohne B = Frames, mit B = Zoom ───────────────
+
+local function handleCrank()
+    local crankTicks = playdate.getCrankTicks(4) or 0
+    if playdate.buttonIsPressed(playdate.kButtonB) then
+        if crankTicks ~= 0 then
+            bUsedForZoom = true
+        end
+        zoomTickAccu = zoomTickAccu + crankTicks
+        if zoomTickAccu >= ZOOM_TICK_THRESHOLD then
+            zoomTickAccu = 0
+            zoomIn()
+        elseif zoomTickAccu <= -ZOOM_TICK_THRESHOLD then
+            -- Äußerste Zoomstufe: Rückwärtszoom ist No-op
+            zoomTickAccu = 0
+        end
+    else
+        zoomTickAccu = 0
+        -- Mehrere Ticks pro Update = mehrere Einzelschritte; jede Kopie
+        -- basiert auf ihrem direkten Vorgänger (Edge Case schnelles Drehen)
+        for _ = 1, math.abs(crankTicks) do
+            if crankTicks > 0 then
+                tickForward()
+            else
+                tickBackward()
+            end
         end
     end
 end
 
--- Frame vorwärts (Crank vorwärts)
-function EditorRoom:tickForward()
-    if not imageData or not imageData.frames then return end
-    
-    if currentFrame < #imageData.frames then
-        -- Wechsle zum nächsten Frame
-        currentFrame = currentFrame + 1
-    elseif #imageData.frames < 12 then
-        -- Erstelle neuen Frame als Kopie des aktuellen
-        local newFrame = {}
-        for i, tileIndex in ipairs(imageData.frames[currentFrame]) do
-            newFrame[i] = tileIndex
-        end
-        table.insert(imageData.frames, newFrame)
-        currentFrame = currentFrame + 1
-    else
-        -- Rotation: zurück zum ersten Frame
-        currentFrame = 1
+-- ── Rendering ─────────────────────────────────────────────────────────────────
+
+local function drawGridOverlay()
+    gfx.setColor(gfx.kColorBlack)
+    for x = 1, GRID_COLS - 1 do
+        gfx.drawLine(x * TILE_PX, 0, x * TILE_PX, 240)
     end
-    
-    -- Tilemap aktualisieren
-    EditorRoom:updateTilemap()
+    for y = 1, GRID_ROWS - 1 do
+        gfx.drawLine(0, y * TILE_PX, 400, y * TILE_PX)
+    end
+end
+
+local function draw()
+    gfx.clear(gfx.kColorWhite)
+    if tilemap then
+        tilemap:draw(0, 0)
+        if showGrid then
+            drawGridOverlay()
+        end
+    end
+    if imageData then
+        PencilCursor.draw((cursor.x - 1) * TILE_PX, (cursor.y - 1) * TILE_PX, TILE_PX, TILE_PX)
+        bauchbinde:drawBottom(string.format("Frame %d/%d", currentFrame, #imageData.frames), "right", 400, 240)
+    end
+    if statusMessage then
+        bauchbinde:drawBottom(statusMessage, "left", 400, 240)
+    end
+    overlay:draw()
+end
+
+-- ── Room-Lifecycle ────────────────────────────────────────────────────────────
+
+function EditorRoom:init(switchRoom, zoomRoomReference, selectionRoomReference)
+    switchRoomFunction = switchRoom
+    zoomRoom = zoomRoomReference
+    selectionRoom = selectionRoomReference
     needsRedraw = true
 end
 
--- Frame rückwärts (Crank rückwärts)
-function EditorRoom:tickBackward()
-    if not imageData or not imageData.frames then return end
-    
-    if currentFrame > 1 then
-        -- Wechsle zum vorherigen Frame
-        currentFrame = currentFrame - 1
-    else
-        -- Rotation: zum letzten Frame
-        currentFrame = #imageData.frames
-    end
-    
-    -- Tilemap aktualisieren
-    EditorRoom:updateTilemap()
-    needsRedraw = true
+-- Von SelectionRoom vor switchRoom gesetzt (Contract E-01: lädt nichts synchron)
+function EditorRoom:setImage(id)
+    if not id then return end
+    pendingImageId = id
 end
 
--- Zoom in den ZoomRoom
-function EditorRoom:zoomIn()
-    if not zoomRoom then return end
-    
-    -- TODO: Kontext für ZoomRoom vorbereiten
-    print("EditorRoom: Zooming in...")
-    
-    -- Für jetzt: direkt wechseln (ohne Kontext)
-    if switchRoomFunction then
-        switchRoomFunction(zoomRoom)
+function EditorRoom:entered()
+    clearMoveTimers()
+    endStroke()
+    zoomTickAccu = 0
+    bUsedForZoom = false
+    needsRedraw = true
+
+    if pendingImageId then
+        local id = pendingImageId
+        pendingImageId = nil
+        buildSystemMenu()
+        startLoadOperation(id)
+    elseif imageData then
+        -- Rückkehr aus der Zoomkette: Menü neu registrieren (Zoomräume räumen es ab)
+        buildSystemMenu()
+    else
+        -- Kein Bild gesetzt: zurück zum Auswahlscreen
+        if switchRoomFunction and selectionRoom then
+            switchRoomFunction(selectionRoom)
+        end
     end
+end
+
+function EditorRoom:getImageData()
+    return imageData
+end
+
+function EditorRoom:update()
+    playdate.timer.updateTimers()
+
+    if statusMessage and playdate.getCurrentTimeMilliseconds() > statusUntilMs then
+        statusMessage = nil
+        needsRedraw = true
+    end
+
+    if loadingOperation then
+        loadingOperation:resume(function(err)
+            handleLoadError(err)
+        end)
+        playdate.getCrankTicks(4) -- Ticks verwerfen (stateful), sonst Frame-Sprung nach der Operation
+    elseif savingOperation then
+        savingOperation:resume(function(err)
+            savingOperation = nil
+            showStatus("Save failed: " .. tostring(err))
+        end)
+        playdate.getCrankTicks(4)
+    elseif imageData then
+        handleCrank()
+    end
+
+    if needsRedraw or operationRunning() then
+        draw()
+        needsRedraw = false
+    end
+end
+
+function EditorRoom:inputHandler()
+    return {
+        AButtonDown = function()
+            if inputBlocked() then return end
+            beginStroke()
+        end,
+        AButtonUp = function()
+            endStroke()
+        end,
+        BButtonDown = function()
+            bUsedForZoom = false
+            zoomTickAccu = 0
+        end,
+        BButtonUp = function()
+            -- Pipette bei B-Release ohne akkumulierte Zoom-Ticks
+            if not bUsedForZoom and not inputBlocked() then
+                pipette()
+            end
+            bUsedForZoom = false
+            zoomTickAccu = 0
+        end,
+        upButtonDown = function() startMove("up", 0, -1) end,
+        upButtonUp = function() stopMove("up") end,
+        downButtonDown = function() startMove("down", 0, 1) end,
+        downButtonUp = function() stopMove("down") end,
+        leftButtonDown = function() startMove("left", -1, 0) end,
+        leftButtonUp = function() stopMove("left") end,
+        rightButtonDown = function() startMove("right", 1, 0) end,
+        rightButtonUp = function() stopMove("right") end
+    }
 end
 
 return EditorRoom

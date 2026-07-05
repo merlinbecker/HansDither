@@ -1,6 +1,13 @@
--- ImageStore.lua
--- Modul für die Verwaltung von Bildern im nativen PDI-Speicherformat
--- Ersetzt die PulpGameIO*-Module ab v0.3.0
+-- ImageStore.lua — Verwaltung der gespeicherten Bilder (Spec 001).
+--
+-- Ablage im Data-Verzeichnis der App (SDK: playdate.datastore/playdate.file):
+--   saves/index.json          Katalog: {version, lastEditedId, images[]}
+--   saves/<id>/frames.json    Frame-Daten (Tile-Indizes, 25×15 pro Frame)
+--   saves/<id>/sheet.pdi      alle Tiles als ein Sprite-Sheet (PDI-Bildformat)
+--   saves/<id>/preview.pdi    400×240-Vorschau für Auswahl-/Startscreen
+-- datastore.write/read hängen .json an, writeImage/readImage .pdi —
+-- im Code stehen die Pfade deshalb immer OHNE Endung.
+-- Ersetzt die PulpGameIO*-Module ab v0.3.0.
 
 import "CoreLibs/graphics"
 import "CoreLibs/object"
@@ -43,6 +50,11 @@ end
 -- Schreibt den Index in den Datastore
 function ImageStore.writeIndex()
     if indexCache then
+        -- Ordner muss existieren, bevor der Datastore hineinschreiben kann
+        -- (SDK: playdate.file.mkdir ist idempotent, legt auch Zwischenordner an)
+        playdate.file.mkdir("saves")
+        -- SDK: playdate.datastore.write(table, filename) — serialisiert als
+        -- saves/index.json ins Data-Verzeichnis der App
         playdate.datastore.write(indexCache, "saves/index")
     end
 end
@@ -119,11 +131,8 @@ function ImageStore.createImage(name)
         return nil, "name-taken"
     end
     
-    -- Erstelle den saves-Ordner für dieses Bild
-    local savePath = "saves/" .. id
-    playdate.file.mkdir(savePath)
-    
     -- Erstelle Initialdaten über Codec-Helfer
+    -- (den saves/<id>-Ordner legt die Save-Operation des Codecs selbst an)
     -- 1 Frame mit allen Indizes = 1 (Weiß-Tile)
     local whiteTile = ImageStoreCodec.createWhiteTile()
     local blackTile = ImageStoreCodec.createBlackTile()
@@ -249,12 +258,12 @@ function ImageStore.deleteImage(id)
     
     local index = ImageStore.getIndex()
     local savePath = "saves/" .. id
-    
-    -- Entferne Dateien und Ordner
-    playdate.file.delete(savePath .. "/frames")
-    playdate.file.delete(savePath .. "/sheet")
-    playdate.file.delete(savePath .. "/preview")
-    playdate.file.delete(savePath)
+
+    -- Ordner samt Inhalt löschen. Wichtig: die Dateien heißen auf der Platte
+    -- frames.json / sheet.pdi / preview.pdi (Datastore hängt die Endungen an),
+    -- einzelnes file.delete("…/frames") würde daher ins Leere laufen.
+    -- SDK: playdate.file.delete(path, recursive)
+    playdate.file.delete(savePath, true)
     
     -- Entferne Index-Eintrag
     local newImages = {}

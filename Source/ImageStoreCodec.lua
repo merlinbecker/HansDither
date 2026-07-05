@@ -47,7 +47,8 @@ function ImageStoreCodec.newSaveOperation(imageData)
                 local tileImg = imagetable:getImage(i)
                 if tileImg then
                     local x, y = ImageStoreCodec.tileIndexToPosition(i)
-                    gfx.drawImage(tileImg, x, y)
+                    -- SDK: image:draw(x, y) — es gibt KEIN gfx.drawImage()!
+                    tileImg:draw(x, y)
                 end
             end
         gfx.popContext()
@@ -88,12 +89,11 @@ end
 -- Hilfsfunktion: Erstellt ein Preview-Image aus einem Frame
 function ImageStoreCodec.createPreviewFromFrame(frameData, imagetable)
     if not frameData or not imagetable then
-        -- Fallback: Weißes 400x240 Bild
-        local preview = gfx.image.new(400, 240, gfx.kColorWhite)
-        gfx.pushContext(preview)
-            gfx.fillRect(0, 0, 400, 240)
-        gfx.popContext()
-        return preview
+        -- Fallback: weißes 400x240-Bild. SDK: image.new(w, h, bgcolor)
+        -- füllt bereits mit der Hintergrundfarbe — KEIN fillRect nötig
+        -- (fillRect ohne setColor malt mit der zuletzt gesetzten Farbe,
+        -- typischerweise Schwarz!).
+        return gfx.image.new(400, 240, gfx.kColorWhite)
     end
     
     -- Erstelle ein Tilemap und rendere den Frame
@@ -191,9 +191,11 @@ function ImageStoreCodec.newLoadOperation(id)
         -- Phase 4: Validierung
         coroutine.yield("Validierung")
         
-        -- Validierung der Frame-Daten
+        -- Validierung der Frame-Daten. table.insert statt frames[frameIdx],
+        -- damit defekte Frames keine Lücken hinterlassen (ipairs bricht an
+        -- der ersten Lücke ab und der Editor sähe zu wenige Frames).
         local validatedFrames = {}
-        for frameIdx, frameData in ipairs(frames or {}) do
+        for _, frameData in ipairs(frames or {}) do
             if type(frameData) == "table" and #frameData == 375 then
                 local validatedFrame = {}
                 for posIdx, tileIndex in ipairs(frameData) do
@@ -204,8 +206,18 @@ function ImageStoreCodec.newLoadOperation(id)
                     end
                     validatedFrame[posIdx] = validatedIndex
                 end
-                validatedFrames[frameIdx] = validatedFrame
+                table.insert(validatedFrames, validatedFrame)
             end
+        end
+
+        -- Waren alle Frames defekt, liefern wir einen weißen Leerframe:
+        -- der Editor verlässt sich darauf, dass frames[1] existiert.
+        if #validatedFrames == 0 then
+            local emptyFrame = {}
+            for i = 1, 375 do
+                emptyFrame[i] = 1
+            end
+            validatedFrames[1] = emptyFrame
         end
         
         -- Erstelle Ergebnis
@@ -222,47 +234,59 @@ function ImageStoreCodec.newLoadOperation(id)
     end)
 end
 
--- Hilfsfunktion: Erstellt eine Imagetable aus einem Sheet-Image durch Slicing
+-- Hilfsfunktion: Erstellt eine Imagetable aus einem Sheet-Image durch Slicing.
+--
+-- Invariante des Editors: Index 1 = Voll-Weiß, Index 2 = Voll-Schwarz.
+-- Malen ohne Pipetten-Auswahl toggelt zwischen genau diesen Indizes —
+-- die Imagetable wird deshalb IMMER mit mindestens diesen Basistiles
+-- aufgebaut, auch wenn das Sheet fehlt oder unvollständig ist.
 function ImageStoreCodec.sliceSheetToImagetable(sheet, tileCount)
-    if not sheet then
-        return gfx.imagetable.new(1), {}
-    end
-    
-    local tileCount = tonumber(tileCount) or 0
-    if tileCount < 1 then
-        tileCount = 1
-    end
-    
-    -- Erstelle Imagetable mit der richtigen Größe
-    local imagetable = gfx.imagetable.new(tileCount)
+    local count = math.max(tonumber(tileCount) or 0, 2)
+
+    -- SDK: gfx.imagetable.new(count) legt count leere Slots an
+    local imagetable = gfx.imagetable.new(count)
     local hashIndex = {}
-    
-    -- Für jedes Tile, extrahiere die 16x16 Zelle aus dem Sheet
-    for i = 1, tileCount do
+
+    local sheetW, sheetH = 0, 0
+    if sheet then
+        sheetW, sheetH = sheet:getSize()
+    end
+
+    for i = 1, count do
         local x, y = ImageStoreCodec.tileIndexToPosition(i)
-        
-        -- Extrahiere die Zelle als neues Image
-        local tileImg = gfx.image.new(16, 16, gfx.kColorClear)
-        gfx.pushContext(tileImg)
-            gfx.drawImage(sheet, -x, -y)  -- Zeichne den Ausschnitt
-        gfx.popContext()
-        
+        local tileImg
+
+        if sheet and x + 16 <= sheetW and y + 16 <= sheetH then
+            -- Zelle aus dem Sheet ausschneiden: negativer Offset schiebt den
+            -- gewünschten Ausschnitt in den 16×16-Kontext (SDK: image:draw)
+            tileImg = gfx.image.new(16, 16, gfx.kColorClear)
+            gfx.pushContext(tileImg)
+                sheet:draw(-x, -y)
+            gfx.popContext()
+        elseif i == 2 then
+            -- Sheet deckt das Basistile nicht ab: Schwarz-Tile erzeugen
+            tileImg = ImageStoreCodec.createBlackTile()
+        else
+            -- Fehlende Tiles fallen auf Weiß zurück (Index 1 und alle Luecken)
+            tileImg = ImageStoreCodec.createWhiteTile()
+        end
+
         imagetable:setImage(i, tileImg)
-        
+
         -- Berechne Hash für Dedup
         hashIndex[ImageStoreCodec.hashTile(tileImg)] = i
     end
-    
+
     return imagetable, hashIndex
 end
 
--- Erzeugt ein Voll-Weißes 16x16 Tile
+-- Erzeugt ein Voll-Weißes 16x16 Tile.
+-- SDK: image.new(w, h, bgcolor) füllt bereits weiß. Das frühere
+-- pushContext+fillRect OHNE setColor übermalte das Tile mit der gerade
+-- aktiven Zeichenfarbe (meist Schwarz) — das "weiße" Basis-Tile war
+-- dadurch schwarz, und damit jedes neue Bild samt Preview.
 function ImageStoreCodec.createWhiteTile()
-    local img = gfx.image.new(16, 16, gfx.kColorWhite)
-    gfx.pushContext(img)
-        gfx.fillRect(0, 0, 16, 16)
-    gfx.popContext()
-    return img
+    return gfx.image.new(16, 16, gfx.kColorWhite)
 end
 
 -- Erzeugt ein Voll-Schwarzes 16x16 Tile
@@ -308,6 +332,26 @@ function ImageStoreCodec.positionToTileIndex(x, y, gridWidth)
     local cellY = math.floor((tonumber(y) or 0) / 16)
     
     return cellX + cellY * gridW + 1  -- +1 für 1-basierte Indizes
+end
+
+-- Vergleicht zwei Bilder auf sichtbare 1-Bit-Gleichheit: nur "schwarz vs.
+-- nicht-schwarz" zählt, kColorClear und kColorWhite gelten also als gleich.
+-- Wird vom Dedup beim Tile-Commit genutzt (EditorRoom/ZoomRoom).
+-- SDK: image:sample(x, y) liest die Farbe eines Pixels (0-basiert).
+function ImageStoreCodec.imagesVisiblyEqual(a, b)
+    if a == nil and b == nil then return true end
+    if a == nil or b == nil then return false end
+    local aw, ah = a:getSize()
+    local bw, bh = b:getSize()
+    if aw ~= bw or ah ~= bh then return false end
+    for y = 0, ah - 1 do
+        for x = 0, aw - 1 do
+            if (a:sample(x, y) == gfx.kColorBlack) ~= (b:sample(x, y) == gfx.kColorBlack) then
+                return false
+            end
+        end
+    end
+    return true
 end
 
 -- FNV-1a Hash über 16x16 Tile

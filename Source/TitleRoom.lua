@@ -1,5 +1,10 @@
--- StartRaum.lua
+-- TitleRoom.lua — Startscreen (Splash).
+--
+-- Zeigt das zuletzt bearbeitete Bild als Hintergrund (Spec 002 US2) plus
+-- Titel-/Versionszeilen und wartet auf A. Der Raum ist eine Einbahnstraße:
+-- Es geht nur vorwärts zum SelectionRoom, nie zurück hierher.
 import "CoreLibs/graphics"
+import "ImageStore"
 
 local gfx = playdate.graphics
 local SCREEN_WIDTH = 400
@@ -7,11 +12,17 @@ local SCREEN_HEIGHT = 240
 
 TitleRoom = {}
 
+-- Abhängigkeiten (via init() injiziert, siehe main.lua)
 local switchRoomFunction
 local nextRoom
+
+-- Räume zeichnen nur bei Bedarf neu — das Display behält den letzten
+-- Framebuffer, solange niemand zeichnet ("dirty flag"-Muster aller Räume).
 local needsRedraw
 local metadataRows
 
+-- pdxinfo-Werte (Version, buildNumber, …) stellt das SDK als Tabelle
+-- playdate.metadata bereit.
 local function getMetadataRows()
     local meta = playdate.metadata or {}
     return {
@@ -21,32 +32,25 @@ local function getMetadataRows()
     }
 end
 
-local backgroundImage = nil
-
+-- Fallback-Hintergrund: 50%-Grau als Bayer-Dithering
+-- (SDK: gfx.setDitherPattern(alpha, ditherType) wirkt auf folgende fills)
 local function drawCheckerBackground()
-    -- Dithered background using Bayer 8x8
     gfx.setDitherPattern(0.5, gfx.image.kDitherTypeBayer8x8)
     gfx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
     gfx.setColor(gfx.kColorBlack)
 end
 
--- Zeichnet den Hintergrund (letztes bearbeitetes Bild oder Dither-Fallback)
+-- Hintergrund: zuletzt bearbeitetes Bild, sonst Dither-Fallback (Spec 002 US2)
 function TitleRoom:drawBackground()
-    -- Versuche, das zuletzt bearbeitete Bild zu laden
-    import "Source/ImageStore"
     local preview = ImageStore.getLastEditedPreview()
-    
     if preview then
-        -- Zeichne das Preview-Bild vollflächig
-        gfx.drawImage(preview, 0, 0)
-        backgroundImage = preview
+        preview:draw(0, 0)
     else
-        -- Fallback: Bayer-Dither
         drawCheckerBackground()
-        backgroundImage = nil
     end
 end
 
+-- Weißer Balken mit schwarzem Text (die "Panels" des Startscreens)
 local function drawPanelLine(text, x, y, w)
     local panelHeight = 20
     gfx.setColor(gfx.kColorWhite)
@@ -55,19 +59,17 @@ local function drawPanelLine(text, x, y, w)
     gfx.drawText(text, x + 6, y + 3)
 end
 
-print("StartRaum loaded")
--- Initialize the room with shared data and dependencies
-function TitleRoom:init(switchRoom,nextRoomReference)
+-- switchRoom: Raumwechsel-Funktion aus main.lua
+-- nextRoomReference: SelectionRoom (Ziel bei A-Druck)
+function TitleRoom:init(switchRoom, nextRoomReference)
     switchRoomFunction = switchRoom
     nextRoom = nextRoomReference
     needsRedraw = true
     metadataRows = getMetadataRows()
 end
 
--- Update logic for StartRaum
 function TitleRoom:update()
     if needsRedraw then
-        -- Zeichne Hintergrund (letztes bearbeitetes Bild oder Dither-Fallback)
         TitleRoom:drawBackground()
 
         drawPanelLine("Hans Dither, 1 bit Pixel 'n Tile Editor", 88, 26, 224)
@@ -80,23 +82,21 @@ function TitleRoom:update()
         gfx.fillRect(8, footerY, SCREEN_WIDTH - 16, 16)
         gfx.setColor(gfx.kColorBlack)
         gfx.drawText(metadataRows[3] .. " - still under development - Press A", 12, footerY + 3)
-        print("Drawing TitleRoom")
         needsRedraw = false
     end
 end
 
+-- Lifecycle: von switchRoom() bei jedem Betreten aufgerufen
 function TitleRoom:entered()
     metadataRows = getMetadataRows()
-    backgroundImage = nil  -- Reset Hintergrund-Cache
     needsRedraw = true
     print("Entered TitleRoom")
 end
 
--- Input handler for StartRaum
+-- Button-Callbacks für playdate.inputHandlers.push() (siehe main.lua switchRoom)
 function TitleRoom:inputHandler()
     return {
         AButtonDown = function()
-            -- Transition to the next room
             if switchRoomFunction and nextRoom then
                 switchRoomFunction(nextRoom)
             else

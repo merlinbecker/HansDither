@@ -1,19 +1,29 @@
--- SelectionRoom.lua
--- Neuer Auswahlscreen für Hans Dither v0.3.0
--- Ersetzt GameRoom und LoadRoom/LoadRoomGrid
+-- SelectionRoom.lua — Auswahlscreen (Hub der App, Spec 002).
+--
+-- 3×3-Kreisraster aller gespeicherten Bilder + "Neu"-Eintrag; A öffnet den
+-- Editor, das Systemmenü bietet new/copy/delete. SDK-Bausteine hier:
+--  * playdate.ui.gridview  — Raster-Layout, Selektion und Scrolling
+--  * playdate.keyboard     — Bildschirmtastatur für die Namenseingabe
+--  * playdate.getSystemMenu() — die drei freien Slots im System-Menü
+-- Ersetzt GameRoom und LoadRoom/LoadRoomGrid aus v0.2.
 
 import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/object"
+import "CoreLibs/keyboard"
+import "ImageStore"
+import "Bauchbinde"
 
 local gfx = playdate.graphics
+
+-- Namenszeile am unteren Rand (gleiches Banner wie die Frame-Anzeige im Editor)
+local bauchbinde = Bauchbinde.new(gfx)
 
 SelectionRoom = {}
 
 -- Abhängigkeiten (werden über init() injiziert)
 local switchRoomFunction
 local editorRoom
-local titleRoom
 
 -- Zustand
 local entries = {}           -- Liste der Einträge (Bilder + Neu-Eintrag)
@@ -22,6 +32,7 @@ local selectedIndex = 1      -- Aktuell selektierter Eintrag (1-basiert)
 local thumbCache = {}         -- Cache für maskierte Thumbnails: id -> image
 local confirmingDelete = nil -- nil oder {id, name} für Bestätigungsdialog
 local pendingAction = nil     -- Keyboard-Flow-Zustand
+local pendingCommitName = nil -- bestätigter Name; verarbeitet erst, wenn das Keyboard ganz zu ist
 local needsRedraw = true
 
 -- Zellgrößen für 3x3 Raster
@@ -30,10 +41,9 @@ local CELL_HEIGHT = 80
 local CIRCLE_DIAMETER = 72
 
 -- Initialisiert den Room
-function SelectionRoom:init(switchRoom, editorRoomReference, titleRoomReference)
+function SelectionRoom:init(switchRoom, editorRoomReference)
     switchRoomFunction = switchRoom
     editorRoom = editorRoomReference
-    titleRoom = titleRoomReference
     needsRedraw = true
     print("SelectionRoom initialized")
 end
@@ -52,10 +62,13 @@ function SelectionRoom:entered()
     -- Systemmenü aufbauen
     SelectionRoom:buildSystemMenu()
     
-    -- Zustand zurücksetzen
+    -- Zustand zurücksetzen (inkl. Keyboard-Reste, falls der Raum
+    -- mitten in einem Eingabe-Flow verlassen wurde)
     confirmingDelete = nil
     pendingAction = nil
-    selectedIndex = 1
+    pendingCommitName = nil
+    playdate.keyboard.keyboardWillHideCallback = nil
+    SelectionRoom:setSelectedIndex(1)
     
     needsRedraw = true
     print("Entered SelectionRoom")
@@ -64,7 +77,6 @@ end
 -- Lädt die Einträge neu
 function SelectionRoom:reloadEntries()
     -- Hole Bilder vom ImageStore
-    import "Source/ImageStore"
     local images = ImageStore.listImages() or {}
     
     -- Erstelle Einträge-Array
@@ -97,8 +109,10 @@ function SelectionRoom:buildGridview()
     gridview:setNumberOfRows(numRows)
     gridview.changeRowOnColumnWrap = false
     
-    -- Setze die drawCell-Funktion
-    gridview.drawCell = function(section, row, column, selected, x, y, width, height)
+    -- drawCell-Callback: das Gridview ruft ihn als METHODE auf
+    -- (self:drawCell(...)), der erste Parameter ist also das Gridview selbst.
+    -- Ohne self-Parameter verschieben sich alle Argumente um eins!
+    gridview.drawCell = function(self, section, row, column, selected, x, y, width, height)
         SelectionRoom:drawCell(section, row, column, selected, x, y, width, height)
     end
 end
@@ -136,41 +150,39 @@ function SelectionRoom:drawCell(section, row, column, selected, x, y, width, hei
     end
     
     local entry = entries[index]
-    
-    -- Zeichne Hintergrund
-    if selected then
-        gfx.setColor(gfx.kColorWhite)
-        gfx.fillRect(x, y, width, height)
-        gfx.setColor(gfx.kColorBlack)
-    else
-        gfx.setColor(gfx.kColorBlack)
-        gfx.fillRect(x, y, width, height)
-        gfx.setColor(gfx.kColorWhite)
-    end
-    
-    -- Zeichne Kreis in der Zelle
-    local circleX = x + (width - CIRCLE_DIAMETER) / 2
-    local circleY = y + (height - CIRCLE_DIAMETER) / 2
-    
-    -- Kreis Hintergrund
+
+    -- Alle Zellen hell; die Selektion invertiert NICHT mehr, sondern zeigt
+    -- einen doppelten Ring um den Kreis plus die Namenszeile unten (update()).
+    local centerX = x + width / 2
+    local centerY = y + height / 2
+    local radius = CIRCLE_DIAMETER / 2
+    local circleX = centerX - radius
+    local circleY = centerY - radius
+
     gfx.setColor(gfx.kColorWhite)
-    gfx.fillCircleAtPoint(circleX + CIRCLE_DIAMETER/2, circleY + CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2)
+    gfx.fillRect(x, y, width, height)
+
+    -- Kreis: weiß gefüllt mit schwarzem Rand
+    -- (SDK: fill/drawCircleAtPoint nehmen Mittelpunkt + Radius)
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillCircleAtPoint(centerX, centerY, radius)
     gfx.setColor(gfx.kColorBlack)
-    gfx.drawCircleAtPoint(circleX + CIRCLE_DIAMETER/2, circleY + CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2)
-    
+    gfx.drawCircleAtPoint(centerX, centerY, radius)
+
     -- Zeichne Thumbnail oder Platzhalter
     if entry.kind == "image" then
         SelectionRoom:drawImageThumbnail(entry, circleX, circleY)
     else
-        -- Neu-Eintrag: leerer Kreis mit + 
+        -- Neu-Eintrag: leerer Kreis mit +
         gfx.setColor(gfx.kColorBlack)
-        gfx.drawText("+", circleX + CIRCLE_DIAMETER/2 - 4, circleY + CIRCLE_DIAMETER/2 - 6)
+        gfx.drawText("+", centerX - 4, centerY - 6)
     end
-    
-    -- Selektionsring
+
+    -- Selektion: doppelter Ring um den Kreis
     if selected then
-        gfx.setColor(gfx.kColorWhite)
-        gfx.drawCircleAtPoint(circleX + CIRCLE_DIAMETER/2, circleY + CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2 + 3)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawCircleAtPoint(centerX, centerY, radius + 3)
+        gfx.drawCircleAtPoint(centerX, centerY, radius + 4)
     end
 end
 
@@ -178,10 +190,13 @@ end
 function SelectionRoom:drawImageThumbnail(entry, circleX, circleY)
     local thumbImg = SelectionRoom:getThumbnail(entry.id)
     if thumbImg then
-        -- Zeichne das Thumbnail in den Kreis
-        local thumbX = circleX + (CIRCLE_DIAMETER - thumbImg:getSize()) / 2
-        local thumbY = circleY + (CIRCLE_DIAMETER - thumbImg:getHeight()) / 2
-        gfx.drawImage(thumbImg, thumbX, thumbY)
+        -- Zeichne das Thumbnail zentriert in den Kreis.
+        -- SDK: image:getSize() liefert Breite UND Höhe (getWidth/getHeight
+        -- existieren für Images nicht!)
+        local thumbW, thumbH = thumbImg:getSize()
+        local thumbX = circleX + (CIRCLE_DIAMETER - thumbW) / 2
+        local thumbY = circleY + (CIRCLE_DIAMETER - thumbH) / 2
+        thumbImg:draw(thumbX, thumbY)
     else
         -- Platzhalter für fehlendes Preview
         gfx.setColor(gfx.kColorBlack)
@@ -189,25 +204,25 @@ function SelectionRoom:drawImageThumbnail(entry, circleX, circleY)
     end
 end
 
--- Hole oder erstelle Thumbnail aus Cache
+-- Hole oder erstelle Thumbnail aus Cache.
+-- false ist der Negativ-Cache ("Preview fehlt"): ohne ihn würde jeder Redraw
+-- erneut von der Platte lesen — bei offenem Keyboard wäre das jeder Frame.
 function SelectionRoom:getThumbnail(id)
     if not id then return nil end
-    
-    -- Prüfe Cache
-    if thumbCache[id] then
-        return thumbCache[id]
+
+    local cached = thumbCache[id]
+    if cached ~= nil then
+        return cached or nil  -- false -> nil (Platzhalter zeichnen)
     end
-    
-    -- Versuche Preview-Bild zu laden
-    import "Source/ImageStore"
+
+    -- Preview von der Platte lesen (SDK: playdate.datastore.readImage via ImageStore)
     local preview = ImageStore.getPreviewImage(id)
-    
+
     if not preview then
-        -- Kein Preview verfügbar, erstellt Platzhalter
-        thumbCache[id] = nil
+        thumbCache[id] = false
         return nil
     end
-    
+
     -- Erstelle kreisförmig maskiertes Thumbnail
     local thumb = SelectionRoom:createCircularThumbnail(preview)
     thumbCache[id] = thumb
@@ -231,8 +246,8 @@ function SelectionRoom:createCircularThumbnail(preview)
     -- Erstelle Thumbnail-Image
     local thumb = gfx.image.new(CIRCLE_DIAMETER, CIRCLE_DIAMETER, gfx.kColorClear)
     gfx.pushContext(thumb)
-        -- Zeichne den Ausschnitt aus dem Preview
-        gfx.drawImage(preview, -srcX, -srcY)
+        -- Zeichne den Ausschnitt aus dem Preview (SDK: image:draw)
+        preview:draw(-srcX, -srcY)
     gfx.popContext()
     
     -- Maskierung anwenden
@@ -263,19 +278,37 @@ function SelectionRoom:drawConfirmDeleteDialog()
     gfx.drawText("(B) cancel", dialogX + 10, dialogY + 50)
 end
 
--- Zeichnet Keyboard-Overlay
+-- Zeichnet Keyboard-Overlay: Grid bleibt sichtbar, unten links die Eingabezeile
 function SelectionRoom:drawKeyboardOverlay()
     if pendingAction ~= "keyboard" then return end
-    
-    -- Abdunklung
-    gfx.setColor(gfx.kColorBlack)
-    gfx.fillRect(0, 0, 400, 240)
+
+    local panelHeight = 24
+    local panelY = 240 - panelHeight
     gfx.setColor(gfx.kColorWhite)
-    gfx.drawText("Enter image name:", 10, 10)
+    gfx.fillRect(0, panelY, 400, panelHeight)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawLine(0, panelY, 399, panelY)
+    gfx.drawText("Name: " .. (playdate.keyboard.text or ""), 8, panelY + 5)
 end
 
 -- Hauptupdate-Funktion
 function SelectionRoom:update()
+    -- Aufgeschobener Keyboard-Commit: erst ausführen, wenn das Keyboard
+    -- vollständig zugeklappt ist und update/Input-Stack wieder uns gehören —
+    -- erst dann ist ein Raumwechsel in den Editor gefahrlos möglich.
+    if pendingCommitName and not playdate.keyboard.isVisible() then
+        local name = pendingCommitName
+        pendingCommitName = nil
+        SelectionRoom:handleKeyboardCommit(name)
+        return
+    end
+
+    -- Solange das Keyboard offen ist, jeden Frame neu zeichnen,
+    -- damit der getippte Text und die Keyboard-Animation sichtbar sind
+    if playdate.keyboard.isVisible() then
+        needsRedraw = true
+    end
+
     if needsRedraw then
         gfx.setColor(gfx.kColorWhite)
         gfx.fillRect(0, 0, 400, 240)
@@ -284,7 +317,17 @@ function SelectionRoom:update()
         if gridview then
             gridview:drawInRect(0, 0, 400, 240)
         end
-        
+
+        -- Namenszeile unten links: Name des selektierten Bilds bzw. Neu-Eintrag.
+        -- Entfällt, solange die Keyboard-Eingabezeile den unteren Rand belegt.
+        if pendingAction ~= "keyboard" then
+            local entry = entries[selectedIndex]
+            if entry then
+                local label = (entry.kind == "new") and "+ New Image" or (entry.name or entry.id)
+                bauchbinde:drawBottom(label, "left", 400, 240)
+            end
+        end
+
         -- Zeichne Overlays
         SelectionRoom:drawConfirmDeleteDialog()
         SelectionRoom:drawKeyboardOverlay()
@@ -359,10 +402,8 @@ function SelectionRoom:handleBButton()
         return
     end
     
-    -- Zurück zum TitleRoom
-    if switchRoomFunction and titleRoom then
-        switchRoomFunction(titleRoom)
-    end
+    -- Der Auswahlscreen ist die Basis-Ebene: kein Rücksprung zum TitleRoom
+    -- (Start → Auswahl → Editor, der Startscreen ist nur ein Splash)
 end
 
 -- Navigation: Hoch
@@ -440,10 +481,10 @@ function SelectionRoom:setSelectedIndex(newIndex)
     if gridview then
         local row = math.ceil(selectedIndex / 3)
         local col = ((selectedIndex - 1) % 3) + 1
-        gridview:setSelectedCell(row, col)
-        
+        gridview:setSelection(1, row, col)
+
         -- Scrollen wenn nötig
-        gridview:scrollToCell(row, col)
+        gridview:scrollToCell(1, row, col)
     end
     
     needsRedraw = true
@@ -468,7 +509,6 @@ end
 function SelectionRoom:confirmDelete()
     if not confirmingDelete then return end
     
-    import "Source/ImageStore"
     local success = ImageStore.deleteImage(confirmingDelete.id)
     
     if success then
@@ -479,9 +519,7 @@ function SelectionRoom:confirmDelete()
         SelectionRoom:buildGridview()
         
         -- Selektionsregel: gleiche Position, wenn möglich
-        if selectedIndex > #entries then
-            selectedIndex = #entries
-        end
+        SelectionRoom:setSelectedIndex(math.min(selectedIndex, #entries))
         
         -- Thumbnail-Cache invalidieren
         thumbCache = {}
@@ -499,7 +537,6 @@ function SelectionRoom:handleCopyImage()
     local entry = entries[selectedIndex]
     if not entry or entry.kind ~= "image" then return end
     
-    import "Source/ImageStore"
     local newId, err = ImageStore.copyImage(entry.id)
     
     if newId then
@@ -515,7 +552,7 @@ function SelectionRoom:handleCopyImage()
         -- Selektiere die Kopie
         for i, e in ipairs(entries) do
             if e.kind == "image" and e.id == newId then
-                selectedIndex = i
+                SelectionRoom:setSelectedIndex(i)
                 break
             end
         end
@@ -534,28 +571,37 @@ function SelectionRoom:handleNewImage()
     SelectionRoom:openKeyboard()
 end
 
--- Öffnet die Bildschirmtastatur
+-- Öffnet die Bildschirmtastatur.
+-- Das SDK-Keyboard (CoreLibs/keyboard) übernimmt Input + eigenes Rendering
+-- rechts im Bild; unser update() zeichnet währenddessen weiter das Raster.
+-- Callbacks werden als Felder zugewiesen (es gibt KEINE set*Callback-Funktionen):
+--   keyboardWillHideCallback(ok), textChangedCallback(), keyboard.text
 function SelectionRoom:openKeyboard()
     pendingAction = "keyboard"
-    
-    -- Passe an: v0.3.0 Namenseingabe
-    playdate.keyboard.show("Enter image name")
-    
-    -- Callback für Keyboard-Eingabe
-    playdate.keyboard.setText("")
-    playdate.keyboard.setTextChangeCallback(function(text)
-        -- Hier könnte man Validierung machen, aber wir warten auf Bestätigung
-    end)
-    
-    playdate.keyboard.setCommitCallback(function(text)
-        SelectionRoom:handleKeyboardCommit(text)
-    end)
-    
-    playdate.keyboard.setCancelCallback(function()
-        pendingAction = nil
-        needsRedraw = true
-    end)
-    
+
+    -- OK-Taste liefert okPressed=true, Abbruch (B) false.
+    -- WICHTIG: Der Callback feuert beim START der Zuklapp-Animation — das
+    -- Keyboard hat playdate.update und den Input-Handler-Stack noch
+    -- "ausgeliehen". Hier direkt den Raum zu wechseln korrumpiert den
+    -- Handler-Stack (das spätere Pop des Keyboards entfernte sonst den
+    -- Handler des neuen Raums). Deshalb nur den Namen vormerken; verarbeitet
+    -- wird er in update(), sobald keyboard.isVisible() false ist
+    -- (gleiches Muster wie der GameRoom in v0.2).
+    playdate.keyboard.keyboardWillHideCallback = function(okPressed)
+        -- Callback abhängen: er gehört nur zu dieser einen Eingabe und darf
+        -- nicht in andere Räume hinein weiterleben
+        playdate.keyboard.keyboardWillHideCallback = nil
+        if okPressed then
+            pendingCommitName = playdate.keyboard.text
+        else
+            pendingAction = nil
+            needsRedraw = true
+        end
+    end
+
+    -- Der Parameter von show() ist der vorausgefüllte Textinhalt, kein Prompt
+    playdate.keyboard.show("")
+
     needsRedraw = true
 end
 
@@ -567,12 +613,10 @@ function SelectionRoom:handleKeyboardCommit(text)
         return
     end
     
-    import "Source/ImageStore"
     local newId, err = ImageStore.createImage(text)
     
     pendingAction = nil
-    playdate.keyboard.hide()
-    
+
     if newId then
         -- Einträge neu laden
         SelectionRoom:reloadEntries()
@@ -586,7 +630,7 @@ function SelectionRoom:handleKeyboardCommit(text)
         -- Selektiere das neue Bild
         for i, e in ipairs(entries) do
             if e.kind == "image" and e.id == newId then
-                selectedIndex = i
+                SelectionRoom:setSelectedIndex(i)
                 break
             end
         end
@@ -612,7 +656,7 @@ function SelectionRoom:handleKeyboardCommit(text)
                 
                 for i, e in ipairs(entries) do
                     if e.kind == "image" and e.id == retryId then
-                        selectedIndex = i
+                        SelectionRoom:setSelectedIndex(i)
                         break
                     end
                 end

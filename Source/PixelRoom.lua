@@ -1,4 +1,7 @@
--- StartRaum.lua
+-- PixelRoom.lua
+-- Innerste Zoomstufe: ein einzelnes Tile mit echten 16×16 Pixeln; ein
+-- Malvorgang setzt genau 1 nativen Pixel (FR-011).
+-- "All Similar" und "Invert" bleiben als Systemmenü-Funktionen erhalten (FR-015).
 import "CoreLibs/graphics"
 import "PencilCursor"
 local gfx = playdate.graphics
@@ -9,11 +12,11 @@ local switchRoomFunction
 local nextRoom
 local needsRedraw
 
--- am rand sind dann 20 pixel, die gefuellt werden müssen
-local GRID_COLS = 8
-local GRID_ROWS = 8
-local CELL_SIZE = 30 -- 30x30 Pixel pro Zelle (native 400x240, entspricht 2x Pulp-Pixel)
-local PADDING = 80   -- (400 - 8*30) / 2 = 80 px Seitenrand
+local GRID_COLS = 16
+local GRID_ROWS = 16
+local CELL_SIZE = 14  -- 16 × 14 = 224 px, zentriert auf 400×240
+local PADDING_X = (400 - GRID_COLS * CELL_SIZE) // 2  -- 88 px
+local PADDING_Y = (240 - GRID_ROWS * CELL_SIZE) // 2  -- 8 px
 
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
@@ -35,13 +38,17 @@ local directionHold = {
 
 local ticks = 0
 
+-- Das 16×16-Malraster ist ein SDK-Gridview; Selektion = Malcursor
+-- (SDK: playdate.ui.gridview aus CoreLibs/ui)
 local gridView = playdate.ui.gridview.new(CELL_SIZE, CELL_SIZE)
 gridView:setNumberOfSections(1)
 gridView:setNumberOfColumns(GRID_COLS)
 gridView:setNumberOfRowsInSection(1, GRID_ROWS)
 gridView:setSelection(1, math.floor(GRID_ROWS / 2) + 1, math.floor(GRID_COLS / 2) + 1)
 
--- Zeichne eine Zelle und optional Cursor, bei Auswahl
+-- drawCell-Callback: hier bewusst mit Doppelpunkt definiert
+-- (function gridView:drawCell), damit self korrekt belegt ist —
+-- das Gridview ruft den Callback als Methode auf.
 function gridView:drawCell(section, row, column, selected, x, y, width, height)
     local selSection, selRow, selCol = gridView:getSelection()
     -- Immer Gridzelle zeichnen
@@ -51,10 +58,10 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
     gfx.drawRect(x, y, width, height)
 
     local isBlack = gridState[row][column]
-        if isBlack then
-            gfx.setColor(gfx.kColorBlack)
-            gfx.fillRect(x+1, y+1, width-2, height-2)
-        end
+    if isBlack then
+        gfx.setColor(gfx.kColorBlack)
+        gfx.fillRect(x + 1, y + 1, width - 2, height - 2)
+    end
     -- Cursor immer in der selektierten Zelle zeichnen
     local isCursor = (section == selSection and row == selRow and column == selCol)
     if isCursor then
@@ -66,22 +73,37 @@ end
 function PixelRoom:setCurrentTile(tile, tileIndex)
     currentTileIndex = tileIndex
     for y = 1, GRID_ROWS do
-    gridState[y] = {}
+        gridState[y] = {}
         for x = 1, GRID_COLS do
-            local color=tile:sample(x-1, y-1)
-            gridState[y][x] = color==gfx.kColorBlack
-            
+            local color = tile:sample(x - 1, y - 1)
+            gridState[y][x] = color == gfx.kColorBlack
         end
     end
 end
 
--- A-Button toggelt Zelleninhalt an der aktuellen Cursor-Position
-local function toggleCurrentCell()
-    local section, row, col = gridView:getSelection()
+-- Pencil-Strich: Der A-Druck bestimmt den Malwert des ganzen Strichs —
+-- Pixel war schwarz -> Strich malt Weiß (Radierer), sonst Schwarz.
+-- Bewegungen mit gehaltenem A malen denselben Wert weiter.
+local strokeValue = nil  -- true/false = Malwert des laufenden Strichs, nil = kein Strich
+
+local function paintCurrentCell(value)
+    local _, row, col = gridView:getSelection()
     if row and col and gridState[row] then
-        gridState[row][col] = not gridState[row][col]
+        gridState[row][col] = value
         needsRedraw = true
     end
+end
+
+local function beginStroke()
+    local _, row, col = gridView:getSelection()
+    if row and col and gridState[row] then
+        strokeValue = not gridState[row][col]
+        paintCurrentCell(strokeValue)
+    end
+end
+
+local function endStroke()
+    strokeValue = nil
 end
 
 local function moveCursor(direction)
@@ -100,8 +122,9 @@ local function moveCursor(direction)
 
     local _, newRow, newCol = gridView:getSelection()
     if oldRow ~= newRow or oldCol ~= newCol then
-        if playdate.buttonIsPressed(playdate.kButtonA) then
-            toggleCurrentCell()
+        -- Laufender A-Strich malt weiter (SDK: playdate.buttonIsPressed)
+        if strokeValue ~= nil and playdate.buttonIsPressed(playdate.kButtonA) then
+            paintCurrentCell(strokeValue)
         else
             needsRedraw = true
         end
@@ -149,67 +172,84 @@ local function processDirectionHold()
     end
 end
 
+-- Baut das 16×16-Tile-Bild aus dem aktuellen gridState.
+local function buildTileImage()
+    local newTile = gfx.image.new(GRID_COLS, GRID_ROWS, gfx.kColorWhite)
+    gfx.pushContext(newTile)
+        gfx.setColor(gfx.kColorBlack)
+        for y = 1, GRID_ROWS do
+            for x = 1, GRID_COLS do
+                if gridState[y][x] then
+                    gfx.drawPixel(x - 1, y - 1)
+                end
+            end
+        end
+    gfx.popContext()
+    return newTile
+end
+
+-- Übergibt das bearbeitete Tile an den ZoomRoom (Standard: Dedup-Pfad;
+-- "All Similar": in-place, wirkt auf alle Verwendungen — FR-013-Ausnahme).
+local function commitToZoomRoom()
+    local newTile = buildTileImage()
+    if changeAllSimilar and currentTileIndex then
+        nextRoom:updateExistingTile(newTile, currentTileIndex)
+    else
+        nextRoom:setNewTile(newTile)
+    end
+end
 
 -- Initialize the room with shared data and dependencies
-function PixelRoom:init(switchRoom,nextRoomReference)
+function PixelRoom:init(switchRoom, nextRoomReference)
     switchRoomFunction = switchRoom
     nextRoom = nextRoomReference
     for y = 1, GRID_ROWS do
-    gridState[y] = {}
+        gridState[y] = {}
         for x = 1, GRID_COLS do
-            gridState[y][x] =false
+            gridState[y][x] = false
         end
     end
     needsRedraw = true
 end
 
--- Update logic for StartRaum
+-- Terminate-Hook (Contract E-03): Zustand an ZoomRoom übergeben, ohne Room-Wechsel.
+function PixelRoom:commitForTerminate()
+    if nextRoom then
+        commitToZoomRoom()
+    end
+end
+
 function PixelRoom:update()
     processDirectionHold()
 
+    -- Ticks in jedem Update lesen (stateful), ohne B verwerfen —
+    -- sonst entlaedt sich aufgestauter Zaehler beim ersten B-Frame.
+    local crankTicks = playdate.getCrankTicks(4) or 0
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
     if bHeld then
-        local crankTicks = playdate.getCrankTicks(4) or 0
-        ticks += crankTicks
-        if ticks <=-4 then
-            ticks=0
+        -- Standard-Lua statt pdc-Kurzform "+=" (haelt die Datei headless testbar)
+        ticks = ticks + crankTicks
+        if ticks <= -4 then
+            ticks = 0
             if switchRoomFunction then
-                -- Tile-Bild aus gridState erzeugen
-                local newTile = gfx.image.new(GRID_COLS, GRID_ROWS,gfx.kColorWhite)
-                gfx.pushContext(newTile)
-                    gfx.setColor(gfx.kColorBlack)
-                    for y = 1, GRID_ROWS do
-                        for x = 1, GRID_COLS do
-                            if gridState[y][x] then
-                                gfx.drawPixel(x-1, y-1)
-                            end
-                        end
-                    end
-                gfx.popContext()
-                if changeAllSimilar and currentTileIndex then
-                    -- In-place: bestehendes Tile überschreiben
-                    nextRoom:updateExistingTile(newTile, currentTileIndex)
-                else
-                    -- Standard: neues Tile anlegen / deduplizieren
-                    nextRoom:setNewTile(newTile)
-                end
+                commitToZoomRoom()
                 switchRoomFunction(nextRoom)
             end
+        elseif ticks > 0 then
+            -- Innerste Zoomstufe: Vorwärtszoom ist No-op
+            ticks = 0
         end
-    else 
-        ticks=0
+    else
+        ticks = 0
     end
-
-
 
     if needsRedraw then
         -- draw a background
         gfx.clear(gfx.kColorWhite)
         gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
         gfx.fillRect(0, 0, 400, 240)
-        -- Example: Draw the title screen here
-        gridView:drawInRect(PADDING, 0, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
-        
+        gridView:drawInRect(PADDING_X, PADDING_Y, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
+
         needsRedraw = false
     end
     playdate.timer.updateTimers()
@@ -217,6 +257,8 @@ end
 
 function PixelRoom:entered()
     clearDirectionHold()
+    endStroke()
+    ticks = 0
     needsRedraw = true
     -- System-Menü: Checkbox "All Similar" + "Invert"
     local menu = playdate.getSystemMenu()
@@ -235,35 +277,37 @@ function PixelRoom:entered()
     print("Entered PixelRoom")
 end
 
--- Input handler for StartRaum
 function PixelRoom:inputHandler()
     return {
-    upButtonDown = function()
-        startDirectionHold("up")
-    end,
-    upButtonUp = function()
-        stopDirectionHold("up")
-    end,
-    downButtonDown = function()
-        startDirectionHold("down")
-    end,
-    downButtonUp = function()
-        stopDirectionHold("down")
-    end,
-    leftButtonDown = function()
-        startDirectionHold("left")
-    end,
-    leftButtonUp = function()
-        stopDirectionHold("left")
-    end,
-    rightButtonDown = function()
-        startDirectionHold("right")
-    end,
-    rightButtonUp = function()
-        stopDirectionHold("right")
-    end,
-    AButtonDown = function()
-        toggleCurrentCell()
-    end
-}
+        upButtonDown = function()
+            startDirectionHold("up")
+        end,
+        upButtonUp = function()
+            stopDirectionHold("up")
+        end,
+        downButtonDown = function()
+            startDirectionHold("down")
+        end,
+        downButtonUp = function()
+            stopDirectionHold("down")
+        end,
+        leftButtonDown = function()
+            startDirectionHold("left")
+        end,
+        leftButtonUp = function()
+            stopDirectionHold("left")
+        end,
+        rightButtonDown = function()
+            startDirectionHold("right")
+        end,
+        rightButtonUp = function()
+            stopDirectionHold("right")
+        end,
+        AButtonDown = function()
+            beginStroke()
+        end,
+        AButtonUp = function()
+            endStroke()
+        end
+    }
 end

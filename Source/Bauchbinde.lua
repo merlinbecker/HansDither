@@ -1,3 +1,6 @@
+-- Bauchbinde.lua — kleines Text-Banner am unteren Bildschirmrand
+-- (z.B. "Frame 2/4" im EditorRoom). Reines Zeichen-Helferlein ohne SDK-Magie;
+-- gfx wird injiziert, damit das Modul headless testbar bleibt.
 Bauchbinde = {}
 Bauchbinde.__index = Bauchbinde
 

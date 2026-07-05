@@ -1,12 +1,14 @@
 -- ZoomRoom.lua
--- Mittlerer Zoom-Raum zwischen TileRoom (25×15 Tiles) und PixelRoom (8×8 Pixel).
--- Zeigt 3×3 Tiles rund um den aktuellen Cursor als 24×24 editierbare Zellen an.
--- Jede Zelle entspricht einem Pixel des Tiles (10×10 px auf dem nativen 400x240-Display).
+-- Mittlerer Zoom-Raum zwischen EditorRoom (25×15 Tiles à 16×16 px) und PixelRoom (16×16 px).
+-- Zeigt den 3×3-Tile-Kontext um den Cursor als 24×24-Malraster; eine Zelle
+-- entspricht einem 2×2-Pixelblock des Tiles (FR-010, halbe Auflösung).
+-- Commit beim Rauszoomen läuft über EditorRoom:applyTileEdits (Dedup-Pfad, FR-012).
 
 import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/crank"
 import "PencilCursor"
+import "ImageStoreCodec"
 
 local gfx = playdate.graphics
 
@@ -14,19 +16,21 @@ ZoomRoom = {}
 
 -- ── Konstanten ────────────────────────────────────────────────────────────────
 
-local TILE_SIZE  = 8   -- Pixel pro Tile (8×8)
-local SLOTS      = 3   -- Raster: 3×3 Tile-Slots
-local GRID_COLS  = TILE_SIZE * SLOTS  -- 24 Zellen
-local GRID_ROWS  = TILE_SIZE * SLOTS  -- 24 Zellen
-local CELL_SIZE  = 10  -- px pro Zelle (native 400x240, 2x Pulp-Pixel)
+local CELLS_PER_TILE = 8   -- Rasterzellen pro Tile (16 px / 2 px pro Zelle)
+local PX_PER_CELL = 2      -- native Pixel pro Rasterzelle (2×2-Block, FR-010)
+local TILE_PX = 16         -- Pixel pro Tile
+local SLOTS = 3            -- Raster: 3×3 Tile-Slots
+local GRID_COLS = CELLS_PER_TILE * SLOTS  -- 24 Zellen
+local GRID_ROWS = CELLS_PER_TILE * SLOTS  -- 24 Zellen
+local CELL_SIZE = 10       -- px pro Zelle auf dem Display (240×240 zentriert)
 
--- Grid zentriert: (400 - 240) / 2 = 80 px links, 0 px oben (passt exakt in 400×240)
-local OFFSET_X   = 80
-local OFFSET_Y   = 0
+-- Grid zentriert: (400 - 240) / 2 = 80 px links, 0 px oben
+local OFFSET_X = 80
+local OFFSET_Y = 0
 
--- Strichelung für Pixel-Grenzen (Dash/Gap in Zellen-Einheiten × CELL_SIZE)
-local DASH_LEN   = 2   -- px Strich
-local GAP_LEN    = 2   -- px Lücke
+-- Strichelung für Zellgrenzen innerhalb der Tiles
+local DASH_LEN = 2
+local GAP_LEN = 2
 
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
@@ -35,36 +39,34 @@ local HOLD_REPEAT_MS = 80
 
 local switchRoomFunction
 local pixelRoom
-local tileRoom
+local editorRoom
 
--- showGridLines: übernommen von TileRoom, steuert ob Intertile-Grenzen (gestrichelt) gezeichnet werden.
+-- showGridLines: vom EditorRoom übernommen (FR-015)
 local showGridLines = true
 
--- gridState[row][col] = bool  (true = schwarz, false = weiß)
--- row/col jeweils 1..24 (GRID_ROWS × GRID_COLS)
-local gridState = {}
+-- slots[slotRow][slotCol] = {tileX, tileY, frameIndexPos, originalIndex, originalImage, oob, editedImage}
+local slots = {}
 
--- tileSlots[slotRow][slotCol] = { tileIndex = <int>, originalTileIndex = <int> }
--- slotRow/slotCol jeweils 1..3 (SLOTS × SLOTS)
--- tileIndex = 0 bedeutet "Slot war leer / out-of-bounds → nicht in Tilemap schreiben"
-local tileSlots = {}
+-- gridState[row][col] = bool (true = schwarz); baselineGrid = Dekodier-Snapshot
+-- der Basisbilder — Zellen, die davon abweichen, hat der Nutzer geändert.
+local gridState = {}
+local baselineGrid = {}
+
+-- Referenz auf imageData des Editors (für "All Similar" in-place, FR-015)
+local imageDataRef = nil
 
 -- Cursor im 24×24-Grid (1-basiert)
-local cursorRow = 1
-local cursorCol = 1
+local cursorRow = 12
+local cursorCol = 12
 
--- Merkt sich, in welchem Slot zuletzt in PixelRoom gezoomt wurde (für Rückgabe).
+-- Slot, in den zuletzt in den PixelRoom gezoomt wurde
 local lastEditedSlotRow = nil
 local lastEditedSlotCol = nil
 
--- Tilemap-Koordinaten des Cursor-Tiles (aus TileRoom-Kontext), für Commit-Berechnung.
-local contextCursorTileCol = 1
-local contextCursorTileRow = 1
-
 local needsRedraw = true
 
--- Crank-Akkumulator (analog zu TileRoom/PixelRoom)
-local ticks  = 0
+-- Crank-Akkumulator (analog zu EditorRoom/PixelRoom)
+local ticks = 0
 
 local directionHold = {
     up = { active = false, nextMs = 0 },
@@ -75,39 +77,48 @@ local directionHold = {
 
 -- ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
--- Gibt (slotRow, slotCol) im Bereich 1..3 für eine Zellen-Position zurück.
 local function getSlotForCell(row, col)
-    return math.ceil(row / TILE_SIZE), math.ceil(col / TILE_SIZE)
+    return math.ceil(row / CELLS_PER_TILE), math.ceil(col / CELLS_PER_TILE)
 end
 
--- Dekodiert ein 8×8-gfx.image in gridState für den angegebenen Slot (1-basiert).
--- Wenn tile nil ist (out-of-bounds), werden alle Zellen des Slots auf weiß (false) gesetzt.
-local function decodeTileIntoGridState(tile, slotRow, slotCol)
-    local baseRow = (slotRow - 1) * TILE_SIZE
-    local baseCol = (slotCol - 1) * TILE_SIZE
-    for r = 1, TILE_SIZE do
-        for c = 1, TILE_SIZE do
-            if tile then
-                local color = tile:sample(c - 1, r - 1)
-                gridState[baseRow + r][baseCol + c] = (color == gfx.kColorBlack)
-            else
-                gridState[baseRow + r][baseCol + c] = false
+-- Dekodiert ein 16×16-Image mit 2×2-Blockauslese in gridState + baselineGrid.
+-- nil (out-of-bounds) setzt alle Zellen des Slots auf weiß.
+local function decodeImageIntoGrids(img, slotRow, slotCol)
+    local baseRow = (slotRow - 1) * CELLS_PER_TILE
+    local baseCol = (slotCol - 1) * CELLS_PER_TILE
+    for r = 1, CELLS_PER_TILE do
+        for c = 1, CELLS_PER_TILE do
+            local value = false
+            if img then
+                value = (img:sample((c - 1) * PX_PER_CELL, (r - 1) * PX_PER_CELL) == gfx.kColorBlack)
             end
+            gridState[baseRow + r][baseCol + c] = value
+            baselineGrid[baseRow + r][baseCol + c] = value
         end
     end
 end
 
--- Baut ein 8×8-gfx.image aus gridState für den angegebenen Slot.
-local function buildTileImageForSlot(slotRow, slotCol)
-    local img = gfx.image.new(TILE_SIZE, TILE_SIZE, gfx.kColorWhite)
+-- Baut das aktuelle 16×16-Arbeitsbild eines Slots: Basisbild (editiert oder
+-- original) plus alle Zellabweichungen als 2×2-Blöcke (erhält Pixel-Details,
+-- die feiner als das 24×24-Raster sind).
+local function buildWorkingImage(slotRow, slotCol)
+    local slot = slots[slotRow][slotCol]
+    local base = slot.editedImage or slot.originalImage
+    local img
+    if base then
+        img = base:copy()
+    else
+        img = gfx.image.new(TILE_PX, TILE_PX, gfx.kColorWhite)
+    end
+    local baseRow = (slotRow - 1) * CELLS_PER_TILE
+    local baseCol = (slotCol - 1) * CELLS_PER_TILE
     gfx.pushContext(img)
-        gfx.setColor(gfx.kColorBlack)
-        local baseRow = (slotRow - 1) * TILE_SIZE
-        local baseCol = (slotCol - 1) * TILE_SIZE
-        for r = 1, TILE_SIZE do
-            for c = 1, TILE_SIZE do
-                if gridState[baseRow + r][baseCol + c] then
-                    gfx.drawPixel(c - 1, r - 1)
+        for r = 1, CELLS_PER_TILE do
+            for c = 1, CELLS_PER_TILE do
+                local value = gridState[baseRow + r][baseCol + c]
+                if value ~= baselineGrid[baseRow + r][baseCol + c] then
+                    gfx.setColor(value and gfx.kColorBlack or gfx.kColorWhite)
+                    gfx.fillRect((c - 1) * PX_PER_CELL, (r - 1) * PX_PER_CELL, PX_PER_CELL, PX_PER_CELL)
                 end
             end
         end
@@ -115,26 +126,24 @@ local function buildTileImageForSlot(slotRow, slotCol)
     return img
 end
 
--- Vergleicht zwei Bilder pixelgenau.
-local function imagesEqual(a, b)
-    if a == nil and b == nil then return true end
-    if a == nil or b == nil then return false end
-    local aw, ah = a:getSize()
-    local bw, bh = b:getSize()
-    if aw ~= bw or ah ~= bh then return false end
-    for y = 0, ah - 1 do
-        for x = 0, aw - 1 do
-            if a:sample(x, y) ~= b:sample(x, y) then
-                return false
+-- Sichtbarkeits-Vergleich zweier Tiles: gemeinsame Implementierung im Codec
+local imagesEqual = ImageStoreCodec.imagesVisiblyEqual
+
+local function slotHasCellEdits(slotRow, slotCol)
+    local baseRow = (slotRow - 1) * CELLS_PER_TILE
+    local baseCol = (slotCol - 1) * CELLS_PER_TILE
+    for r = 1, CELLS_PER_TILE do
+        for c = 1, CELLS_PER_TILE do
+            if gridState[baseRow + r][baseCol + c] ~= baselineGrid[baseRow + r][baseCol + c] then
+                return true
             end
         end
     end
-    return true
+    return false
 end
 
 -- ── Rendering ─────────────────────────────────────────────────────────────────
 
--- Zeichnet eine gestrichelte vertikale Linie (px-koordinaten).
 local function drawDashedVLine(x, y1, y2)
     local y = y1
     while y < y2 do
@@ -144,7 +153,6 @@ local function drawDashedVLine(x, y1, y2)
     end
 end
 
--- Zeichnet eine gestrichelte horizontale Linie (px-koordinaten).
 local function drawDashedHLine(x1, x2, y)
     local x = x1
     while x < x2 do
@@ -154,67 +162,51 @@ local function drawDashedHLine(x1, x2, y)
     end
 end
 
--- Zeichnet das 24×24-Zellraster mit Zellinhalt, Linienstilen und Cursor.
 local function drawGrid()
     local totalW = GRID_COLS * CELL_SIZE
     local totalH = GRID_ROWS * CELL_SIZE
 
-    -- 0. Seitflächen links und rechts des Grids: Checkerboard-Pattern wie PixelRoom
+    -- Seitenflächen: Checkerboard wie PixelRoom
     gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
     gfx.fillRect(0, 0, OFFSET_X, totalH)
     gfx.fillRect(OFFSET_X + totalW, 0, OFFSET_X, totalH)
     gfx.setColor(gfx.kColorBlack)
 
-    -- 1. Zellen zeichnen (Pixel-Inhalt)
+    -- Zellen zeichnen
     for r = 1, GRID_ROWS do
         for c = 1, GRID_COLS do
             local x = OFFSET_X + (c - 1) * CELL_SIZE
             local y = OFFSET_Y + (r - 1) * CELL_SIZE
-            if gridState[r][c] then
-                gfx.setColor(gfx.kColorBlack)
-                gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
-            else
-                gfx.setColor(gfx.kColorWhite)
-                gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
-            end
+            gfx.setColor(gridState[r][c] and gfx.kColorBlack or gfx.kColorWhite)
+            gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
         end
     end
 
-    -- 2. Pixelgrenzen innerhalb der Tiles: gestrichelte Linien (nur wenn showGridLines)
+    -- Zellgrenzen innerhalb der Tiles: gestrichelt (nur wenn showGridLines)
     if showGridLines then
         gfx.setColor(gfx.kColorBlack)
-        -- Vertikale Zwischenlinien (gestrichelt, nicht an Tile-Grenzen)
         for c = 1, GRID_COLS - 1 do
-            local x = OFFSET_X + c * CELL_SIZE
-            local isTileBorder = (c % TILE_SIZE == 0)
-            if not isTileBorder then
-                drawDashedVLine(x, OFFSET_Y, OFFSET_Y + totalH)
+            if c % CELLS_PER_TILE ~= 0 then
+                drawDashedVLine(OFFSET_X + c * CELL_SIZE, OFFSET_Y, OFFSET_Y + totalH)
             end
         end
-        -- Horizontale Zwischenlinien (gestrichelt, nicht an Tile-Grenzen)
         for r = 1, GRID_ROWS - 1 do
-            local y = OFFSET_Y + r * CELL_SIZE
-            local isTileBorder = (r % TILE_SIZE == 0)
-            if not isTileBorder then
-                drawDashedHLine(OFFSET_X, OFFSET_X + totalW, y)
+            if r % CELLS_PER_TILE ~= 0 then
+                drawDashedHLine(OFFSET_X, OFFSET_X + totalW, OFFSET_Y + r * CELL_SIZE)
             end
         end
     end
 
-    -- 3. Tile-Grenzen: durchgezogene Linien (alle 8 Zellen + Außenrahmen)
+    -- Tile-Grenzen: durchgezogen (alle 8 Zellen + Außenrahmen)
     gfx.setColor(gfx.kColorBlack)
-    -- Vertikale Tile-Grenzen
     for s = 0, SLOTS do
-        local x = OFFSET_X + s * TILE_SIZE * CELL_SIZE
+        local x = OFFSET_X + s * CELLS_PER_TILE * CELL_SIZE
         gfx.drawLine(x, OFFSET_Y, x, OFFSET_Y + totalH - 1)
-    end
-    -- Horizontale Tile-Grenzen
-    for s = 0, SLOTS do
-        local y = OFFSET_Y + s * TILE_SIZE * CELL_SIZE
+        local y = OFFSET_Y + s * CELLS_PER_TILE * CELL_SIZE
         gfx.drawLine(OFFSET_X, y, OFFSET_X + totalW - 1, y)
     end
 
-    -- 4. Cursor zeichnen
+    -- Cursor
     local cx = OFFSET_X + (cursorCol - 1) * CELL_SIZE
     local cy = OFFSET_Y + (cursorRow - 1) * CELL_SIZE
     PencilCursor.draw(cx, cy, CELL_SIZE, CELL_SIZE)
@@ -222,62 +214,66 @@ end
 
 -- ── Interne Aktionen ──────────────────────────────────────────────────────────
 
--- Zoom-In: aktuellen Slot-Tile-Inhalt an PixelRoom übergeben und dorthin wechseln.
--- Out-of-bounds-Slots (tileIndex == 0 und originalTileIndex == 0) können nicht gezoomt werden.
+-- Zoom-In: Arbeitsbild des Cursor-Slots an PixelRoom übergeben (Z-02: nur in-bounds).
 local function zoomIntoPixelRoom()
     local slotRow, slotCol = getSlotForCell(cursorRow, cursorCol)
-    local slot = tileSlots[slotRow][slotCol]
-    -- Nur in gültige (in-bounds) Slots zoomen
-    if slot.originalTileIndex == 0 and slot.tileIndex == 0 then
-        return  -- Out-of-bounds-Slot: Zoom abbrechen
+    local slot = slots[slotRow][slotCol]
+    if not slot or slot.oob then
+        return
     end
     lastEditedSlotRow = slotRow
     lastEditedSlotCol = slotCol
-    local tile    = buildTileImageForSlot(slotRow, slotCol)
-    local tileIdx = slot.tileIndex
-    pixelRoom:setCurrentTile(tile, tileIdx)
+    pixelRoom:setCurrentTile(buildWorkingImage(slotRow, slotCol), slot.originalIndex)
     switchRoomFunction(pixelRoom)
 end
 
--- Commit: geaenderte, gueltige Slots als Batch an TileRoom uebergeben, dann zurueckwechseln.
--- Out-of-bounds-Slots (originalTileIndex == 0 und tileIndex == 0) werden uebersprungen.
-local function commitAndReturnToTileRoom()
+-- Sammelt Edits aller geänderten in-bounds-Slots (Z-03: kein Commit ohne Änderung).
+local function collectEdits()
     local edits = {}
     for sr = 1, SLOTS do
         for sc = 1, SLOTS do
-            local slot = tileSlots[sr][sc]
-            -- Out-of-bounds-Slots überspringen (waren von Anfang an ungültig)
-            if slot.originalTileIndex > 0 or slot.tileIndex > 0 then
-                -- Tilemap-Koordinaten berechnen: Cursor-Slot ist immer (2,2)
-                local dr = sr - 2
-                local dc = sc - 2
-                local tileCol = contextCursorTileCol + dc
-                local tileRow = contextCursorTileRow + dr
-                local img = buildTileImageForSlot(sr, sc)
-                -- Nur geaenderte Tiles committen.
-                -- Geaenderte Tiles gehen immer ueber den Neu/Dedupe-Pfad in TileRoom
-                -- (findOrAppendImage + Hashvergleich), analog zum PixelRoom-Standardpfad.
-                if not imagesEqual(img, slot.originalTileImage) then
-                    table.insert(edits, {
-                        tileCol       = tileCol,
-                        tileRow       = tileRow,
-                        image         = img,
-                        existingIndex = 0
-                    })
+            local slot = slots[sr][sc]
+            if slot and not slot.oob then
+                if slot.editedImage ~= nil or slotHasCellEdits(sr, sc) then
+                    local img = buildWorkingImage(sr, sc)
+                    if not imagesEqual(img, slot.originalImage) then
+                        table.insert(edits, {
+                            frameIndexPos = slot.frameIndexPos,
+                            newImage = img
+                        })
+                    end
                 end
             end
         end
     end
-    if #edits > 0 then
-        tileRoom:applyTileEditsBatch(edits)
-    end
-    switchRoomFunction(tileRoom)
+    return edits
 end
 
--- Toggelt Zellinhalt an der aktuellen Cursor-Position.
-local function toggleCurrentCell()
-    gridState[cursorRow][cursorCol] = not gridState[cursorRow][cursorCol]
+local function commitAndReturnToEditor()
+    local edits = collectEdits()
+    if #edits > 0 then
+        editorRoom:applyTileEdits(edits)
+    end
+    switchRoomFunction(editorRoom)
+end
+
+-- Pencil-Strich: Der A-Druck bestimmt den Malwert des ganzen Strichs —
+-- Zelle war schwarz -> Strich malt Weiß (Radierer), sonst Schwarz.
+-- Bewegungen mit gehaltenem A malen denselben Wert weiter.
+local strokeValue = nil  -- true/false = Malwert des laufenden Strichs, nil = kein Strich
+
+local function paintCurrentCell(value)
+    gridState[cursorRow][cursorCol] = value
     needsRedraw = true
+end
+
+local function beginStroke()
+    strokeValue = not gridState[cursorRow][cursorCol]
+    paintCurrentCell(strokeValue)
+end
+
+local function endStroke()
+    strokeValue = nil
 end
 
 local function moveCursor(direction)
@@ -297,8 +293,9 @@ local function moveCursor(direction)
     end
 
     if oldRow ~= cursorRow or oldCol ~= cursorCol then
-        if playdate.buttonIsPressed(playdate.kButtonA) then
-            toggleCurrentCell()
+        -- Laufender A-Strich malt weiter (SDK: playdate.buttonIsPressed)
+        if strokeValue ~= nil and playdate.buttonIsPressed(playdate.kButtonA) then
+            paintCurrentCell(strokeValue)
         else
             needsRedraw = true
         end
@@ -348,127 +345,145 @@ end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
 
--- Initialisiert ZoomRoom mit Abhängigkeiten.
--- switchRoom      : globale switchRoom-Funktion aus main.lua
--- nextPixelRoom   : PixelRoom-Objekt (Zoom-In-Ziel)
--- nextTileRoom    : TileRoom-Objekt (Commit-Ziel / Zoom-Out)
-function ZoomRoom:init(switchRoom, nextPixelRoom, nextTileRoom)
+-- switchRoom     : globale switchRoom-Funktion aus main.lua
+-- nextPixelRoom  : PixelRoom-Objekt (Zoom-In-Ziel)
+-- nextEditorRoom : EditorRoom-Objekt (Commit-Ziel / Zoom-Out)
+function ZoomRoom:init(switchRoom, nextPixelRoom, nextEditorRoom)
     switchRoomFunction = switchRoom
-    pixelRoom          = nextPixelRoom
-    tileRoom           = nextTileRoom
+    pixelRoom = nextPixelRoom
+    editorRoom = nextEditorRoom
 
-    -- gridState auf weiß initialisieren
     for r = 1, GRID_ROWS do
         gridState[r] = {}
+        baselineGrid[r] = {}
         for c = 1, GRID_COLS do
             gridState[r][c] = false
+            baselineGrid[r][c] = false
         end
     end
 
-    -- tileSlots initialisieren (alle leer/ungültig)
     for sr = 1, SLOTS do
-        tileSlots[sr] = {}
+        slots[sr] = {}
         for sc = 1, SLOTS do
-            tileSlots[sr][sc] = { tileIndex = 0, originalTileIndex = 0 }
+            slots[sr][sc] = { oob = true }
         end
     end
 
-    -- Cursor auf Mitte des Zentrums-Tiles
-    cursorRow = TILE_SIZE + math.ceil(TILE_SIZE / 2)  -- Zeile 12
-    cursorCol = TILE_SIZE + math.ceil(TILE_SIZE / 2)  -- Spalte 12
+    cursorRow = CELLS_PER_TILE + math.ceil(CELLS_PER_TILE / 2)
+    cursorCol = CELLS_PER_TILE + math.ceil(CELLS_PER_TILE / 2)
 
     needsRedraw = true
 end
 
--- Empfängt 3×3-Tile-Kontext von TileRoom und befüllt gridState + tileSlots.
--- context = {
---   tiles        = { [1..9] = gfx.image|nil },   -- nil für out-of-bounds
---   tileIndices  = { [1..9] = int },              -- 1-basierter Imagetable-Index
---   cursorSlot   = int  (1-9, Standard 5 = Mitte)
--- }
-function ZoomRoom:setFromTileContext(context)
-    -- Tilemap-Cursor-Koordinaten für späteres Commit speichern
-    contextCursorTileCol = context.cursorTileCol or 1
-    contextCursorTileRow = context.cursorTileRow or 1
-    showGridLines        = (context.showGrid ~= false)  -- nil zählt als true
+-- Empfängt den 3×3-Kontext vom EditorRoom (contracts Abschnitt 3):
+-- ctx = { slots (3×3, je {tileX, tileY, frameIndexPos, originalIndex, originalImage, oob}),
+--         gridState (24×24, 2×2-Blockauslese), showGrid, imageData }
+function ZoomRoom:setFromEditorContext(ctx)
+    imageDataRef = ctx.imageData
+    showGridLines = (ctx.showGrid ~= false)
 
-    local slotIdx = 1
     for sr = 1, SLOTS do
-        tileSlots[sr] = tileSlots[sr] or {}
         for sc = 1, SLOTS do
-            local tile      = context.tiles[slotIdx]
-            local tileIndex = context.tileIndices[slotIdx] or 0
-            tileSlots[sr][sc] = {
-                tileIndex         = tileIndex,
-                originalTileIndex = tileIndex,
-                originalTileImage = tile
-            }
-            -- nil-Tiles (out-of-bounds) werden in decodeTileIntoGridState auf weiß gesetzt
-            decodeTileIntoGridState(tile, sr, sc)
-            slotIdx = slotIdx + 1
+            local slot = ctx.slots[sr][sc]
+            slot.editedImage = nil
+            slots[sr][sc] = slot
         end
     end
 
-    -- Cursor auf Zentrum des angegebenen Slots positionieren
-    local cs    = context.cursorSlot or 5
-    local csRow = math.ceil(cs / SLOTS)
-    local csCol = ((cs - 1) % SLOTS) + 1
-    cursorRow = (csRow - 1) * TILE_SIZE + math.ceil(TILE_SIZE / 2)
-    cursorCol = (csCol - 1) * TILE_SIZE + math.ceil(TILE_SIZE / 2)
+    for r = 1, GRID_ROWS do
+        for c = 1, GRID_COLS do
+            local value = ctx.gridState[r][c] and true or false
+            gridState[r][c] = value
+            baselineGrid[r][c] = value
+        end
+    end
+
+    -- Cursor auf Zentrum des mittleren Slots (= Editor-Cursor-Tile)
+    cursorRow = CELLS_PER_TILE + math.ceil(CELLS_PER_TILE / 2)
+    cursorCol = CELLS_PER_TILE + math.ceil(CELLS_PER_TILE / 2)
 
     lastEditedSlotRow = nil
     lastEditedSlotCol = nil
+    ticks = 0
     needsRedraw = true
 end
 
--- Empfängt ein neues (dedupliziertes) Tile von PixelRoom nach dem Zoom-Back.
--- Wird ins gridState des zuletzt bearbeiteten Slots dekodiert; tileIndex = 0
--- signalisiert beim Commit, dass TileRoom ein neues Tile anlegen soll.
+-- Empfängt ein bearbeitetes Tile von PixelRoom (Standardpfad: Dedup beim Commit).
 function ZoomRoom:setNewTile(tile)
     if lastEditedSlotRow and lastEditedSlotCol then
-        decodeTileIntoGridState(tile, lastEditedSlotRow, lastEditedSlotCol)
-        tileSlots[lastEditedSlotRow][lastEditedSlotCol].tileIndex = 0
+        slots[lastEditedSlotRow][lastEditedSlotCol].editedImage = tile
+        decodeImageIntoGrids(tile, lastEditedSlotRow, lastEditedSlotCol)
     end
     needsRedraw = true
 end
 
--- Empfaengt ein aktualisiertes Tile von PixelRoom nach dem Zoom-Back.
--- Das Tile wird ins gridState dekodiert; der tileIndex wird nur als Rueckgabe-Metadatum mitgefuehrt.
--- Beim Commit nutzt ZoomRoom fuer geaenderte Slots immer den Neu/Dedupe-Pfad.
+-- "All Similar" (FR-015, FR-013-Ausnahme): überschreibt das Tile in-place in der
+-- Imagetable und wirkt damit auf alle Verwendungen über alle Frames hinweg.
 function ZoomRoom:updateExistingTile(tile, tileIndex)
-    if lastEditedSlotRow and lastEditedSlotCol then
-        decodeTileIntoGridState(tile, lastEditedSlotRow, lastEditedSlotCol)
-        tileSlots[lastEditedSlotRow][lastEditedSlotCol].tileIndex = tileIndex or 0
+    if not (imageDataRef and tileIndex and tileIndex > 0) then
+        ZoomRoom:setNewTile(tile)
+        return
+    end
+
+    local imagetable = imageDataRef.imagetable
+    local oldImage = imagetable:getImage(tileIndex)
+    if oldImage then
+        local oldHash = ImageStoreCodec.hashTile(oldImage)
+        if imageDataRef.hashIndex[oldHash] == tileIndex then
+            imageDataRef.hashIndex[oldHash] = nil
+        end
+    end
+    imagetable:setImage(tileIndex, tile)
+    imageDataRef.hashIndex[ImageStoreCodec.hashTile(tile)] = tileIndex
+
+    -- Alle Kontext-Slots mit diesem Index zeigen jetzt das geänderte Tile
+    for sr = 1, SLOTS do
+        for sc = 1, SLOTS do
+            local slot = slots[sr][sc]
+            if slot and not slot.oob and slot.originalIndex == tileIndex then
+                slot.originalImage = tile
+                slot.editedImage = nil
+                decodeImageIntoGrids(tile, sr, sc)
+            end
+        end
     end
     needsRedraw = true
+end
+
+-- Terminate-Hook (Contract E-03): ausstehende Änderungen ohne Room-Wechsel committen.
+function ZoomRoom:commitForTerminate()
+    local edits = collectEdits()
+    if #edits > 0 and editorRoom then
+        editorRoom:applyTileEdits(edits)
+    end
 end
 
 -- ── Room-Lifecycle ────────────────────────────────────────────────────────────
 
 function ZoomRoom:entered()
     clearDirectionHold()
+    endStroke()
+    ticks = 0
     needsRedraw = true
-    local menu = playdate.getSystemMenu()
-    menu:removeAllMenuItems()
-    print("Entered ZoomRoom")
+    playdate.getSystemMenu():removeAllMenuItems()
 end
 
 function ZoomRoom:update()
     processDirectionHold()
 
-    -- Zoom-Trigger: B gehalten + Crank
+    -- Zoom-Trigger: B gehalten + Crank. Ticks in jedem Update lesen (stateful),
+    -- ohne B verwerfen — sonst entlaedt sich aufgestauter Zaehler beim ersten B-Frame.
+    local crankTicks = playdate.getCrankTicks(4) or 0
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
     if bHeld then
-        local crankTicks = playdate.getCrankTicks(4) or 0
-        ticks += crankTicks
+        -- Standard-Lua statt pdc-Kurzform "+=" (haelt die Datei headless testbar)
+        ticks = ticks + crankTicks
         if ticks >= 4 then
             ticks = 0
-            -- Crank vorwärts → in PixelRoom zoomen
             zoomIntoPixelRoom()
         elseif ticks <= -4 then
             ticks = 0
-            -- Crank rückwärts → commit und zurück zu TileRoom
-            commitAndReturnToTileRoom()
+            commitAndReturnToEditor()
         end
     else
         ticks = 0
@@ -500,17 +515,20 @@ function ZoomRoom:inputHandler()
         leftButtonDown = function()
             startDirectionHold("left")
         end,
-        leftButtonUp = function()
-            stopDirectionHold("left")
-        end,
         rightButtonDown = function()
             startDirectionHold("right")
+        end,
+        leftButtonUp = function()
+            stopDirectionHold("left")
         end,
         rightButtonUp = function()
             stopDirectionHold("right")
         end,
         AButtonDown = function()
-            toggleCurrentCell()
+            beginStroke()
+        end,
+        AButtonUp = function()
+            endStroke()
         end
     }
 end
