@@ -41,6 +41,14 @@ Ein neuer `EditorRoom` ersetzt den Pulp-gekoppelten TileRoom: 25×15-Raster aus 
 
 **Post-Design Re-Check (nach Phase 1)**: PASS — Datenfluss bleibt auf dem Spec-001-Contract; keine neuen Abstraktionsschichten; Complexity Tracking leer.
 
+**Architektur-Review nach Implementierung (T030, 2026-07-04)**: PASS mit Anmerkungen. Geprüft gegen contracts/editor-room.md (E-01–E-03 erfüllt; Eingabetabelle vollständig umgesetzt; Z-01–Z-03 erfüllt; alle Schnittstellen aus Abschnitt 4 entfernt) und den Constitution Check oben. Abweichungen/Präzisierungen:
+
+1. "B (kurz)" ist als B-Release ohne akkumulierte Zoom-Ticks implementiert (kein Zeit-Schwellwert) — präzisiert die Spec-Formulierung, kein Konflikt.
+2. "All Similar" wirkt in-place über alle Frames; die FR-013-Ausnahme wurde am 2026-07-04 im Spec nachgezogen (Clarifications).
+3. D-Pad-Wiederholung nutzt SDK-`keyRepeatTimerWithDelay` statt des directionHold-Musters der Zoomräume (Constitution I: SDK-first; Konvergenz-Task T032).
+4. `GameRoom.lua` verblieb zunächst unverdrahtet im Quellbaum (nicht Teil des T024-Umfangs); mit Konvergenz-Task T039 entfernt, Schuld T-10 in arc42 Kap. 11 ausgetragen.
+5. Offen: `pdc Source`-Build-Verifikation und Simulator-/Hardware-Szenarien (T008/T011/T016/T023/T025/T026/T029) — auf dieser Entwicklungsmaschine ist kein Playdate SDK installiert.
+
 ## Project Structure
 
 ### Documentation (this feature)

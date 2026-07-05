@@ -1,33 +1,39 @@
 # 12. Glossar
 
-| Begriff | Definition |
-|---|---|
-| Room | Funktionsmodul mit eigener Update-/Input-Logik (z. B. GameRoom, TileRoom). |
-| Tile | 8x8-Bildbaustein, der in Rooms an Rasterpositionen verwendet wird. |
-| Imagetable | Playdate-Struktur fuer eine Indexliste von Bildern (Tiles). |
-| Tilemap | Rasterstruktur, die Tile-Indizes auf Positionen abbildet und zeichnet. |
-| ZoomRoom | Zwischenraum zwischen TileRoom und PixelRoom, der einen 3x3 Tilebereich als 24x24 Pixelraster bearbeitbar macht. |
-| GridView | UI-Komponente fuer Rasternavigation und Zellrendering. |
-| Pulp-Dokument | Vollstaendige JSON-Struktur fuer Pulp-kompatible Spielinhalte. |
-| Pulp-Arbeitsraum | Interne fachliche Arbeitsaufloesung des Editors: 25x15 Tiles bzw. 200x120 Pixel auf Room-Ebene. |
-| Native Anzeigeebene | Physische Runtime-Aufloesung 400x240 bei `playdate.display.setScale(1)`. |
-| gameData | Interne, kompakte Arbeitsdarstellung des Editors (rooms/tiles/frames). |
-| pulpState | Persistente Mapping- und Dokumentdaten fuer kompatibles Speichern. |
-| Offscreen-Buffer | Zwischengerendertes Bild, das TileRoom in 200x120 zeichnet und anschliessend 2x skaliert auf dem Display ausgibt. |
-| Kompaktierung | Entfernen ungenutzter Tiles und Neuabbildung der Referenzen. |
-| Preview | Gespeichertes Vorschaubild eines Games oder Rooms im Datastore. |
-| Save + Back | Systemmenue-Aktion: Speichern des aktuellen Zustands und Rueckkehr zu LoadRoom. |
-| Slot (ZoomRoom) | Einer der 9 Teilbereiche (3x3), die jeweils einem 8x8 Tile im Zoom-Kontext entsprechen. |
-| All Similar | PixelRoom-Option: Bearbeitet ein bestehendes Tile in-place statt neues Tile zu erzeugen. |
-
-## Begriffe des v0.3.0-Planungsschnitts
+## Begriffe des Ist-Zustands (v0.3.0)
 
 | Begriff | Definition |
 |---|---|
-| Bild | Flache Speichereinheit in v0.3.0 (ersetzt Game/Room): 400x240 Pixel, 25x15-Raster aus 16x16-Tiles, 1-12 Frames. |
-| Frame | Eine von maximal 12 Animationsstufen eines Bildes; neue Frames entstehen als Kopie des Vorgaengers. |
-| PDI | Natives Playdate-Bildformat; ab v0.3.0 Ablageformat der deduplizierten Tile-Sammlung. |
-| Positions-JSON | JSON-Datei, die je Frame die Tile-Referenzen des 25x15-Rasters beschreibt. |
+| Room | Funktionsmodul mit eigener Update-/Input-Logik (z. B. SelectionRoom, EditorRoom). |
+| Bild | Flache Speichereinheit (ersetzt Game/Room aus v0.2): 400x240 Pixel, 25x15-Raster aus 16x16-Tiles, 1-12 Frames. |
+| Tile | 16x16-Bildbaustein, der im 25x15-Raster an Positionen referenziert wird; dedupliziert in der Imagetable. |
+| Frame | Eine von maximal 12 Animationsstufen eines Bildes; neue Frames entstehen als Kopie des direkten Vorgaengers. |
+| Imagetable | Playdate-Struktur fuer die Indexliste der deduplizierten Tiles; waechst beim Malen dynamisch. |
+| Tilemap | SDK-Rasterstruktur, die Tile-Indizes auf Positionen abbildet und den aktiven Frame zeichnet. |
+| imageData | Laufzeitrepraesentation eines Bildes: {id, name, imagetable, frames, hashIndex}. |
+| hashIndex | Abbildung FNV-1a-Hash -> Tile-Index; Grundlage der Deduplizierung in Codec und Zoom-Commit. |
+| PDI | Natives Playdate-Bildformat; Ablageformat der deduplizierten Tile-Sammlung (sheet.pdi) und der Previews. |
+| Positions-JSON | frames.json: je Frame 375 Tile-Indizes des 25x15-Rasters. |
 | Aktives Zeichen-Tile | Per Pipette (B) gewaehltes Tile, das A an der Cursor-Position zeichnet; ohne Auswahl toggelt A Schwarz/Weiss. |
-| Zoom Room (v0.3.0) | Mittlere Zoomstufe: 24x24-Malraster ueber dem 3x3-Tile-Kontext; ein Malstrich setzt 2x2 native Pixel. |
-| Pixel Room (v0.3.0) | Tiefste Zoomstufe: ein Tile mit echten 16x16 Pixeln; ein Malstrich setzt 1 Pixel. |
+| Pipette | Kurzes B im Editor: uebernimmt das Tile unter dem Cursor als aktives Zeichen-Tile; auf Weiss = Abwahl. |
+| Zoom Room | Mittlere Zoomstufe: 24x24-Malraster ueber dem 3x3-Tile-Kontext; ein Malstrich setzt 2x2 native Pixel. |
+| Pixel Room | Tiefste Zoomstufe: ein Tile mit echten 16x16 Pixeln; ein Malstrich setzt 1 Pixel. |
+| Slot (Zoomkontext) | Einer der 9 Teilbereiche (3x3) im Zoom Room, die je einem 16x16-Tile entsprechen; Randslots sind out-of-bounds. |
+| All Similar | PixelRoom-Option: bearbeitet ein bestehendes Tile in-place in der Imagetable und wirkt damit auf alle Verwendungen ueber alle Frames (dokumentierte FR-013-Ausnahme). |
+| Bauchbinde | Wiederverwendbares Hinweisband, u. a. fuer die Frame-Anzeige "Frame n/m". |
+| GridView | UI-Komponente fuer Rasternavigation und Zellrendering (SelectionRoom, PixelRoom). |
+| RoomOperation | Coroutine-Orchestrierung fuer room-lokale Langlaeufer inkl. loadingBar-Lifecycle. |
+| save + exit | Systemmenue-Aktion des Editors: automatisches Speichern und Rueckkehr zum SelectionRoom (Verlassen ohne Speichern existiert nicht). |
+| Preview | Gespeichertes Vorschaubild eines Bildes (preview.pdi), gerendert aus Frame 1. |
+
+## Historische Begriffe (Pulp-Aera, bis v0.2)
+
+| Begriff | Definition |
+|---|---|
+| Pulp-Dokument | Vollstaendige JSON-Struktur fuer Pulp-kompatible Spielinhalte; ab v0.3.0 nicht mehr gelesen oder geschrieben. |
+| Pulp-Arbeitsraum | Fruehere Datenaufloesung des Editors: 25x15 Tiles à 8x8 Pixel bzw. 200x120 pro Room; entfallen mit AD-016. |
+| Offscreen-Buffer | Zwischenbild (200x120), das der fruehere TileRoom 2x skaliert ausgab; entfallen mit AD-016. |
+| gameData / pulpState | Fruehere interne Arbeits- und Mapping-Datenstrukturen des Pulp-Pfads; ersetzt durch imageData. |
+| Kompaktierung | Entfernen ungenutzter Tiles vor dem Pulp-Save; im v0.3.0-Pfad derzeit nicht vorhanden (siehe R-13). |
+| Save + Back | Fruehere Systemmenue-Aktion des TileRoom; ersetzt durch "save + exit". |
+| Game / Room (Pulp) | Fruehere zweistufige Inhaltshierarchie; ersetzt durch flache Bilder (AD-018). |

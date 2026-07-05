@@ -12,7 +12,7 @@
 - Status: umgesetzt
 - Entscheidung: Der Editor zeichnet ueber tilemap/imagetable statt ueber reine Pixel-Flaechen fuer den Hauptmodus.
 - Begruendung: Performant auf Playdate, direkt kompatibel mit tile-basiertem Datenmodell.
-- Konsequenz: Zusätzliche Mappinglogik zwischen Tileindex und Pixel-Detaileditor.
+- Konsequenz: Zusätzliche Mappinglogik zwischen Tileindex und Pixel-Detaileditor. Der urspruenglich zugehoerige Crank-Tile-Picker ist mit v0.3.0 entfallen (AD-019); die Tile-Auswahl erfolgt per Pipette (B) direkt aus dem Raster.
 
 ## 9.3 AD-003: Zwei Datenebenen fuer Persistenz
 
@@ -93,42 +93,42 @@
 
 ## 9.14 AD-014: EditMode-Modell im TileRoom mit wiederverwendbarer Bauchbinde
 
-- Status: umgesetzt
+- Status: abgeloest durch AD-019 (v0.3.0)
 - Entscheidung: TileRoom verwendet zwei Modi (TilePickerMode/AnimationMode). B kurz fungiert als Pipette, B lang (>=1.5s) toggelt den Modus, B+Crank startet den Zoom und bricht dabei einen pending Long-Press ab. Die Modusrueckmeldung wird ueber die wiederverwendbare Bauchbinde-Komponente angezeigt.
 - Begruendung: Entkoppelt unmittelbare Tile-Auswahl von kuenftigen Animationsfunktionen, reduziert Eingabekonflikte und schafft ein einheitliches UI-Muster fuer Hinweise.
 - Konsequenz: Zusaetzlicher Zustandsautomat fuer B-Short/Long-Press, Cancel-Pfad und Mode-State notwendig; die Prioritaet zwischen Pipette, Moduswechsel und Zoom muss explizit im Update-Pfad abgesichert werden.
 
 ## 9.15 AD-015: Native Runtime-Aufloesung bei beibehaltener Pulp-Datenaufloesung
 
-- Status: umgesetzt
+- Status: abgeloest durch AD-016 (v0.3.0)
 - Entscheidung: Die Runtime arbeitet auf nativer Display-Aufloesung 400x240 (`setScale(1)`), waehrend Tile-/Frame-Daten und Room-Previews weiterhin im Pulp-Arbeitsraum (8x8 Tiles, 200x120) verbleiben.
 - Begruendung: Allgemeine UI und Schrift sollen schaerfer dargestellt werden, ohne die Persistenz- und Importkompatibilitaet des Pulp-Datenmodells aufzugeben.
 - Konsequenz: TileRoom benoetigt einen Offscreen-Buffer fuer skalierte Tilemap-Darstellung; ZoomRoom und PixelRoom arbeiten mit vergroesserten Zellgroessen; Dokumentation und Tests muessen zwei koordinative Ebenen auseinanderhalten.
 
 ## 9.16 AD-016: Native Datenaufloesung 400x240 mit 16x16-Tiles
 
-- Status: geplant (v0.3.0), ersetzt AD-015
+- Status: umgesetzt (v0.3.0), ersetzt AD-015
 - Entscheidung: Daten- und Anzeigeaufloesung fallen zusammen: 400x240 nativ, 16x16-Tiles im 25x15-Raster. Der Pulp-Arbeitsraum (8x8 Tiles, 200x120) und das duale Aufloesungskonzept entfallen.
 - Begruendung: Volle native Aufloesung fuer Pixelart; wegfallende Koordinatenuebersetzung beseitigt Risiko R-11 und Schuld T-09; Konzeptentscheidung aus dem v0.3.0-Planungsmeeting. Die Zielaufloesung 400x240 ist durch die Playdate-Hardware bestaetigt (der im Meeting genannte Wert "420x240" war ein Versprecher; das Display ist 400x240).
 - Konsequenz: TileRoom rendert ohne Offscreen-Skalierung; ZoomRoom (24x24-Grid ueber 3x3 Tiles, 2x2-Malbloecke) und PixelRoom (16x16 echte Pixel) werden auf die neuen Masse umgestellt.
 
 ## 9.17 AD-017: PDI-Tilemap + Positions-JSON statt Pulp-JSON
 
-- Status: geplant (v0.3.0), ersetzt AD-003 und AD-004 im Speicherpfad
+- Status: umgesetzt (v0.3.0), ersetzt AD-003 und AD-004 im Speicherpfad; mit der Entfernung der PulpGameIO*-Module abgeschlossen
 - Entscheidung: Ein Bild wird als PDI-Tilemap/Imagetable (via Hashing deduplizierte 16x16-Tiles) plus einer JSON-Datei mit den Tile-Positionen je Animationsframe gespeichert. Das Pulp-JSON-Gesamtdokument und die Merge-Logik (PulpGameIO*) entfallen.
 - Begruendung: Native SDK-Formate (Constitution Prinzip II); schnellere Ladezeiten ohne eigenes Dokument-Parsing; Unabhaengigkeit vom Pulp-Oekosystem.
 - Konsequenz: Neuer Persistenzbaustein ersetzt PulpGameIOShared/Save/Load; keine Migration alter Saves (bewusstes Nicht-Ziel); Alternative zur JSON-Positionsablage wird in der Planungsphase evaluiert (offen, siehe R-12).
 
 ## 9.18 AD-018: Flache Bilder statt Games/Rooms-Hierarchie
 
-- Status: geplant (v0.3.0), ersetzt die LoadRoom-Ebene aus AD-001
+- Status: umgesetzt (v0.3.0), ersetzt die LoadRoom-Ebene aus AD-001; mit der Entfernung von LoadRoom/LoadRoomGrid abgeschlossen (SelectionRoom statt GameRoom-Umbau)
 - Entscheidung: Es gibt nur noch flache "Bilder" in unbegrenzter Anzahl. Ein einziger Auswahlscreen (3x3-Raster aus Kreisen mit maskierten Thumbnails, endloses Scrollen) fuehrt direkt in den Editor; der Startscreen zeigt das zuletzt bearbeitete Bild als Hintergrund. Verwaltung (Neu/Kopieren/Loeschen) laeuft ueber das Systemmenue.
 - Begruendung: Die Games/Rooms-Zwischenebene erzeugte Navigationskosten ohne Mehrwert fuer einen Bild-Editor; feste 6er-Grenzen (R-04) entfallen.
 - Konsequenz: LoadRoom/LoadRoomGrid entfallen; GameRoom wird zum Bild-Auswahlscreen umgebaut; Vorschaubilder und "zuletzt bearbeitet"-Markierung kommen aus dem neuen Speicherformat.
 
 ## 9.19 AD-019: Crank steuert Animationsframes, B+Crank die Zoomstufen
 
-- Status: geplant (v0.3.0), ersetzt den Tile-Picker (AD-002-Teilverhalten) und den EditMode-Automaten aus AD-014
+- Status: umgesetzt (v0.3.0), ersetzt den Tile-Picker (AD-002-Teilverhalten) und den EditMode-Automaten aus AD-014
 - Entscheidung: Crank ohne Modifier wechselt Frames (vorwaerts: naechster Frame als Kopie des aktuellen, rueckwaerts: zurueck; harte Grenze 12 Frames, danach Rotation). B waehlt das Tile an der Cursor-Position (Pipette), A zeichnet bzw. toggelt Schwarz/Weiss. B+Crank zoomt durch genau drei Stufen; der globale Tile-Picker und der B-Long-Press-Moduswechsel entfallen.
 - Begruendung: Animation wird Kernfeature; die Crank-Rastung ist dafuer das natuerliche Eingabemuster. Wegfall des Mode-Automaten reduziert Eingabekonflikte (QS-03a wird obsolet).
 - Konsequenz: TileRoomEditor wird umgebaut; Frame-Anzeige ueber Bauchbinde; Positions-JSON speichert je Frame; Kopie-Semantik beim Anlegen neuer Frames.

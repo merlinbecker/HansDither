@@ -2,40 +2,60 @@
 
 ## 5.1 Whitebox Gesamtsystem
 
-Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen Rooms fuer Auswahl, Laden und Editieren.
+Das Gesamtsystem besteht aus einer Room-Orchestrierung mit drei Editierstufen und einem nativen Persistenzpfad: TitleRoom -> SelectionRoom -> EditorRoom <-> ZoomRoom <-> PixelRoom; Speichern und Laden laufen ueber ImageStore/ImageStoreCodec (PDI-Tilemap + Positions-JSON, AD-017).
+
+```mermaid
+graph LR
+    Title["TitleRoom\n(Splash)"] -->|A| Selection["SelectionRoom\n(Hub, 3x3-Auswahl)"]
+    Selection -->|"A: Bild oeffnen / neu"| Editor["EditorRoom\n(25x15 Tiles)"]
+    Editor <-->|"B + Crank"| Zoom["ZoomRoom\n(24x24 Raster)"]
+    Zoom <-->|"B + Crank"| Pixel["PixelRoom\n(16x16 Pixel)"]
+    Selection -.->|"new / copy / delete"| Store[("ImageStore + Codec\nsaves/…")]
+    Editor -.->|"Load / Save\n(RoomOperation)"| Store
+    Title -.->|"Preview lesen"| Store
+```
+
+Die Navigation ist bewusst gerichtet: Der TitleRoom ist eine Einbahnstrasse (nur Splash), der SelectionRoom ist die Basis-Ebene — B fuehrt dort nicht zurueck. Zurueck aus dem Editor geht es ausschliesslich ueber "save + exit" (Systemmenue); innerhalb der Zoomkette navigiert B+Crank in beide Richtungen.
 
 ### Enthaltene Bausteine
 
 | Baustein | Verantwortung |
 |---|---|
-| main.lua | Initialisierung, native Display-Skalierung, Room-Verdrahtung, zentrales playdate.update, Terminate-Hook. |
-| TitleRoom | Einfacher Einstieg/Startbildschirm. |
-| GameRoom | Auswahl/Anlage/Loeschen von Games inklusive Vorschauen. |
-| LoadRoom | Auswahl/Anlage/Loeschen von Rooms innerhalb eines Games. |
-| TileRoom | Haupteditor fuer Room-Tiles, Picker, Save + Back, Grid-Logik und 2x-Anzeigeskalierung eines Pulp-Arbeitsraums. |
-| ZoomRoom | Zwischeneditor fuer 3x3 Tilekontext als 24x24 Pixelgrid inkl. Batch-Rueckgabe. |
-| PixelRoom | Detaileditor fuer einzelne 8x8-Tiles auf Pixel-Ebene. |
-| loadingBar | Einheitliches Overlay fuer Lade-/Speicherfortschritt. |
-| RoomOperation | Gemeinsame Coroutine-Orchestrierung fuer room-lokale Langlaeufer. |
-| LoadRoomGrid | UI-/Navigationshelfer fuer LoadRoom-Grid und Vorschauen. |
-| TileRoomPersistence | Persistenz- und Datenmodelllogik fuer TileRoom. |
-| TileRoomEditor | Interaktions- und Zeichnungslogik fuer TileRoom. |
-| Bauchbinde | Wiederverwendbare UI-Komponente fuer kontextuelle Hinweisbaender. |
-| PulpGameIO (Facade) | Oeffentliche API fuer Save/Load und Mapping. |
-| PulpGameIOShared | Gemeinsame Hilfslogik fuer Template, Normalisierung und Dokumentaufbau. |
-| PulpGameIOSave | Save-seitiger Dokumentaufbau. |
-| PulpGameIOLoad | Load-seitige Vorbereitung und Mapping. |
-| Tools/Importer (index.html, app.js) | Lokales Browser-Tool fuer PNG-Import in Pulp-JSON inkl. Dedupe und Export. |
+| main.lua | Initialisierung, Room-Verdrahtung, zentrales playdate.update, Terminate-Hook (Commit-Kette der Zoomstufen + Save des offenen Bildes). |
+| TitleRoom | Einstieg/Startbildschirm; fuehrt zum SelectionRoom. |
+| SelectionRoom | Bild-Auswahlscreen (3x3-Raster mit maskierten Thumbnails, endloses Scrollen); Anlage/Kopie/Loeschen ueber Systemmenue; setzt EditorRoom:setImage(id) und wechselt direkt in den Editor (AD-018). |
+| EditorRoom | Haupteditor: 25x15-Raster aus 16x16-Tiles auf nativen 400x240 via SDK-tilemap (AD-016). Cursor (D-Pad, SDK-keyRepeatTimer), A = Zeichnen/Toggle, B = Pipette, Crank = Frame-Verwaltung (max. 12, Rotation), B+Crank = Zoomtrigger, Systemmenue (save + exit, delete frame, show grid), Dedup-Commit-Pfad applyTileEdits. |
+| ZoomRoom | Mittlere Zoomstufe: 3x3-Tile-Kontext als 24x24-Malraster, eine Zelle = 2x2 native Pixel; Commit geaenderter Slots an EditorRoom:applyTileEdits; "All Similar" schreibt in-place in die Imagetable. |
+| PixelRoom | Innerste Zoomstufe: ein Tile mit echten 16x16 Pixeln; Menueaktionen All Similar und Invert; Rueckgabe an ZoomRoom. |
+| ImageStore | Bildverwaltung: Index (saves/index), Anlage/Kopie/Loeschen, Preview-Zugriff. |
+| ImageStoreCodec | Coroutine-basierte Save-/Load-Operationen: PDI-Sheet (deduplizierte Tiles) + frames.json (Positionen je Frame), FNV-1a-hashTile, Slicing zur Laufzeit-Imagetable inkl. hashIndex. |
+| loadingBar | Einheitliches Overlay fuer Lade-/Speicherfortschritt (Titel, Phasen-Detail, Fehlerstatus). |
+| RoomOperation | Gemeinsame Coroutine-Orchestrierung fuer room-lokale Langlaeufer; reicht Phasen-Yields ans Overlay und das Coroutine-Ergebnis an onComplete durch. |
+| Bauchbinde | Wiederverwendbare UI-Komponente fuer Hinweisbaender (Frame-Anzeige "Frame n/m", Fehlerstatus). |
+| PencilCursor | Cursor-Overlay fuer alle Editierstufen. |
+| tests/headless_tests.lua | SDK-freie Regressionstests (normaler Lua-Interpreter, strikte Playdate-Mocks); fangen insbesondere die Fehlerklasse "nicht existierende SDK-API" vor dem Simulator-Lauf ab. |
+| Tools/Importer (index.html, app.js) | Historisches Browser-Tool fuer PNG-Import in Pulp-JSON; mit dem v0.3.0-Format nicht kompatibel (bewusst, R-14). |
+
+### Entfallene Bausteine (v0.2 -> v0.3.0)
+
+| Entfallen | Ersatz |
+|---|---|
+| TileRoom, TileRoomEditor, TileRoomPersistence | EditorRoom (Neuaufbau ohne Pulp-Kopplung, Offscreen-Buffer, Tile-Picker und EditMode-Automat) |
+| LoadRoom, LoadRoomGrid | SelectionRoom (AD-018) |
+| PulpGameIO, PulpGameIOShared, PulpGameIOSave, PulpGameIOLoad | ImageStore/ImageStoreCodec (AD-017) |
+| GameRoom | Durch SelectionRoom ersetzt (AD-018); Datei entfernt. |
 
 ### Wichtige Schnittstellen
 
 - switchRoom(newRoom): room-uebergreifende Navigation inklusive Input-Handler-Wechsel.
-- TileRoom:setGame(name, data, pulpState): Kontextuebergabe vor Room-Editing.
-- TileRoom:getTileContext3x3()/applyTileEditsBatch(edits): Kontextbereitstellung und Ruecknahme geaenderter Zoom-Slots.
-- ZoomRoom:setFromTileContext(context): Uebernahme des 3x3-Umfelds inkl. showGrid-Synchronisierung.
-- TileRoom:saveToFile(afterSave): asynchroner Persistenz-Trigger inkl. Callback fuer Folgeaktion.
-- RoomOperation:start()/resume(): generischer Ablauf fuer Coroutine + loadingBar-Lifecycle.
-- PulpGameIO.prepareLoadedGame()/buildSaveDocument(): Konvertierung zwischen Datenformen.
+- EditorRoom:setImage(id) / entered(): Kontextsetzung durch SelectionRoom; das Laden laeuft asynchron als RoomOperation beim Room-Eintritt.
+- EditorRoom:applyTileEdits(edits): Ruecknahme geaenderter Zoom-Slots ueber den Dedup-Pfad (hashIndex + Pixelvergleich); schreibt nur den aktiven Frame.
+- EditorRoom:getImageData(): Zugriff fuer den Terminate-Hook in main.lua.
+- ZoomRoom:setFromEditorContext(ctx): Uebernahme des 3x3-Kontexts (Slots, 24x24-gridState, showGrid, imageData-Referenz).
+- ZoomRoom:setNewTile(tile) / updateExistingTile(tile, idx): Rueckgabe aus PixelRoom (Standard- bzw. All-Similar-Pfad).
+- ZoomRoom:commitForTerminate() / PixelRoom:commitForTerminate(): Commit ohne Room-Wechsel fuer den Terminate-Hook.
+- ImageStoreCodec.newSaveOperation(imageData) / newLoadOperation(id): Coroutine-Fabriken fuer RoomOperation.
+- RoomOperation:start()/resume(onError): generischer Ablauf fuer Coroutine + loadingBar-Lifecycle inkl. Fehlerpfad.
 
 ## 5.2 Ebene 2
 
@@ -43,120 +63,89 @@ Das Gesamtsystem besteht aus einer Room-Orchestrierung und funktionsspezifischen
 
 Verantwortung:
 - Imports aller Rooms und CoreLibs
-- Verkabelung der Room-Abhaengigkeiten
-- Lebenszyklusverwaltung
+- Verkabelung: TitleRoom -> SelectionRoom -> EditorRoom <-> ZoomRoom <-> PixelRoom
+- Lebenszyklusverwaltung und Terminate-Hook
 
 Interne Logik:
 - currentRoom als Single-Point-of-Truth fuer Update und Input.
-- Display-Scale ist auf 1 gesetzt; Rooms arbeiten damit auf nativen 400x240.
+- Display-Scale ist auf 1 gesetzt; alle Rooms arbeiten nativ auf 400x240.
 - Beim Raumwechsel werden Input-Handler ausgetauscht, danach entered() aufgerufen.
+- gameWillTerminate(): aktive Zoomstufen committen zuerst (PixelRoom -> ZoomRoom -> EditorRoom), dann wird das offene Bild synchron ueber ImageStoreCodec gespeichert.
 
-### 5.2.2 Whitebox Navigationsrooms (TitleRoom, GameRoom, LoadRoom)
-
-Gemeinsame Eigenschaften:
-- UI-Rendering mit gridview und Statuszeile.
-- pending-Mechanismus fuer verzögerte Uebergaenge nach Keyboard/Animation.
-- Systemmenue-Eintraege fuer Kontextaktionen (Zurueck, Loeschen).
-
-Spezifische Verantwortung:
-- GameRoom verwaltet Games und Indexdatei.
-- LoadRoom verwaltet Rooms eines gewaehlten Games.
-
-### 5.2.3 Whitebox TileRoom
+### 5.2.2 Whitebox SelectionRoom
 
 Verantwortung:
-- Haupt-Arbeitsflaeche fuer Tiles im Room.
-- Cursor, Hintergrundmodus (Show Grid), Tile Picker per Crank.
-- Zwei Editiermodi: TilePickerMode (Tile-Auswahl) und AnimationMode (Frame-Platzhalter).
-- B-Input-Semantik: kurzer Druck als Pipette, langer Druck (>=1.5s) als Moduswechsel, B+Crank als Zoom-Trigger mit Vorrang vor dem Long-Press.
-- Tile-Komprimierung und Persistenz-Aufbereitung.
+- Auswahl, Anlage (mit Keyboard-Namenseingabe), Kopie und Loeschen von Bildern.
+- Vorschaubilder aus dem ImageStore laden und als maskierte Kreis-Thumbnails darstellen.
+- Uebergang in den Editor via setImage(id) + switchRoom.
+
+Interne Logik:
+- Basis-Ebene der Navigation: B fuehrt nicht zum TitleRoom zurueck; B schliesst nur Loesch-Dialog bzw. Keyboard.
+- Selektion laeuft ausschliesslich ueber setSelectedIndex() und ist damit immer mit der Gridview-Selektion (setSelection/scrollToCell) synchron; Navigation klemmt an vorhandenen Eintraegen.
+- Namenseingabe ueber das SDK-Keyboard: Commit/Abbruch via keyboardWillHideCallback(ok); waehrend das Keyboard sichtbar ist, wird jeder Frame neu gezeichnet (Raster + Eingabezeile unten links).
+- Thumbnail-Cache mit Negativ-Eintraegen (false = "Preview fehlt"), damit fehlende Previews nicht pro Frame von der Platte gelesen werden.
+
+### 5.2.3 Whitebox EditorRoom
+
+Verantwortung:
+- Haupt-Arbeitsflaeche: 25x15-Tilemap auf voller Displayflaeche, Cursor, Grid-Overlay.
+- Eingabesemantik gemaess AD-019 (siehe 8.1): A zeichnet/toggelt, B pipettiert, Crank verwaltet Frames, B+Crank zoomt.
+- Frame-Verwaltung mit Kopie-Semantik, harter 12er-Grenze und beidseitiger Rotation; "delete frame" via Systemmenue (letzter Frame gesperrt).
+- Autosave: "save + exit" startet die Save-Operation und wechselt nach Erfolg zum SelectionRoom; Fehler zeigen einen Status, der Editor bleibt bedienbar.
 
 Besonders relevante interne Teile:
-- Tilemap wird in einen 200x120-Offscreen-Buffer gerendert und anschliessend 2x auf 400x240 skaliert; Cursor und UI-Overlays liegen darueber auf nativer Aufloesung.
-- TileRoomEditor kapselt Cursor, Picker, Richtungshalten und Eingabelogik.
-- TileRoomPersistence kapselt Deduplizierung, Kompaktierung, Preview-Render und Room-Sync.
-- Save + Back nutzt RoomOperation + loadingBar fuer phasenweises Speichern.
+- tilemap:setTiles(frames[currentFrame], 25) als einziger Frame-Wechsel-Pfad (keine Bildkopien im Update-Pfad).
+- appendTileImage() laesst die Imagetable beim Malen wachsen (mit Neuaufbau-Fallback) und haelt den hashIndex konsistent.
+- Eingaben sind waehrend laufender Save-/Load-Operationen blockiert (inkl. Menueaktionen).
 
 ### 5.2.4 Whitebox ZoomRoom
 
 Verantwortung:
-- 3x3-Tilekontext aus TileRoom als 24x24 Pixelarbeitsflaeche darstellen.
-- Slot-Mapping (3x3) inkl. out-of-bounds Behandlung verwalten.
-- Aenderungen nur bei Differenz als Batch an TileRoom zurueckgeben.
-- showGrid-Status aus TileRoom uebernehmen und inter-tile Rasterlinien entsprechend ein-/ausblenden.
+- 3x3-Tile-Kontext als 24x24-Malraster darstellen (Zelle = 2x2 native Pixel, Anzeige 10 px/Zelle, 240x240 zentriert).
+- Slot-Mapping inkl. out-of-bounds-Behandlung (Randslots nicht editierbar).
+- Aenderungen nur bei Differenz als Edit-Liste an EditorRoom:applyTileEdits zurueckgeben.
+- showGrid-Status aus dem EditorRoom uebernehmen (gestrichelte Zellgrenzen).
 
 Interne Logik:
-- gridState als boolesches 24x24 Raster.
-- tileSlots mit originalTileIndex/originalTileImage fuer Aenderungsvergleich.
-- commitAndReturnToTileRoom() erzeugt nur geaenderte Edits und nutzt Neu/Dedupe-Pfad in TileRoom.
+- gridState (24x24, boolesch) plus baselineGrid als Dekodier-Snapshot; Nutzeraenderungen = Abweichungen von der Baseline.
+- buildWorkingImage() brennt nur geaenderte Zellen als 2x2-Bloecke ins Basisbild und erhaelt damit feinere Pixel-Details aus dem PixelRoom.
+- "All Similar" aus dem PixelRoom schreibt das Tile in-place in die Imagetable (wirkt auf alle Verwendungen ueber alle Frames, FR-013-Ausnahme) und fuehrt den hashIndex nach.
 
 ### 5.2.5 Whitebox PixelRoom
 
 Verantwortung:
-- 8x8-Pixelbearbeitung eines ausgewaehlten Tiles.
-- Rueckgabe entweder als neues Tile oder in-place-Aenderung (All Similar).
+- 16x16-Pixelbearbeitung eines ausgewaehlten Tiles (Anzeige 14 px/Zelle, 224x224 zentriert).
+- Rueckgabe entweder als bearbeitetes Tile (Dedup beim Commit) oder in-place-Aenderung (All Similar).
 
 Interne Logik:
-- gridState als boolesches Pixelraster.
-- Menueaktionen: All Similar, Invert.
-- B+Crank-Pattern fuer Ruecksprung und Uebergabe; Darstellung als 240x240 Grid mit seitlichem 80px Padding auf nativen 400x240.
+- gridState als boolesches Pixelraster; Menueaktionen All Similar (Checkmark) und Invert.
+- B+Crank rueckwaerts uebergibt an ZoomRoom; vorwaerts ist an der innersten Stufe ein No-op.
 
-### 5.2.6 Whitebox PulpGameIO
+### 5.2.6 Whitebox ImageStore / ImageStoreCodec
 
 Verantwortung:
-- Fassade fuer Save-/Load-Operationen und Mapping.
-- Aufteilung in Shared-/Save-/Load-Teile mit klaren Verantwortlichkeiten.
+- ImageStore: Indexdatei, Bildverwaltung (create/copy/delete/list), Preview-Zugriff.
+- ImageStoreCodec: phasenweises Speichern (Dedup, Sheet, Frames, Bilddaten, Preview, Index) und Laden (Frames lesen, Sheet lesen, Slicing, Validierung) als Coroutinen.
 
 Interne Logik:
-- prepareLoadedGame() normalisiert eingehende Daten in mehreren Fortschrittsphasen.
-- buildSaveDocument() erzeugt konsistentes Ausgabedokument in schrittweisen Phasen.
-- remapTileMappings() passt Mapping nach Tile-Kompaktierung an.
+- Ablage je Bild unter saves/<id>/: sheet.pdi (deduplizierte 16x16-Tiles), frames.json (375 Indizes je Frame), preview.pdi.
+- FNV-1a-hashTile als gemeinsame Dedup-Grundlage von Codec und Editor-Commit-Pfad.
+- Laden baut die Laufzeit-Imagetable samt hashIndex auf; Frame-Daten werden defensiv validiert (Fallback auf Weiss-Tile).
 
-### 5.2.7 Whitebox LoadRoom
+### 5.2.7 Whitebox Tools/Importer (historisch)
 
-Verantwortung:
-- Orchestriert Laden eines Spiels nach Room-Eintritt statt synchron beim Setzen des Kontexts.
-- Delegiert Grid-/Previewdarstellung an LoadRoomGrid.
-- Nutzt RoomOperation + loadingBar fuer sichtbaren Ladefortschritt.
-
-Interne Logik:
-- setGame() setzt nur Kontext und markiert, ob ein Load beim Eintritt noetig ist.
-- entered() startet fuer bestehende Spiele die Ladeoperation.
-- update() resume't laufende Operationen und blockiert konkurrierende Navigation.
-
-### 5.2.8 Whitebox Tools/Importer
-
-Verantwortung:
-- Laedt Pulp-JSON und PNG lokal im Browser.
-- Rendert Rooms und Tile-Palette zur Sichtpruefung.
-- Fuehrt PNG->Tile-Pipeline durch (200x120 Normalisierung, 25x15 x 8x8-Slicing, FNV-1a-Dedupe).
-- Erzeugt neuen Room sowie ggf. neue tiles/frames und bietet Export als neue JSON-Datei an.
-
-Interne Logik:
-- app.js validiert die Kernstruktur (rooms/tiles/frames) defensiv.
-- Hash-Cache wird aus vorhandenen Tiles aufgebaut; neue Tiles werden nur bei Hash-Miss angelegt.
-- editor.sortedTiles wird robust behandelt und neue Tile-IDs werden in Gruppe 4 ergänzt.
-- Das Tool schreibt nie in bestehende Dateien, sondern nur ueber Download der Exportdatei.
-
-### 5.2.9 Whitebox Rendering-Modell ueber Aufloesungsebenen
-
-Verantwortung:
-- Trennung zwischen Pulp-kompatibler Datenaufloesung und nativer Displayaufloesung.
-
-Interne Logik:
-- Tile-/Frame-Daten bleiben 8x8; Room-Vorschauen bleiben 200x120.
-- TileRoom rendert die Tilemap in einen 200x120-Offscreen-Buffer und zeichnet diesen skaliert auf 400x240.
-- ZoomRoom und PixelRoom rendern ihre Pulp-Pixel direkt mit verdoppelten Zellgroessen (10px bzw. 30px).
-- loadingBar und Bauchbinde bleiben in ihrer bisherigen physischen Groesse und profitieren von der nativen Schaerfe statt von zusaetzlicher Skalierung.
+- Browser-Tool fuer den PNG-Import ins Pulp-JSON-Format (v0.2). Mit dem v0.3.0-Speicherformat nicht kompatibel; eine Anpassung ist ein spaeteres Vorhaben (R-14). Das Tool bleibt offline/exportbasiert und schreibt nie in bestehende Dateien.
 
 ## 5.3 Ebene 3 (fokussiert)
 
-### 5.3.1 Persistenz-Substruktur in TileRoom
-- Input: aktueller Room-State + gameData + pulpState
-- Verarbeitung: sync -> compact (inkrementell) -> rebuild tiles/frames -> buildSaveDocument (inkrementell)
-- Output: datastore-JSON + Room-/Game-Previewbilder
+### 5.3.1 Zoom-Commit-Substruktur
 
-### 5.3.2 Mapping-Substruktur in PulpGameIO
-- Input: internes Arbeitsmodell (0-basiert kompakt)
-- Verarbeitung: stabile oder neu vergebene externe IDs
-- Output: Pulp-Dokument mit erhaltenen Metafeldern und aktualisierten Kerninhalten
+- Input: 3x3-Slot-Kontext (frameIndexPos, originalIndex, originalImage) + gridState/baselineGrid + ggf. editierte Tiles aus PixelRoom.
+- Verarbeitung: Aenderungserkennung (Zell-Diff bzw. editedImage) -> Arbeitsbild bauen -> Pixelvergleich gegen Original (Z-03) -> Edit-Liste.
+- Output: EditorRoom:applyTileEdits dedupliziert (hashIndex + Pixelvergleich) oder haengt neue Tiles an und schreibt frames[currentFrame].
+
+### 5.3.2 Persistenz-Substruktur im Codec
+
+- Input: imageData (id, name, imagetable, frames, hashIndex)
+- Verarbeitung: Sheet komponieren -> frames.json aufbauen -> Dateien schreiben -> Preview aus Frame 1 rendern -> Index aktualisieren (letzte Phase, C-06)
+- Output: saves/<id>/{sheet.pdi, frames.json, preview.pdi} + aktualisierter Index

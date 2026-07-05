@@ -66,24 +66,25 @@ Manuelle Szenarien im Playdate Simulator; Crank-Rastung zusätzlich auf Hardware
 
 ## Validierung
 
-### Durchgeführte Tests (Implementierungsstand: 2026-07-03)
+### Durchgeführte Tests (Implementierungsstand: 2026-07-04)
 
 | Szenario | Status | Datum | Befund |
 |---|---|---|---|
-| **Szenario 1** (Malen) | ⏳ pending | - | Grundlegende Editor-Funktionalität implementiert, Test im Simulator ausstehend |
-| **Szenario 2** (Frames) | ⏳ pending | - | Frame-Wechsel + Crank-Handling implementiert, Test ausstehend |
-| **Szenario 3** (Zoom) | ⏳ pending | - | Grundgerüst da, Zoom-Räume noch nicht angepasst |
-| **Szenario 4** (Autosave) | ⏳ pending | - | Save + Exit implementiert, Test ausstehend |
-| **Szenario 5** (Performance) | ⏳ pending | - | Grundgerüst implementiert, Performance-Test ausstehend |
-| **Szenario 6** (Hardware) | ⏳ pending | - | Crank-Handling implementiert, Hardware-Test ausstehend |
-| **Szenario 7** (Lernbarkeit) | ⏳ pending | - | Benutzeroberfläche implementiert, Usability-Test ausstehend |
+| **Szenario 1** (Malen) | ⏳ pending | - | Vollständig implementiert (inkl. Convergence-Fixes T031–T033), Test im Simulator ausstehend |
+| **Szenario 2** (Frames) | ⏳ pending | - | Vollständig implementiert (B-Gating über Buttonzustand, T033), Test ausstehend |
+| **Szenario 3** (Zoom) | ⏳ pending | - | Zoomkette vollständig implementiert (T017–T022), Test ausstehend |
+| **Szenario 4** (Autosave) | ⏳ pending | - | Save + Exit inkl. Fehlerpfad und Terminate-Commit-Kette implementiert, Test ausstehend |
+| **Szenario 5** (Performance) | ⏳ pending | - | Implementiert, Messung ausstehend |
+| **Szenario 6** (Hardware) | ⏳ pending | - | Implementiert, Hardware-Test ausstehend |
+| **Szenario 7** (Lernbarkeit) | ⏳ pending | - | Implementiert, Usability-Test ausstehend |
 
 ### Implementierungsstatus
 
 - ✅ **Phase 1 (Setup)**: EditorRoom.lua Grundgerüst erstellt
 - ✅ **Phase 2 (Foundational)**: Load-Workflow, Rendering, Verdrahtung implementiert
-- ✅ **US1 (P1, Malen)**: Cursor-Bewegung, A/B-Semantik, Pipette implementiert
-- ✅ **US4 (P1, Autosave)**: Save + Exit, Terminate-Hook implementiert
-- ✅ **US2 (P2, Frames)**: Frame-Wechsel, Crank-Handling implementiert
-- ⏳ **US3 (P2, Zoom)**: Grundgerüst da, Zoom-Räume Anpassung ausstehend
-- ⏳ **Phase 7 (Polish)**: Altmodule entfernen, Messungen, arc42-Evidenz ausstehend
+- ✅ **US1 (P1, Malen)**: Cursor-Bewegung (SDK-keyRepeatTimer), A/B-Semantik, Pipette implementiert
+- ✅ **US4 (P1, Autosave)**: Save + Exit inkl. Fehlerpfad, Terminate-Hook mit Zoom-Commit-Kette implementiert
+- ✅ **US2 (P2, Frames)**: Frame-Wechsel, Crank-Handling (B-Gating über Buttonzustand) implementiert
+- ✅ **US3 (P2, Zoom)**: Zoomkette komplett — Kontextübergabe, ZoomRoom 24×24/2×2, PixelRoom 16×16, Dedup-Commit `applyTileEdits`, "show grid"
+- ✅ **Phase 8 (Convergence)**: T031–T037 umgesetzt (Load-Fix, keyRepeat, B-Gating, Save-Fehlerpfad, Terminate-Commit, Menü-Guards, Debug-Code entfernt)
+- 🔶 **Phase 7 (Polish)**: Altmodule entfernt, arc42 Kap. 5/6/8/9/10/11/12 aktualisiert, Architektur-Review protokolliert (plan.md); **offen**: `pdc Source`-Build-Check (kein Playdate SDK auf dieser Maschine), Messungen (T025), Hardware-Check (T026), Lernbarkeitstest (T029) sowie die Simulator-Validierungen T008/T011/T016/T023

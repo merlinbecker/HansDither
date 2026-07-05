@@ -16,6 +16,10 @@
 - Q: Können Frames wieder gelöscht werden? → A: Ja, über den Systemmenü-Eintrag "Frame löschen": entfernt den aktiven Frame (außer dem letzten verbliebenen); nachfolgende Frames rücken auf.
 - Q: Gibt es in v0.3.0 eine Abspiel-Funktion für die Animation im Editor? → A: Nein — Vorschau erfolgt manuell per Crank-Durchblättern; Playback ist explizites Nicht-Ziel von v0.3.0.
 
+### Session 2026-07-04
+
+- Q: "All Similar" bearbeitet das Tile in-place in der Imagetable und wirkt damit über alle Frames — Widerspruch zu FR-013 (Änderungen nur im aktiven Frame)? → A: Bewusst so gewollt: "All Similar" ändert alle Verwendungen des Tiles in jedem Frame; FR-013 erhält eine explizite Ausnahme für genau diese Funktion. Normales Malen (Dedup-Pfad, FR-012) bleibt strikt frame-lokal.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Direkt im Editor tileweise malen (Priority: P1)
@@ -115,7 +119,7 @@ Als Nutzer verlasse ich den Editor zurück zum Auswahl-/Startscreen, und mein Bi
 - **FR-010**: Der Zoom Room MUSS den 3×3-Tile-Kontext um den Cursor als 24×24-Malraster darstellen; ein Malvorgang MUSS genau einen 2×2-Pixel-Block setzen oder löschen.
 - **FR-011**: Der Pixel Room MUSS ein einzelnes Tile mit echten 16×16 Pixeln darstellen; ein Malvorgang MUSS genau 1 Pixel setzen oder löschen.
 - **FR-012**: Beim Zurückzoomen MÜSSEN nur tatsächlich geänderte Tiles übernommen und über den Dedup-Pfad (Hashvergleich) verarbeitet werden.
-- **FR-013**: Änderungen in Zoom Room und Pixel Room MÜSSEN sich ausschließlich auf den aktiven Frame beziehen.
+- **FR-013**: Änderungen in Zoom Room und Pixel Room MÜSSEN sich ausschließlich auf den aktiven Frame beziehen. Einzige Ausnahme ist "All Similar": Diese Funktion bearbeitet das Tile definitionsgemäß in-place in der Imagetable und wirkt damit auf alle Verwendungen des Tiles — in allen Zellen und über alle Frames hinweg (geklärt, siehe Clarifications).
 - **FR-014**: Beim Verlassen des Editors Richtung Auswahl-/Startscreen MUSS automatisch gespeichert werden (gemäß Spec 001), mit sichtbarem Fortschritt.
 - **FR-015**: Die bisherigen Zusatzfunktionen der Zoomräume (Rasteranzeige-Synchronisation, Invert, "All Similar") MÜSSEN erhalten bleiben, bezogen auf 16×16-Tiles.
 
