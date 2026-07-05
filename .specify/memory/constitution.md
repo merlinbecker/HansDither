@@ -1,20 +1,17 @@
 <!--
 Sync Impact Report
-- Version change: (Template, unversioniert) → 1.0.0
-- Modified principles: alle Platzhalter ersetzt (Erstausfüllung des Templates)
+- Version change: 1.0.0 → 1.1.0
+- Modified principles: keine umbenannt
 - Added sections:
-  - I. SDK-First (NICHT VERHANDELBAR)
-  - II. Native Formate & PDI
-  - III. Architekturdokumentation in arc42
-  - IV. Einfachheit vor Ausbau
-  - Technische Randbedingungen
-  - Entwicklungs-Workflow
-  - Governance (konkretisiert)
-- Removed sections: keine (Template-Kommentare entfernt)
+  - V. Testpflicht (NICHT VERHANDELBAR) — Headless-Tests + pdc-Build als
+    Abschluss-Gate jeder Implementierung, harness-übergreifend
+- Removed sections: keine
+- Modified sections:
+  - Entwicklungs-Workflow: Verifikationsabsatz um Test-Gate ergänzt
 - Templates requiring updates:
   - ✅ .specify/templates/plan-template.md (Constitution Check ist generisch, kompatibel)
   - ✅ .specify/templates/spec-template.md (keine constitution-spezifischen Pflichtabschnitte nötig)
-  - ✅ .specify/templates/tasks-template.md (keine neuen Task-Kategorien erforderlich)
+  - ✅ .specify/templates/tasks-template.md (Polish-/Verifikationsphase deckt Test-Tasks ab)
 - Follow-up TODOs: keine
 -->
 
@@ -80,6 +77,36 @@ SOLLEN wiederverwendet statt neu erfunden werden.
 Begründung: Einzelentwicklung mit begrenzter Zeit; Lesbarkeit und
 Iterationsgeschwindigkeit schlagen Feature-Vollständigkeit.
 
+### V. Testpflicht (NICHT VERHANDELBAR)
+
+Jede Implementierungsänderung an `Source/*.lua` MUSS vor Abschluss durch
+zwei Gates verifiziert werden, unabhängig davon, welcher Agent oder
+welches Harness (Claude Code, GitHub Copilot, andere Speckit-Clients)
+die Änderung ausführt:
+
+1. Headless-Tests: `lua tests/headless_tests.lua` — MUSS mit
+   "ALLE TESTS BESTANDEN" enden.
+2. Build: `pdc Source "Hans Dither.pdx"` — MUSS fehlerfrei durchlaufen.
+
+Fehlschlagende Tests oder Builds BLOCKIEREN den Abschluss: Eine
+Implementierungs-Task DARF NICHT als erledigt markiert, ein Commit DARF
+NICHT erstellt und ein Feature DARF NICHT als fertig gemeldet werden,
+solange eines der Gates rot ist. Wer ein Gate nicht ausführen kann
+(z. B. fehlender Lua-Interpreter), MUSS das explizit als offenen Punkt
+ausweisen statt Erfolg zu melden.
+
+Neue Raum- und Modullogik SOLL headless-testbar gehalten werden:
+Standard-Lua-Syntax (keine pdc-Erweiterungen wie `+=`), SDK-Zugriffe
+über mockbare Aufrufe, Logik von Rendering getrennt. Wer einen Bug
+behebt, SOLL einen Testfall ergänzen, der die Fehlerklasse künftig
+abfängt.
+
+Begründung: Die v0.3.0-Neuschreibung hat gezeigt, dass plausible, aber
+nicht existierende SDK-APIs erst zur Laufzeit crashen. Die strikten
+Mocks der Headless-Tests fangen genau diese Fehlerklasse vor dem
+Simulator-Lauf ab; das Gate gilt zentral in der Constitution, damit es
+für alle Harnesses gleichermaßen verbindlich ist.
+
 ## Technische Randbedingungen
 
 - Sprache/Runtime: Lua auf Playdate (Device und Simulator), Build über
@@ -98,12 +125,14 @@ Iterationsgeschwindigkeit schlagen Feature-Vollständigkeit.
 
 - Änderungen folgen dem Spec-Kit-Ablauf: Constitution → Spec → Plan →
   Tasks → Implementierung.
-- Jede Feature-Spezifikation MUSS gegen die Prinzipien I–IV geprüft
+- Jede Feature-Spezifikation MUSS gegen die Prinzipien I–V geprüft
   werden (Constitution Check im Plan); Verstöße erfordern eine explizit
   dokumentierte Begründung oder eine Anpassung des Designs.
-- Verifikation erfolgt mindestens im Playdate Simulator; hardware-nahe
-  Funktionen (Crank-Feinverhalten, Performance) werden zusätzlich auf
-  dem Gerät geprüft.
+- Verifikation erfolgt zweistufig: automatisiert über die Test-Gates aus
+  Prinzip V (Headless-Tests + pdc-Build, blockierend) und manuell
+  mindestens im Playdate Simulator; hardware-nahe Funktionen
+  (Crank-Feinverhalten, Performance) werden zusätzlich auf dem Gerät
+  geprüft.
 - arc42 wird im selben Feature-Branch mitgezogen (Prinzip III).
 
 ## Governance
@@ -117,4 +146,4 @@ unter `.specify/templates/` auf Konsistenz. Reviews von Plans und Specs
 MÜSSEN die Einhaltung der Prinzipien verifizieren; nicht begründbare
 Komplexität wird abgelehnt.
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-03
+**Version**: 1.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-05
