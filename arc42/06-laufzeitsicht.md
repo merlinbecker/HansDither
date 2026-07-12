@@ -122,3 +122,191 @@ Ergebnis: Verlassen und Beenden speichern automatisch; der Auswahlscreen zeigt d
 ## 6.7 Szenario: Offline-Import PNG (Tools/Importer, historisch)
 
 Das Browser-Tool importiert PNGs in Pulp-JSON-Dokumente (v0.2-Format) und ist mit dem v0.3.0-Speicherformat nicht kompatibel (R-14). Der Ablauf bleibt dokumentiert, weil das Tool weiterhin im Repository liegt: JSON laden -> PNG normalisieren (200x120) -> 8x8-Slicing + FNV-1a-Dedupe -> neuer Room -> Export als neue Datei.
+
+---
+
+## 6.8 Backend-Szenarien (Hans Dither Sync)
+
+### 6.8.1 Szenario: UID-Verknüpfung (Pairing)
+
+```mermaid
+sequenceDiagram
+    actor U as Nutzer (Browser)
+    participant B as Backend-Service
+    participant A as Auth-Modul
+    participant D as Datenbank
+
+    U->>B: GET / (UID-Eingabe)
+    U->>B: GET /pair?uid=test-device-001
+    B->>D: SELECT uid FROM users WHERE uid = ?
+    D-->>B: Kein Ergebnis
+    B->>U: 200 OK (Pairing-Formular)
+    U->>B: POST /pair (uid, pin=1234)
+    B->>A: pair(uid, pin)
+    A->>D: INSERT INTO users (uid, pin_hash, ...)
+    D-->>A: Erfolg
+    A-->>B: {status: "success", uid: "..."}
+    B->>U: 201 Created
+```
+
+1. Nutzer gibt UID in das Formular auf der Startseite ein
+2. Backend prüft, ob UID bereits existiert
+3. Wenn nicht: Pairing-Formular mit PIN-Eingabe wird angezeigt
+4. Nutzer gibt 4-stellige PIN ein
+5. Backend: PIN wird mit bcrypt gehasht und in DB gespeichert
+6. Erfolgmeldung wird zurückgegeben
+
+**Ergebnis:** UID ist mit PIN verknüpft, Nutzer kann sich anmelden.
+
+### 6.8.2 Szenario: Login und Images-Liste
+
+```mermaid
+sequenceDiagram
+    actor U as Nutzer (Browser)
+    participant B as Backend-Service
+    participant A as Auth-Modul
+    participant D as Datenbank
+    participant I as Images-Modul
+
+    U->>B: GET / (UID-Eingabe: test-device-001)
+    B->>D: SELECT uid FROM users WHERE uid = ?
+    D-->>B: Ergebnis gefunden
+    B->>U: 302 Redirect /login?uid=test-device-001
+    U->>B: GET /login?uid=test-device-001
+    U->>B: POST /login (uid, pin=1234)
+    B->>A: login(uid, pin)
+    A->>D: SELECT pin_hash, failed_attempts FROM users WHERE uid = ?
+    D-->>A: pin_hash
+    A->>A: password_verify(pin, pin_hash)
+    alt PIN korrekt
+        A->>D: INSERT INTO sessions (token, uid, expires_at)
+        A->>D: UPDATE users SET failed_attempts = 0
+        A-->>B: {status: "success", session_token: "...", uid: "..."}
+        B->>U: 200 OK
+        U->>B: GET /images?uid=...&token=...
+        B->>A: validateToken(token)
+        A->>D: SELECT token, uid FROM sessions WHERE token = ?
+        D-->>A: Session-Daten
+        A-->>B: {uid: "..."}
+        B->>I: getAllImages(uid)
+        I->>D: SELECT * FROM images WHERE uid = ?
+        D-->>I: Images-Liste
+        I-->>B: Images-Daten
+        B->>U: 200 OK (Images-Liste als HTML/JSON)
+    else PIN falsch
+        A->>D: UPDATE users SET failed_attempts = failed_attempts + 1
+        alt failed_attempts >= 3
+            A->>D: UPDATE users SET locked_until = NOW() + INTERVAL 5 MINUTE
+            A-->>B: {error: "Zu viele Fehlversuche", http_code: 429}
+            B->>U: 429 Too Many Requests
+        else
+            A-->>B: {error: "UID oder PIN ungültig", http_code: 400}
+            B->>U: 400 Bad Request
+        end
+    end
+```
+
+1. Nutzer gibt bestehende UID ein
+2. Backend erkennt UID und leitet zu Login weiter
+3. Nutzer gibt PIN ein
+4. Backend verifiziert PIN mit bcrypt
+5. Bei Erfolg: Session-Token wird generiert und gespeichert
+6. Nutzer wird zur Images-Liste weitergeleitet
+7. Session-Token wird für alle folgenden Requests verwendet
+
+**Ergebnis:** Nutzer ist authentifiziert und sieht seine Images.
+
+### 6.8.3 Szenario: PDI + JSON Upload
+
+```mermaid
+sequenceDiagram
+    actor U as Nutzer (Browser)
+    participant B as Backend-Service
+    participant A as Auth-Modul
+    participant V as Validation-Modul
+    participant UH as Upload-Handler
+    participant D as Datenbank
+    participant F as Dateisystem
+
+    U->>B: POST /upload.php (pdi, json, uid, token)
+    B->>A: validateToken(token)
+    A-->>B: {uid: "..."}
+    B->>UH: handleUpload(uid, pdi_file, json_file)
+    UH->>V: validateUploadedFile(pdi_file)
+    V->>V: Prüfe Magic Bytes (PDI\x00) + Header
+    V-->>UH: {valid: true}
+    UH->>V: validateUploadedFile(json_file)
+    V->>V: json_decode()
+    V-->>UH: {valid: true}
+    UH->>F: mkdir -p /uploads/{uid}
+    UH->>F: move_uploaded_file(pdi, /uploads/{uid}/{uuid}.pdi)
+    UH->>F: move_uploaded_file(json, /uploads/{uid}/{uuid}.json)
+    UH->>D: INSERT INTO images (id, uid, pdi_path, json_path)
+    D-->>UH: Erfolg
+    UH-->>B: {status: "success", image_id: "..."}
+    B->>U: 201 Created
+```
+
+1. Nutzer wählt PDI- und JSON-Datei im Upload-Formular aus
+2. Backend prüft Session-Token
+3. PDI-Datei wird validiert: Magic Bytes + Header-Parse
+4. JSON-Datei wird validiert: json_decode() muss erfolgreich sein
+5. Dateien werden unter `/uploads/{UID}/{uuid}.pdi` und `.json` gespeichert
+6. DB-Eintrag wird erstellt
+7. Erfolgmeldung mit Image-ID wird zurückgegeben
+
+**Ergebnis:** PDI + JSON sind hochgeladen und in DB registriert.
+
+### 6.8.4 Szenario: PNG Download (on-demand Rendering)
+
+```mermaid
+sequenceDiagram
+    actor U as Nutzer (Browser)
+    participant B as Backend-Service
+    participant A as Auth-Modul
+    participant UH as Upload-Handler
+    participant R as Renderer
+    participant D as Datenbank
+    participant F as Dateisystem
+
+    U->>B: GET /download/png/{image_id}?token=...
+    B->>A: validateToken(token)
+    A-->>B: {uid: "..."}
+    B->>UH: getImage(image_id, uid)
+    UH->>D: SELECT * FROM images WHERE id = ? AND uid = ?
+    D-->>UH: Image-Daten
+    UH-->>B: Image-Daten
+    alt png_path existiert
+        B->>F: readfile(png_path)
+        F-->>B: PNG-Daten
+        B->>U: 200 OK (image/png)
+    else png_path ist NULL
+        B->>R: renderToPng(image_id, uid)
+        R->>UH: getImage(image_id, uid)
+        UH-->>R: Image-Daten
+        R->>F: loadPdiFile(pdi_path)
+        F-->>R: PDI-Daten
+        R->>F: loadJsonFile(json_path)
+        F-->>R: JSON-Daten
+        R->>R: generatePng(pdi_data, json_data)
+        R->>F: imagepng() nach /uploads/{uid}/{uuid}.png
+        R->>UH: savePngPath(image_id, png_path)
+        UH->>D: UPDATE images SET png_path = ? WHERE id = ?
+        D-->>UH: Erfolg
+        R-->>B: png_path
+        B->>F: readfile(png_path)
+        F-->>B: PNG-Daten
+        B->>U: 200 OK (image/png)
+    end
+```
+
+1. Nutzer klickt auf PNG-Download-Link
+2. Backend prüft Session-Token und Berechtigung
+3. Falls PNG noch nicht existiert: On-demand Rendering
+4. PDI-Datei wird geparst (Magic Bytes, Header, Pixel-Daten)
+5. JSON-Datei wird geparst (Tilemap-Daten)
+6. PNG wird mit GD-Bibliothek generiert (400x240, 1-Bit)
+7. PNG wird gespeichert und Pfad in DB aktualisiert
+8. PNG wird an Nutzer ausgeliefert
+
+**Ergebnis:** Nutzer erhält PNG-Datei (generiert on-demand beim ersten Zugriff).

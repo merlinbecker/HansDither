@@ -149,3 +149,63 @@ Interne Logik:
 - Input: imageData (id, name, imagetable, frames, hashIndex)
 - Verarbeitung: Sheet komponieren -> frames.json aufbauen -> Dateien schreiben -> Preview aus Frame 1 rendern -> Index aktualisieren (letzte Phase, C-06)
 - Output: saves/<id>/{sheet.pdi, frames.json, preview.pdi} + aktualisierter Index
+
+---
+
+## 5.4 Backend-Service (Hans Dither Sync)
+
+### 5.4.1 Whitebox Backend-Service
+
+**Verantwortung:**
+- Bereitstellung einer Web-API für Synchronisation von Hans-Dither-Projekten zwischen Playdate-Geräten und Web-UI
+- Authentifizierung via UID (Playdate-Geräte-ID) und 4-stelliger PIN
+- Speicherung von PDI- und JSON-Dateien im Dateisystem
+- On-demand PNG-Rendering aus PDI + Tilemap-JSON
+
+**Bausteine:**
+
+| Baustein | Verantwortung | Technologie |
+|---|---|---|
+| `public/index.php` | Einstiegspunkt: UID-Eingabe, Pairing, Login, Images-Liste | PHP 8.x |
+| `public/upload.php` | Upload-Handler für PDI + JSON-Dateien | PHP 8.x |
+| `public/download.php` | Download-Handler für PDI/JSON/PNG-Dateien | PHP 8.x |
+| `includes/config.php` | Konfiguration: DB-Zugang, Pfade, Konstanten | PHP 8.x |
+| `includes/database.php` | MySQL-Datenbankverbindung mit Prepared Statements | MySQLi |
+| `includes/auth.php` | PIN-Authentifizierung, bcrypt-Hashing, Rate-Limiting, Session-Management | PHP 8.x |
+| `includes/validation.php` | Dateivalidierung: PDI (Magic Bytes + Header), JSON (Schema-Prüfung) | PHP 8.x |
+| `includes/upload_handler.php` | Datei-Speicherung, UUID-Generierung, DB-Einträge | PHP 8.x |
+| `includes/renderer.php` | PNG-Rendering aus PDI + JSON via GD-Bibliothek | PHP GD |
+| `MySQL-Datenbank` | Speicherung von UID→PIN-Hash, Images-Metadaten, Sessions | MySQL 8.x |
+| `Dateisystem` | Speicherung von PDI/JSON/PNG-Dateien unter `/uploads/{UID}/` | all-inkl.com Hosting |
+
+### 5.4.2 Ebene 2: Backend-Architektur
+
+```mermaid
+graph TD
+    Client[Playdate/Browser] -->|HTTP/HTTPS| Backend[Backend-Service]
+    Backend -->|1. UID + PIN| Auth[Authentifizierung]
+    Backend -->|2. PDI + JSON| Upload[Upload-Handler]
+    Backend -->|3. Dateivalidierung| Validation[validation.php]
+    Backend -->|4. Speicherung| DB[(MySQL)]
+    Backend -->|5. Dateisystem| FS[/uploads/{UID}/]
+    Backend -->|6. PNG-Rendering| Renderer[renderer.php]
+    Backend -->|7. Response| Client
+```
+
+**Interne Logik:**
+- **Authentifizierungsfluss:** UID-Eingabe → (UID existiert?) → Login oder Pairing → Session-Token (UUID, 30 Min Gültigkeit)
+- **Upload-Fluss:** Token-Prüfung → Dateivalidierung (PDI: Magic Bytes, JSON: json_decode) → UUID-Generierung → Datei-Speicherung → DB-Eintrag
+- **Download-Fluss:** Token-Prüfung → Berechtigung (Image.uid == Session.uid) → Datei-Auslieferung (PNG on-demand generieren)
+- **Rate-Limiting:** 3 Fehlversuche → 5 Min Sperre (locked_until Timestamp in DB)
+
+### 5.4.3 Ebene 3: Datenbank-Schema
+
+**Tabellen:**
+- `users`: UID (PK), pin_hash (bcrypt), failed_attempts, locked_until, created_at
+- `images`: id (UUID PK), uid (FK), pdi_path, json_path, png_path, uploaded_at
+- `sessions`: token (UUID PK), uid (FK), expires_at, created_at
+
+**Beziehungen:**
+- 1 User → N Images (CASCADE auf DELETE)
+- 1 User → N Sessions (CASCADE auf DELETE)
+- 1 Image → 1 PDI-Datei + 1 JSON-Datei + 0..1 PNG-Datei

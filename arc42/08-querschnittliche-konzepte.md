@@ -98,3 +98,132 @@ Nutzen: Die haeufigste Crash-Klasse wird vor dem Simulator-Lauf gefangen; Regres
 - Es bleibt strikt offline und exportbasiert (kein in-place Ueberschreiben) und nutzt dasselbe Dedupe-Prinzip (FNV-1a) wie der Editorpfad.
 
 Nutzen: klare Trennung zur Device-Runtime; dokumentierter Ausgangspunkt fuer einen kuenftigen v0.3.0-Import.
+
+---
+
+## 8.10 Backend-Querschnittskonzepte (Hans Dither Sync)
+
+### 8.10.1 Authentifizierungs- und Session-Konzept
+
+**Prinzipien:**
+- **UID-basiert:** Jeder Nutzer wird über eine einzigartige Playdate-Geräte-ID (UID) identifiziert
+- **PIN-Authentifizierung:** 4-stellige numerische PIN (10.000 Kombinationen) für Zugriff
+- **Keine Cookies:** Authentifizierung erfolgt pro Request via Session-Token (Header oder Query-Parameter)
+- **Session-Management:** Tokens sind UUIDs mit 30 Minuten Gültigkeit
+
+**Ablauf:**
+1. **Pairing:** UID + PIN → bcrypt-Hash der PIN → Speicherung in `users`-Tabelle
+2. **Login:** UID + PIN → password_verify() gegen gespeicherten Hash → Session-Token generieren
+3. **Autorisierung:** Jeder geschützte Endpunkt prüft das Session-Token → Extraktion der UID
+4. **Berechtigung:** Dateizugriff nur wenn `image.uid == session.uid`
+
+**Sicherheitsmechanismen:**
+- **Rate-Limiting:** 3 Fehlversuche → 5 Minuten Sperre (locked_until Timestamp)
+- **bcrypt:** PIN wird NIE im Klartext gespeichert (PASSWORD_BCRYPT)
+- **Token-Invalidierung:** Session-Tokens können explizit ungültig gemacht werden
+- **Automatische Bereinigung:** Abgelaufene Sessions werden periodisch gelöscht
+
+**Nutzen:** Einfache, aber sichere Authentifizierung ohne externe Abhängigkeiten (kein OAuth, keine Framework-Libraries).
+
+### 8.10.2 Dateivalidierungs-Konzept
+
+**Prinzipien:**
+- **Whitelist-Ansatz:** Nur explizit erlaubte Dateitypen (.pdi, .json)
+- **Inhaltsprüfung:** Dateiendung reicht NICHT aus – Inhalt muss validiert werden
+- **Fail-Secure:** Bei Validierungsfehler wird die Datei NICHT gespeichert
+
+**Validierungskette für PDI:**
+1. Dateiendung = `.pdi`
+2. Magic Bytes: Erste 4 Bytes müssen `PDI\x00` sein
+3. Header-Parse: Version (4 Bytes), Width (2 Bytes), Height (2 Bytes) als Little-Endian
+4. Plausibilität: Width/Height > 0 und < 1000
+5. Dateigröße: > 0 und < 10MB
+
+**Validierungskette für JSON:**
+1. Dateiendung = `.json`
+2. MIME-Type = `application/json` (optional)
+3. `json_decode()` muss erfolgreich sein und ein Objekt/Array zurückgeben
+4. Dateigröße: < 10MB
+
+**Gefährliche Dateitypen (Blockliste):**
+- Ausführbare Dateien: `.php`, `.exe`, `.sh`, `.py`, `.rb`, `.js`, `.asp`
+- Archivdateien: `.zip`, `.tar`, `.gz`
+- Konfigurationsdateien: `.htaccess`, `.env`
+
+**Nutzen:** Verhindert Upload von schädlichem Code oder Dateien, die Server-Sicherheit gefährden (S-04, S-05).
+
+### 8.10.3 Dateispeicherungs-Konzept
+
+**Prinzipien:**
+- **UID-Isolation:** Jeder Nutzer hat sein eigenes Verzeichnis `/uploads/{UID}/`
+- **UUID-basierte Dateinamen:** Keine nutzerspezifischen Dateinamen → Keine Kollisionen
+- **On-demand Rendering:** PNG wird erst beim ersten Download generiert und dann gecacht
+
+**Speicherpfade:**
+```
+/uploads/{UID}/
+├── {image-uuid}.pdi      # Original PDI-Datei
+├── {image-uuid}.json     # Tilemap-JSON
+└── {image-uuid}.png      # Gerendertes PNG (optional)
+```
+
+**Datenbank-Abbildung:**
+- `images.id` → Dateinamen (ohne Endung)
+- `images.pdi_path` → Vollständiger Pfad zur PDI-Datei
+- `images.json_path` → Vollständiger Pfad zur JSON-Datei
+- `images.png_path` → Vollständiger Pfad zur PNG-Datei (NULL wenn nicht generiert)
+
+**Nutzen:** Einfache Zuordnung, berechtigungsbasierter Zugriff, Skalierbarkeit durch UID-Struktur.
+
+### 8.10.4 PNG-Rendering-Konzept
+
+**Prinzipien:**
+- **On-demand:** PNG wird erst generiert, wenn es angefordert wird
+- **Caching:** Generiertes PNG wird gespeichert für zukünftige Zugriffe
+- **GD-Bibliothek:** Standard-PHP-Bibliothek für Bildbearbeitung
+
+**Rendering-Prozess:**
+1. PDI-Datei parsen: Magic Bytes, Header (Version, Width, Height), Pixel-Daten
+2. JSON-Datei parsen: Tilemap-Daten (Frames, Tile-Definitionen)
+3. Basis-Bild erstellen: `imagecreate(width, height)`
+4. Pixel setzen: 1 Bit pro Pixel aus PDI-Daten (0 = weiß, 1 = schwarz)
+5. Tilemap anwenden: Falls JSON Tile-Daten enthält, diese über die PDI-Pixel legen
+6. PNG speichern: `imagepng()` mit 1-Bit Farbtiefe
+7. Pfad in DB speichern: `UPDATE images SET png_path = ?`
+
+**Bildgröße:**
+- Standard: 400x240 Pixel (Playdate Display)
+- Farbtiefe: 1-Bit (schwarz-weiß)
+- Format: PNG (verlustfreie Kompression)
+
+**Nutzen:** Serverseitiges Rendern ermöglicht Anzeige der Projekte ohne Playdate-Hardware.
+
+### 8.10.5 Fehlerbehandlungs-Konzept
+
+**HTTP-Status-Codes:**
+| Code | Bedeutung | Nutzung |
+|------|-----------|---------|
+| 200 | OK | Erfolgreiche GET-Requests |
+| 201 | Created | Erfolgreiche POST (Erstellung) |
+| 400 | Bad Request | Validierungsfehler |
+| 401 | Unauthorized | Authentifizierungsfehler |
+| 403 | Forbidden | Berechtigungsfehler |
+| 404 | Not Found | Ressource nicht gefunden |
+| 409 | Conflict | UID bereits verknüpft |
+| 413 | Payload Too Large | Datei zu groß (>10MB) |
+| 429 | Too Many Requests | Rate-Limiting aktiv |
+| 500 | Internal Server Error | Server-Fehler |
+
+**Fehlerformat (JSON):**
+```json
+{
+  "error": "menschliche Fehlermeldung"
+}
+```
+
+**Prinzipien:**
+- **Generische Fehlermeldungen:** Keine Details über interne Struktur (Security)
+- **HTTP-Status immer setzen:** Klare Unterscheidung zwischen Client- und Server-Fehlern
+- **Logging:** Alle Fehler werden in Log-Dateien protokolliert (`/logs/`)
+
+**Nutzen:** Konsistente Fehlerbehandlung, einfache Debugging-Möglichkeit für Entwickler.

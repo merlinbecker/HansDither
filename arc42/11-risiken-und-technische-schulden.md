@@ -38,3 +38,30 @@ Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die P
 - Kurzfristig: R-05 (Validierungsszenarien v0.3.0 ausstehend), R-06, R-13 (Messung), T-07
 - Mittelfristig: R-03, R-08, T-02
 - Langfristig: T-03, T-01, T-06, R-14
+
+---
+
+## 11.5 Backend-Risiken (Hans Dither Sync)
+
+| ID | Risiko | Auswirkung | Gegenmassnahme | Status |
+|---|---|---|---|---|
+| R-14 | Brute-Force-Angriff auf 4-stellige PIN | 10.000 Kombinationen können theoretisch durchprobiert werden | Rate-Limiting (3 Versuche → 5 Min Sperre), HTTPS erzwingen, keine detaillierten Fehlermeldungen | **Umgesetzt** |
+| R-15 | Speicherwachstum durch viele PDI-Dateien | all-inkl.com Hosting hat Speicherlimits | Max. Dateigröße (10MB), abgelaufene Sessions bereinigen, Nutzer können Images löschen | **Umgesetzt** |
+| R-16 | all-inkl.com Performance-Limits | Shared Hosting kann bei vielen Requests langsam werden | Einfache Architektur (kein Framework), PNG on-demand (nicht sofort), Caching von PNGs | **Umgesetzt** |
+| R-17 | GD-Bibliothek nicht verfügbar | PNG-Rendering funktioniert nicht | Prüfen bei Deployment, Fallback-Meldung in UI | **Offen** |
+| R-18 | MySQL-Verbindungmäßig überlastet | Datenbank-Requests blockieren | Prepared Statements, Indexe auf Tabellen, Connection Pooling (Singleton) | **Umgesetzt** |
+
+## 11.6 Backend-Technische Schulden
+
+| ID | Schuldenpunkt | Hintergrund | Abbaupfad | Status |
+|---|---|---|---|---|
+| T-04 | Keine automatischen Unit-Tests | Fokus lag auf schneller Implementierung | PHPUnit-Tests für Kernfunktionen (Auth, Validation, Upload) | **Offen** |
+| T-05 | Keine API-Versionierung | Erste Version, noch keine Rückwärtskompatibilität nötig | Version in URL/Pfad integrieren (z. B. /v1/upload) | **Offen** |
+| T-06 | Session-Tokens werden nicht automatisch bereinigt | Abgelaufene Tokens bleiben in DB | Cron-Job oder Request-basierte Bereinigung | **Offen** |
+| T-07 | Keine Request-Logging für Analytics | Keine Statistiken über Nutzung | Logging-Framework integrieren (z. B. Monolog) | **Offen** |
+
+## 11.7 Priorisierung (Backend)
+
+- **Umgesetzt:** R-14, R-15, R-16, R-18
+- **Offen (kann später):** R-17, T-04, T-05, T-06, T-07
+- **Akzeptiert:** 4-stellige PIN ist für den Anwendungsfall ausreichend (10.000 Kombinationen + Rate-Limiting)

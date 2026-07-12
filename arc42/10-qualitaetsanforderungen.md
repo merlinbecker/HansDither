@@ -70,3 +70,55 @@
 
 ### QS-10 Import-Pipeline-Korrektheit (historisch)
 - Das Importer-Szenario bezieht sich auf das Pulp-Format (v0.2) und ist mit v0.3.0 nicht kompatibel (R-14); es bleibt nur als Referenz fuer eine kuenftige Importer-Anpassung dokumentiert.
+
+---
+
+## 10.3 Backend-Qualitaetsanforderungen (Hans Dither Sync)
+
+### QS-11 Authentifizierungs-Sicherheit
+- **Kontext:** Nutzer versucht, auf fremde Images zuzugreifen
+- **Stimulus:** Falsche UID/PIN-Kombination, abgelaufener Session-Token, manipulierte Token-Werte
+- **Reaktion:** Zugriff wird verweigert mit HTTP 401/403, keine Daten werden preisgegeben
+- **Metrik:** 100% der nicht-autorisierten Requests werden abgelehnt (SC-003)
+
+### QS-12 Rate-Limiting-Funktionalitaet
+- **Kontext:** Brute-Force-Angriff auf PIN
+- **Stimulus:** 3 aufeinanderfolgende Fehlversuche für eine UID
+- **Reaktion:** Account wird für 5 Minuten gesperrt (locked_until Timestamp)
+- **Metrik:** Nach 3 Fehlversuchen: 429 Too Many Requests für 5 Minuten (SC-004)
+
+### QS-13 Dateivalidierungs-Sicherheit
+- **Kontext:** Nutzer versucht, schädliche Dateien hochzuladen
+- **Stimulus:** Upload von .php, .exe, .sh oder anderen gefährlichen Dateitypen
+- **Reaktion:** Upload wird abgelehnt mit HTTP 400, Datei wird NICHT gespeichert
+- **Metrik:** 100% der gefährlichen Dateitypen werden abgelehnt (S-04)
+
+### QS-14 PDI-Validierung
+- **Kontext:** Upload einer ungültigen PDI-Datei
+- **Stimulus:** Datei ohne Magic Bytes, ungültiger Header, unplausible Abmessungen
+- **Reaktion:** Upload wird abgelehnt mit HTTP 400
+- **Metrik:** Nur Dateien mit gültigem PDI-Format werden akzeptiert
+
+### QS-15 JSON-Validierung
+- **Kontext:** Upload einer ungültigen JSON-Datei
+- **Stimulus:** Datei die nicht valides JSON enthält
+- **Reaktion:** Upload wird abgelehnt mit HTTP 400
+- **Metrik:** Nur Dateien mit gültigem JSON-Schema werden akzeptiert
+
+### QS-16 Upload-Performance
+- **Kontext:** Nutzer lädt PDI + JSON (jeweils ~5MB) hoch
+- **Stimulus:** POST /upload.php mit beiden Dateien
+- **Reaktion:** Upload und Speicherung innerhalb von 5 Sekunden
+- **Metrik:** 95% der Uploads < 5 Sekunden (SC-002)
+
+### QS-17 PNG-Rendering-Qualitaet
+- **Kontext:** Nutzer lädt korrekte PDI + JSON hoch
+- **Stimulus:** GET /download/png/{id}
+- **Reaktion:** PNG wird generiert mit korrekten Abmessungen (400x240)
+- **Metrik:** Generiertes PNG hat exakte Abmessungen und korrekte Pixel-Darstellung
+
+### QS-18 Berechtigungspruefung
+- **Kontext:** Nutzer A versucht auf Images von Nutzer B zuzugreifen
+- **Stimulus:** GET /download/* mit Token von Nutzer A, aber Image-ID von Nutzer B
+- **Reaktion:** Zugriff wird verweigert mit HTTP 401
+- **Metrik:** 100% der berechtigungslosen Zugriffe werden abgelehnt (SC-005)
