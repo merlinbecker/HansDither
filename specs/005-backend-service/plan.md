@@ -1,6 +1,6 @@
 # Implementation Plan: Backend-Service für Hans Dither Sync
 
-**Branch**: `feature/0.4-backend` | **Date**: 2026-07-12 | **Spec**: [spec.md](spec.md)
+**Branch**: `feature/0.3` | **Date**: 2026-07-12 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `/specs/005-backend-service/spec.md`
 
@@ -67,30 +67,37 @@ specs/005-backend-service/
 └── tasks.md             # Phase 2 (/speckit-tasks — nicht Teil dieses Laufs)
 ```
 
-### Source Code (all-inkl.com Hosting)
+### Source Code (Repo: `backend/`, wird via deploy.sh nach all-inkl.com gespiegelt)
 
 ```text
-/
-├── index.php            # Einstiegspunkt: UID-Eingabe, PIN-Verwaltung, Images-Liste
-├── upload.php           # Upload-Handler: Dateivalidierung + Speicherung
-├── render.php           # PNG-Renderer: PDI + JSON → PNG
-├── config.php           # Konfiguration (DB-Zugang, Pfade)
+backend/                     # Deployment-Einheit (Inhalt = Webroot auf all-inkl.com)
+├── deploy.sh                # Deployment: SQL aus sql/migrations generieren, config.php/.htaccess
+│                            # erzeugen, FTPS-Upload mit Secrets-Excludes, Security-Verifikation
+├── .deploy.env              # Zugangsdaten (gitignored, wird NIE hochgeladen)
+├── .deploy.env.example      # Vorlage ohne Secrets (versioniert)
+├── .htaccess                # GENERIERT: HTTPS-Redirect, Front-Controller-Routing,
+│                            # Zugriffsschutz (includes/, storage/, uploads/, Dotfiles)
+├── public/
+│   ├── index.php            # Einstiegspunkt: UID-Eingabe, PIN-Verwaltung, Images-Liste
+│   ├── upload.php           # Upload-Handler: Dateivalidierung + Speicherung
+│   └── download.php         # Download-Endpunkte: PDI/JSON/PNG Auslieferung
 ├── includes/
-│   ├── database.php     # DB-Verbindung + PIN-Hashing
-│   ├── validation.php   # Dateivalidierung (JSON, PDI)
-│   └── auth.php         # PIN-Authentifizierung + Rate Limiting
+│   ├── config.php           # GENERIERT aus .deploy.env (gitignored): define()-Konstanten
+│   │                        # (DB_*, UPLOADS_DIR, PIN_REGEX, UID_REGEX, SESSION_TIMEOUT, …)
+│   ├── database.php         # DB-Verbindung (MySQLi, Prepared Statements)
+│   ├── validation.php       # Dateivalidierung (JSON, PDI, Größenlimit)
+│   ├── auth.php             # PIN-Authentifizierung + Rate Limiting + Sessions
+│   ├── upload_handler.php   # Upload-Logik: Validierung, Speicherung, DB-Eintrag
+│   └── renderer.php         # PNG-Renderer: PDI + JSON → PNG
 ├── assets/
-│   ├── css/
-│   │   └── style.css    # Minimal CSS für UI
-│   └── js/
-│       └── app.js       # Vanilla JS für Interaktion
-└── uploads/
-    └── {UID}/
-        ├── {image-id}.pdi
-        └── {image-id}.json
+│   ├── css/style.css        # Minimal CSS für UI
+│   └── js/app.js            # Vanilla JS für Interaktion
+├── sql/migrations/          # Kanonische Schema-Quelle (001_create_tables.sql, von deploy.sh verwendet)
+├── uploads/{UID}/           # {image-id}.pdi/.json/.png/.gif (gitignored, HTTP-Zugriff gesperrt)
+└── storage/                 # Logs + generiertes SQL-Schema (gitignored, HTTP-Zugriff gesperrt)
 ```
 
-**Structure Decision**: Single-project Web-Application auf all-inkl.com. Keine Frameworks (Reine PHP/HTML/JS für maximale Kompatibilität mit Shared Hosting). Dateien organisiert nach UID für Isolation und einfache Berechtigungsprüfung.
+**Structure Decision**: Single-project Web-Application auf all-inkl.com, im Repo unter `backend/` gekapselt (Trennung vom Playdate-Lua-Code in `Source/`). Keine Frameworks (Reine PHP/HTML/JS für maximale Kompatibilität mit Shared Hosting). Dateien organisiert nach UID für Isolation und einfache Berechtigungsprüfung. `config.php` und `.htaccess` sind deploy.sh-Generate; Secrets existieren ausschließlich in `.deploy.env` (gitignored, upload-excluded).
 
 ---
 

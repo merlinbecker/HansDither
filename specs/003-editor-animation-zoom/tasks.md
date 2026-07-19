@@ -4,7 +4,7 @@
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/editor-room.md, quickstart.md; **Spec 001** (ImageStore/ImageStoreCodec vollständig) und **Spec 002** (SelectionRoom mit Editor-Stub) müssen implementiert sein
 
-**Tests**: Kein automatisiertes Test-Setup (arc42 R-05); Verifikation über die Simulator-/Hardware-Szenarien aus quickstart.md — jede Story schließt mit einer protokollierten Validierung ab.
+**Tests**: Headless-Tests (`lua tests/headless_tests.lua`) als Constitution V Gate 1 (MUSS mit "ALLE TESTS BESTANDEN" enden); Manuelle Simulator-/Hardware-Szenarien aus quickstart.md als Ergänzung. Gate 2 (pdc-Build) offen (kein Playdate SDK auf dieser Maschine,siehe quickstart.md). Verifikation: jede Story schließt mit protokollierter Validierung ab.
 
 **Organization**: Phasen nach User-Story-Priorität aus spec.md: US1 (P1, Malen) → US4 (P1, Autosave) → US2 (P2, Frames) → US3 (P2, Zoomstufen).
 

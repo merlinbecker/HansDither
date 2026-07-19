@@ -26,9 +26,11 @@ class Validation {
     private static $maxFileSize = 10 * 1024 * 1024;
     
     /**
-     * PDI Magic Bytes (erste 4 Bytes: "PDI\0")
+     * Maximale Abmessungen des dekodierten Sheets
+     * (Spec 001: Breite = max. 25 Tiles × 16 px = 400; Höhe wächst mit tileCount)
      */
-    private static $pdiMagicBytes = "PDI\x00";
+    private static $maxPdiWidth = 400;
+    private static $maxPdiHeight = 4096;
     
     /**
      * Gefährliche Dateitypen (niemals erlauben!)
@@ -53,8 +55,12 @@ class Validation {
         }
         
         // 2. Dateigröße prüfen
-        if ($file['size'] <= 0 || $file['size'] > self::$maxFileSize) {
-            return ['valid' => false, 'error' => 'Datei zu groß (max. 10MB) oder ungültige Größe'];
+        if ($file['size'] <= 0) {
+            return ['valid' => false, 'error' => 'Ungültige Dateigröße'];
+        }
+        if ($file['size'] > self::$maxFileSize) {
+            // contracts E-04: 413 Payload Too Large
+            return ['valid' => false, 'error' => 'Datei zu groß (max. 10MB)', 'http_code' => 413];
         }
         
         // 3. Dateiendung prüfen
@@ -104,51 +110,29 @@ class Validation {
      * @return array Ergebnis
      */
     public static function validatePdiFile(string $filePath): array {
-        // Datei öffnen
-        $handle = fopen($filePath, 'rb');
-        if (!$handle) {
-            return ['valid' => false, 'error' => 'Konnte PDI-Datei nicht öffnen'];
+        require_once __DIR__ . '/pdi_parser.php';
+
+        // 1. Magic prüfen: echtes Playdate-SDK-Format "Playdate IMG"
+        //    (Spec 001: sheet.pdi wird via playdate.datastore.writeImage() geschrieben)
+        if (!PdiParser::hasValidMagic($filePath)) {
+            return ['valid' => false, 'error' => 'Ungültige PDI-Datei: Kein Playdate-Bildformat'];
         }
-        
-        // 1. Magic Bytes prüfen (erste 4 Bytes)
-        $header = fread($handle, 4);
-        if ($header !== self::$pdiMagicBytes) {
-            fclose($handle);
-            return ['valid' => false, 'error' => 'Ungültige PDI-Datei: Magic Bytes fehlen'];
+
+        // 2. Vollständig parsen (deckt beschädigte Header/zlib-Streams ab)
+        $parsed = PdiParser::parseFile($filePath);
+        if ($parsed === false) {
+            return ['valid' => false, 'error' => 'Ungültige PDI-Datei: Beschädigte Bilddaten'];
         }
-        
-        // 2. Dateigröße prüfen (PDI muss mindestens Header + Daten haben)
-        $fileSize = filesize($filePath);
-        if ($fileSize < 16) {
-            fclose($handle);
-            return ['valid' => false, 'error' => 'PDI-Datei zu klein'];
-        }
-        
-        // 3. PDI-Header parsen (nach Spec 001)
-        // Format: PDI\0 + 4 Bytes Version + 2 Bytes Width + 2 Bytes Height + 2 Bytes Flags
-        $version = fread($handle, 4);
-        $width = fread($handle, 2);
-        $height = fread($handle, 2);
-        $flags = fread($handle, 2);
-        
-        // Width und Height als Little-Endian lesen
-        $width_value = unpack('v', $width)[1];
-        $height_value = unpack('v', $height)[1];
-        
-        // Plausibilität prüfen
-        if ($width_value <= 0 || $height_value <= 0) {
-            fclose($handle);
+
+        // 3. Plausibilität der Abmessungen
+        if ($parsed['width'] <= 0 || $parsed['height'] <= 0) {
             return ['valid' => false, 'error' => 'Ungültige PDI-Abmessungen'];
         }
-        
-        // Playdate Display ist 400x240
-        if ($width_value > 1000 || $height_value > 1000) {
-            fclose($handle);
+        if ($parsed['width'] > self::$maxPdiWidth || $parsed['height'] > self::$maxPdiHeight) {
             return ['valid' => false, 'error' => 'PDI-Abmessungen zu groß'];
         }
-        
-        fclose($handle);
-        return ['valid' => true, 'error' => null, 'width' => $width_value, 'height' => $height_value];
+
+        return ['valid' => true, 'error' => null, 'width' => $parsed['width'], 'height' => $parsed['height']];
     }
     
     /**

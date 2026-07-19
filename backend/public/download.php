@@ -29,6 +29,7 @@ if (count($path_parts) < 3 || $path_parts[0] !== 'download') {
 
 $type = $path_parts[1] ?? '';
 $id = $path_parts[2] ?? '';
+$inline = (($_GET['inline'] ?? '') === '1');
 
 if (empty($type) || empty($id) || !preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i', $id)) {
     header('HTTP/1.1 400 Bad Request');
@@ -63,15 +64,19 @@ if (!$image) {
 // Datei ausliefern
 switch ($type) {
     case 'pdi':
-        self::deliverPdi($image);
+        deliverPdi($image);
         break;
-        
+
     case 'json':
-        self::deliverJson($image);
+        deliverJson($image);
         break;
-        
+
     case 'png':
-        self::deliverPng($image, $uid);
+        deliverPng($image, $uid, $inline);
+        break;
+
+    case 'gif':
+        deliverGif($image, $uid, $inline);
         break;
         
     default:
@@ -123,7 +128,7 @@ function deliverJson(array $image): void {
 /**
  * Liefert eine PNG-Datei aus (generiert on-demand wenn nötig)
  */
-function deliverPng(array $image, string $uid): void {
+function deliverPng(array $image, string $uid, bool $inline = false): void {
     $png_path = $image['png_path'];
     
     // PNG on-demand generieren falls nicht vorhanden
@@ -145,12 +150,39 @@ function deliverPng(array $image, string $uid): void {
         exit;
     }
     
+    $disposition = $inline ? 'inline' : 'attachment';
     header('Content-Type: image/png');
-    header('Content-Disposition: attachment; filename="' . basename($png_path) . '"');
+    header('Content-Disposition: ' . $disposition . '; filename="' . basename($png_path) . '"');
     header('Content-Length: ' . filesize($png_path));
     header('Cache-Control: no-cache, must-revalidate');
     header('Pragma: public');
-    
+
     readfile($png_path);
+    exit;
+}
+
+/**
+ * Liefert ein animiertes GIF aus (generiert on-demand wenn nötig)
+ */
+function deliverGif(array $image, string $uid, bool $inline = false): void {
+    $gif_path = $image['gif_path'] ?? null;
+
+    if (empty($gif_path) || !file_exists($gif_path)) {
+        $gif_path = Renderer::renderToGif($image['id'], $uid);
+        if ($gif_path === false) {
+            header('HTTP/1.1 500 Internal Server Error');
+            echo json_encode(['error' => 'GIF konnte nicht generiert werden']);
+            exit;
+        }
+    }
+
+    $disposition = $inline ? 'inline' : 'attachment';
+    header('Content-Type: image/gif');
+    header('Content-Disposition: ' . $disposition . '; filename="' . basename($gif_path) . '"');
+    header('Content-Length: ' . filesize($gif_path));
+    header('Cache-Control: no-cache, must-revalidate');
+    header('Pragma: public');
+
+    readfile($gif_path);
     exit;
 }

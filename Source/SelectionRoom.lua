@@ -13,6 +13,7 @@ import "CoreLibs/object"
 import "CoreLibs/keyboard"
 import "ImageStore"
 import "Bauchbinde"
+import "SyncService"
 
 local gfx = playdate.graphics
 
@@ -34,6 +35,12 @@ local confirmingDelete = nil -- nil oder {id, name} für Bestätigungsdialog
 local pendingAction = nil     -- Keyboard-Flow-Zustand
 local pendingCommitName = nil -- bestätigter Name; verarbeitet erst, wenn das Keyboard ganz zu ist
 local needsRedraw = true
+
+-- Crank-Sync-Geste (Spec 004, FR-002): kumulierte Rotation bei selektiertem
+-- Bild, ≥720° im Uhrzeigersinn löst SyncService:startSync() aus. Ersetzt den
+-- ursprünglich vorgesehenen System-Menü-Eintrag (research.md R1: SDK erlaubt
+-- max. 3 Einträge, hier bereits ausgeschöpft).
+local crankAccumDegrees = 0
 
 -- Zellgrößen für 3x3 Raster
 local CELL_WIDTH = 133
@@ -67,6 +74,7 @@ function SelectionRoom:entered()
     confirmingDelete = nil
     pendingAction = nil
     pendingCommitName = nil
+    crankAccumDegrees = 0
     playdate.keyboard.keyboardWillHideCallback = nil
     SelectionRoom:setSelectedIndex(1)
     
@@ -291,8 +299,56 @@ function SelectionRoom:drawKeyboardOverlay()
     gfx.drawText("Name: " .. (playdate.keyboard.text or ""), 8, panelY + 5)
 end
 
+-- Crank-Sync-Geste: misst kumulierte Rotation, solange ein Bild selektiert
+-- ist und kein anderer modaler Zustand (Löschbestätigung, Keyboard,
+-- laufender Sync, Pairing-Prompt) aktiv ist. WICHTIG: playdate.getCrankChange()
+-- MUSS jeden Frame abgefragt werden, sonst summiert sich beim nächsten Aufruf
+-- ein "Nachholwert" aus der Pause auf und könnte sofort ungewollt auslösen
+-- (gleiches Prinzip wie playdate.getCrankTicks(4)-Drain in EditorRoom).
+function SelectionRoom:handleCrank()
+    local crankChange = playdate.getCrankChange()
+
+    local entry = entries[selectedIndex]
+    local canAccumulate = entry
+        and entry.kind == "image"
+        and not confirmingDelete
+        and not pendingAction
+        and not playdate.keyboard.isVisible()
+        and not SyncService:isBusy()
+        and not SyncService:isShowingQrOverlay()
+
+    if not canAccumulate then
+        crankAccumDegrees = 0
+        return
+    end
+
+    -- Erste tatsächliche Kurbel-Bewegung bei Bildauswahl: Hinweis dauerhaft
+    -- ausblenden (Nutzer-Feedback — kennt die Geste ab hier, siehe showCrankHint).
+    if crankChange ~= 0 then
+        SyncService:markCrankUsed()
+    end
+
+    -- Nur Uhrzeigersinn zählt; Gegendrehen baut Fortschritt wieder ab
+    -- (kein hartes Zurücksetzen bei jedem kleinen Wackler zurück, siehe
+    -- research.md R2 — sustained Gegendrehen läuft ohnehin gegen 0).
+    crankAccumDegrees = math.max(0, crankAccumDegrees + crankChange)
+
+    if crankAccumDegrees >= SyncService.SYNC_GESTURE_THRESHOLD_DEGREES then
+        crankAccumDegrees = 0
+        SyncService:startSync(entry.id)
+        needsRedraw = true
+    end
+end
+
 -- Hauptupdate-Funktion
 function SelectionRoom:update()
+    -- Laufende Sync-Coroutine antreiben (Login-Check oder Upload) UND
+    -- automatisches Pairing-Polling prüfen (research.md R11) — muss vor
+    -- allen frühen Returns laufen, sonst friert der Vorgang ein.
+    SyncService:tick()
+
+    SelectionRoom:handleCrank()
+
     -- Aufgeschobener Keyboard-Commit: erst ausführen, wenn das Keyboard
     -- vollständig zugeklappt ist und update/Input-Stack wieder uns gehören —
     -- erst dann ist ein Raumwechsel in den Editor gefahrlos möglich.
@@ -309,10 +365,23 @@ function SelectionRoom:update()
         needsRedraw = true
     end
 
-    if needsRedraw then
+    -- Während eines laufenden Syncs/Uploads oder mit sichtbarem Crank-
+    -- Hinweis (animiertes crankIndicator-Icon) jeden Frame neu zeichnen,
+    -- gleiches Prinzip wie operationRunning() in EditorRoom. Hinweis nur
+    -- bis zur ersten tatsächlichen Kurbel-Nutzung (Nutzer-Feedback).
+    local entryForSync = entries[selectedIndex]
+    local showCrankHint = entryForSync
+        and entryForSync.kind == "image"
+        and not confirmingDelete
+        and not pendingAction
+        and not SyncService:isBusy()
+        and not SyncService:isShowingQrOverlay()
+        and not SyncService:hasUsedCrank()
+
+    if needsRedraw or SyncService:isBusy() or SyncService:isShowingQrOverlay() or showCrankHint then
         gfx.setColor(gfx.kColorWhite)
         gfx.fillRect(0, 0, 400, 240)
-        
+
         -- Zeichne Gridview
         if gridview then
             gridview:drawInRect(0, 0, 400, 240)
@@ -331,9 +400,44 @@ function SelectionRoom:update()
         -- Zeichne Overlays
         SelectionRoom:drawConfirmDeleteDialog()
         SelectionRoom:drawKeyboardOverlay()
-        
+
+        -- Statuszeile + Crank-Hinweis: unten rechts gestapelt, direkt oberhalb
+        -- des SDK-Crank-Indicators (der sich selbst unten rechts positioniert,
+        -- siehe CoreLibs/ui/crankIndicator.lua) — damit "am unteren Bildrand"
+        -- statt oben, und unabhängig von der Bauchbinde (die unten links den
+        -- Bildnamen zeigt, siehe oben).
+        -- Ausgeblendet, solange SyncService ein Vollbild-Overlay zeigt
+        -- (loadingBar oder QR-Ergebnisscreen) — die decken den ganzen
+        -- Bildschirm ab, eine Statuszeile darunter wäre ohnehin unsichtbar
+        -- bzw. würde bei einer nicht-opaken Overlay-Ecke durchscheinen.
+        local _, crankBubbleY = playdate.ui.crankIndicator:getBounds()
+        if not SyncService:isBusy() and not SyncService:isShowingQrOverlay() then
+            SelectionRoom:drawSyncStatus(crankBubbleY - 32)
+        end
+
+        -- Crank-Hinweis (FR-002a): Text + animiertes SDK-Icon, nur bei
+        -- Bildauswahl und außerhalb anderer modaler Zustände
+        if showCrankHint then
+            local hint = playdate.isCrankDocked() and "unfold crank to sync" or "crank to sync"
+            gfx.setColor(gfx.kColorBlack)
+            gfx.drawTextAligned(hint, 396, crankBubbleY - 16, kTextAlignment.right)
+            playdate.ui.crankIndicator:draw()
+        end
+
+        -- Sync-Overlay (loadingBar während Login-Check/Upload, Pairing-QR-Prompt)
+        SyncService:draw()
+
         needsRedraw = false
     end
+end
+
+-- Statuszeile unten rechts (siehe Aufrufstelle oben): Verknüpfungsstatus
+-- (FR-012) + kurzzeitige Meldungen
+function SelectionRoom:drawSyncStatus(y)
+    local msg = SyncService:getTransientStatusMessage()
+    local text = msg or SyncService:getStatusText()
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawTextAligned(text, 396, y, kTextAlignment.right)
 end
 
 -- Eingabehandler
@@ -360,14 +464,22 @@ function SelectionRoom:inputHandler()
     }
 end
 
+-- Blockiert Navigation/Auswahl, solange der Sync-Prompt (QR+PIN) sichtbar
+-- ist oder eine Sync-Coroutine läuft — modal wie confirmingDelete/pendingAction.
+function SelectionRoom:syncModalActive()
+    return SyncService:isShowingQrOverlay() or SyncService:isBusy()
+end
+
 -- Behandelt A-Taste
 function SelectionRoom:handleAButton()
+    if SelectionRoom:syncModalActive() then return end
+
     if confirmingDelete then
         -- Bestätigung des Löschens
         SelectionRoom:confirmDelete()
         return
     end
-    
+
     if pendingAction then
         -- Keyboard-Flow wird von SDK-Keyboard selbst behandelt
         return
@@ -387,6 +499,11 @@ end
 
 -- Behandelt B-Taste
 function SelectionRoom:handleBButton()
+    if SyncService:dismissQrOverlay() then
+        needsRedraw = true
+        return
+    end
+
     if confirmingDelete then
         -- Abbrechen des Löschens
         confirmingDelete = nil
@@ -408,7 +525,7 @@ end
 
 -- Navigation: Hoch
 function SelectionRoom:handleUpButton()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     local newIndex = selectedIndex - 3
     if newIndex < 1 then
@@ -420,7 +537,7 @@ end
 
 -- Navigation: Runter
 function SelectionRoom:handleDownButton()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     local newIndex = selectedIndex + 3
     if newIndex > #entries then
@@ -432,7 +549,7 @@ end
 
 -- Navigation: Links
 function SelectionRoom:handleLeftButton()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     local row = math.ceil(selectedIndex / 3) - 1  -- 0-basierte Zeile
     local col = ((selectedIndex - 1) % 3) + 1      -- 1-basierte Spalte
@@ -452,7 +569,7 @@ end
 
 -- Navigation: Rechts
 function SelectionRoom:handleRightButton()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     local row = math.ceil(selectedIndex / 3) - 1  -- 0-basierte Zeile
     local col = ((selectedIndex - 1) % 3) + 1      -- 1-basierte Spalte
@@ -474,9 +591,12 @@ end
 -- Setzt den selektierten Index und aktualisiert Gridview
 function SelectionRoom:setSelectedIndex(newIndex)
     if newIndex < 1 or newIndex > #entries then return end
-    
+
+    if newIndex ~= selectedIndex then
+        crankAccumDegrees = 0
+    end
     selectedIndex = newIndex
-    
+
     -- Gridview-Selektion aktualisieren
     if gridview then
         local row = math.ceil(selectedIndex / 3)
@@ -492,7 +612,7 @@ end
 
 -- Behandelt Löschaktion aus dem Menü
 function SelectionRoom:handleDeleteImage()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     local entry = entries[selectedIndex]
     if not entry or entry.kind ~= "image" then return end
@@ -532,7 +652,7 @@ end
 
 -- Behandelt Kopieraktion aus dem Menü
 function SelectionRoom:handleCopyImage()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     local entry = entries[selectedIndex]
     if not entry or entry.kind ~= "image" then return end
@@ -565,7 +685,7 @@ end
 
 -- Behandelt neue Bild-Aktion aus dem Menü
 function SelectionRoom:handleNewImage()
-    if confirmingDelete or pendingAction then return end
+    if confirmingDelete or pendingAction or SelectionRoom:syncModalActive() then return end
     
     -- Gleich wie A auf Neu-Eintrag
     SelectionRoom:openKeyboard()

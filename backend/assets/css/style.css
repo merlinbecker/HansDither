@@ -162,6 +162,15 @@ a:hover {
     text-decoration: none;
 }
 
+.preview-image {
+    width: 80px;
+    height: 48px;
+    object-fit: contain;
+    image-rendering: pixelated;
+    border: 1px solid #ddd;
+    background: #fff;
+}
+
 /* Fehler und Erfolgsmeldungen */
 .error {
     background-color: #f8d7da;

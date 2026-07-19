@@ -154,14 +154,43 @@ playdate = {
                 }
             end,
         },
+        -- Spec 004: liefert asynchron ein Mock-Bild statt echter QR-Kodierung
+        -- (Produktivcode nutzt generateQRCode, nicht generateQRCodeSync — die
+        -- Sync-Variante ist im echten SDK v3.0.6 wegen eines Scoping-Bugs in
+        -- CoreLibs/qrcode.lua defekt, siehe SyncService.lua-Kommentar). Der
+        -- Mock ruft den Callback synchron auf; ein echter playdate.timer-Loop
+        -- ist für die Tests nicht nötig. desiredEdgeDimension wird ignoriert.
+        generateQRCode = function(stringToEncode, desiredEdgeDimension, callback)
+            callback(newMockImage(desiredEdgeDimension or 100, desiredEdgeDimension or 100))
+        end,
     }, { __index = function() return noop end }),
-    ui = { gridview = { new = newGridview } },
+    ui = {
+        gridview = { new = newGridview },
+        -- Spec 004: SDK-Crank-Hinweis-Icon — Zeichnen ist ein No-op,
+        -- Aufrufe werden für Testzwecke gezählt
+        crankIndicator = setmetatable({ drawCount = 0 }, {
+            __index = function(t, key)
+                if key == "draw" then
+                    return function(self) self.drawCount = self.drawCount + 1 end
+                end
+                if key == "getBounds" then
+                    -- Feste Mock-Geometrie (Werte irrelevant für Tests, nur
+                    -- damit SelectionRoom die Positionierung berechnen kann)
+                    return function(self) return 300, 150, 90, 50 end
+                end
+                error("crankIndicator." .. tostring(key) .. " existiert nicht (erfundene SDK-API?)", 2)
+            end
+        }),
+    },
     keyboard = keyboard,
     kButtonA = "A", kButtonB = "B",
     kButtonUp = "up", kButtonDown = "down",
     kButtonLeft = "left", kButtonRight = "right",
     buttonIsPressed = function(b) return heldButtons[b] == true end,
-    getCurrentTimeMilliseconds = function() return 0 end,
+    -- Spec 004: Auto-Polling (SyncService:tick()) braucht eine vorwärts
+    -- bewegbare Uhr — testbar über die Modulvariable mockTimeMs (siehe unten)
+    getCurrentTimeMilliseconds = function() return mockTimeMs end,
+    getSecondsSinceEpoch = function() return 1700000000 end,
     timer = { updateTimers = noop },
     getSystemMenu = function()
         return strictTable("systemMenu", {
@@ -170,7 +199,175 @@ playdate = {
             addCheckmarkMenuItem = noop,
         })
     end,
+    -- Spec 004: Crank-Rotationsmessung — testbar über die Modulvariable
+    -- crankChangeValue (siehe unten), wie im echten SDK zustandsbehaftet
+    -- ("seit dem letzten Aufruf") aber hier einfach test-gesteuert
+    getCrankChange = function() return crankChangeValue end,
+    isCrankDocked = function() return crankDockedValue end,
 }
+
+-- Von Tests gesetzt, um Crank-Rotation/-Dock-Zustand zu simulieren
+-- (siehe playdate.getCrankChange/isCrankDocked oben)
+crankChangeValue = 0
+crankDockedValue = false
+
+-- Von Tests vorwärts bewegt, um Auto-Polling-Intervalle/Timeouts zu simulieren
+-- (siehe playdate.getCurrentTimeMilliseconds oben)
+mockTimeMs = 0
+
+-- Bare globale SDK-Konstante (kein playdate.*-Feld im echten SDK)
+kTextAlignment = { left = "left", center = "center", right = "right" }
+
+-- ── Spec 004: Netzwerk-Mock (playdate.network.http) ──────────────────────────
+--
+-- Simuliert eine HTTP-Verbindung mit vollständig test-gesteuerter,
+-- callback-basierter Antwort (kein echtes I/O). Tests rufen
+-- simulateHttpResponse() auf, um Status/Body für die zuletzt erzeugte
+-- Verbindung "eintreffen" zu lassen, und treiben die Coroutine danach per
+-- SyncService:tick() weiter.
+local mockConnections = {}
+
+local function newMockHttpConnection(server, port, usessl, reason)
+    local conn
+    conn = strictTable("httpConnection", {
+        -- Zustandsfelder vorab belegen (nicht nil!) — strictTable wirft sonst
+        -- schon beim ERSTEN Lesen eines Feldes, das noch nie geschrieben wurde
+        -- (z. B. getError() vor jedem Fehlerfall), auch wenn "nil" der
+        -- korrekte SDK-Rueckgabewert waere.
+        status = false,
+        bytesAvailable = 0,
+        pendingBody = "",
+        errorMsg = false,
+        post = function(self, path, headers, data)
+            self.lastPath = path
+            self.lastHeaders = headers
+            self.lastBody = data
+            return true
+        end,
+        setHeadersReadCallback = function(self, fn) self.onHeaders = fn end,
+        setRequestCallback = function(self, fn) self.onData = fn end,
+        setRequestCompleteCallback = function(self, fn) self.onComplete = fn end,
+        setConnectionClosedCallback = function(self, fn) self.onClosed = fn end,
+        setConnectTimeout = noop,
+        getResponseStatus = function(self) return self.status end,
+        getBytesAvailable = function(self) return self.bytesAvailable or 0 end,
+        read = function(self, n)
+            local body = self.pendingBody
+            self.pendingBody = nil
+            self.bytesAvailable = 0
+            return body
+        end,
+        getError = function(self) return self.errorMsg end,
+        close = noop,
+    })
+    table.insert(mockConnections, conn)
+    return conn
+end
+
+playdate.network = strictTable("network", {
+    http = strictTable("http", {
+        new = newMockHttpConnection,
+    }),
+})
+
+-- Simuliert eine vollständige Server-Antwort auf der zuletzt erzeugten
+-- Mock-Verbindung: Header gelesen -> Daten verfügbar -> Request komplett.
+local function simulateHttpResponse(status, bodyString)
+    local conn = mockConnections[#mockConnections]
+    conn.status = status
+    if conn.onHeaders then conn.onHeaders() end
+    conn.pendingBody = bodyString or ""
+    conn.bytesAvailable = #conn.pendingBody
+    if conn.onData then conn.onData() end
+    if conn.onComplete then conn.onComplete() end
+end
+
+-- ── Spec 004: Minimaler JSON-Mock (globales json, R21) ───────────────────────
+--
+-- NUR für Tests: einfacher Encoder/Decoder für flache Objekte
+-- ({"key":"value"|zahl|true|false}), ausreichend für die /login-Antworten
+-- dieser Testsuite. `json` ist laut SDK ein GLOBALER Name (kein Feld unter
+-- playdate.*, kein CoreLibs-Import nötig — verifiziert gegen das offizielle
+-- Beispiel Examples/Level 1-1/Source/levelLoader.lua: "json.decode(...)").
+-- Produktivcode läuft unter demselben echten globalen json.
+json = strictTable("json", {
+    encode = function(tbl)
+        local parts = {}
+        for k, v in pairs(tbl) do
+            local valueStr
+            if type(v) == "string" then
+                valueStr = string.format("%q", v)
+            elseif type(v) == "boolean" then
+                valueStr = tostring(v)
+            else
+                valueStr = tostring(v)
+            end
+            table.insert(parts, string.format('"%s":%s', k, valueStr))
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end,
+    decode = function(str)
+        if not str or str == "" then return nil end
+        local result = {}
+        -- Lua-Patterns kennen KEINE Alternation (kein "|" wie in Regex) —
+        -- daher wird der Rohwert bis zum naechsten "," oder "}" eingefangen
+        -- und danach nach Typ unterschieden. Reicht fuer die flachen
+        -- {"key":"value"|zahl|bool}-Antworten dieser Testsuite.
+        for key, rawValue in str:gmatch('"([%w_]+)"%s*:%s*([^,}]+)') do
+            rawValue = rawValue:match("^%s*(.-)%s*$")
+            if rawValue:sub(1, 1) == '"' then
+                result[key] = rawValue:sub(2, -2)
+            elseif rawValue == "true" then
+                result[key] = true
+            elseif rawValue == "false" then
+                result[key] = false
+            elseif rawValue ~= "null" then
+                result[key] = tonumber(rawValue)
+            end
+        end
+        return result
+    end,
+})
+
+-- ── Spec 004: Datastore-Mock (playdate.datastore) ────────────────────────────
+--
+-- Backing Store als einfache Lua-Tabelle, indiziert nach Dateipfad —
+-- ausreichend, um sync/state-Persistenz-Roundtrips zu testen.
+local datastoreFiles = {}
+playdate.datastore = strictTable("datastore", {
+    write = function(tbl, filename) datastoreFiles[filename] = tbl end,
+    read = function(filename) return datastoreFiles[filename] end,
+    delete = function(filename) datastoreFiles[filename] = nil end,
+})
+
+-- ── Spec 004: Datei-Mock (playdate.file) für rohes Bild-Lesen (T017) ─────────
+--
+-- Separates Backing Store von playdate.datastore — dort werden Lua-Tabellen
+-- gespeichert, hier rohe Byte-Strings (genau der Unterschied, den
+-- SyncService:readFileBytes bewusst ausnutzt, siehe data-model.md).
+-- mockRawFiles wird von Tests befüllt, um "vorhandene" sheet.pdi/frames.json
+-- zu simulieren; ein fehlender Pfad simuliert eine nicht gespeicherte Datei.
+mockRawFiles = {}
+playdate.file = strictTable("file", {
+    kFileRead = "r",
+    getSize = function(path)
+        local data = mockRawFiles[path]
+        return data and #data or nil
+    end,
+    open = function(path, mode)
+        local data = mockRawFiles[path]
+        if not data then return nil end
+        local pos = 1
+        return strictTable("fileHandle", {
+            read = function(self, n)
+                local chunk = data:sub(pos, pos + n - 1)
+                pos = pos + n
+                return chunk
+            end,
+            close = noop,
+        })
+    end,
+})
 
 -- ── ImageStore-Mock: steuerbarer Bild-Bestand ────────────────────────────────
 
@@ -195,6 +392,9 @@ ImageStore = strictTable("ImageStore", {
 })
 
 dofile("Source/Bauchbinde.lua")     -- Namenszeile des SelectionRoom
+dofile("Source/RoomOperation.lua")  -- Coroutine-Antrieb für SyncService (Spec 004)
+dofile("Source/loadingBar.lua")     -- Fortschritts-Overlay für SyncService (Spec 004)
+dofile("Source/SyncService.lua")
 dofile("Source/SelectionRoom.lua")
 
 -- EditorRoom-Mock + Raumwechsel-Protokoll
@@ -283,6 +483,269 @@ keyboard.keyboardWillHideCallback(false)           -- Nutzer bricht ab (B)
 keyboard._visible = false
 SelectionRoom:update()
 check(#storedImages == imageCountBefore, "kein Bild angelegt nach Abbruch")
+
+-- ── SyncService: PIN-/UID-Generierung und Persistenz (Spec 004) ──────────────
+
+section("SyncService: PIN-/UID-Generierung")
+local pin1 = SyncService:generatePin()
+check(#pin1 == 4 and pin1:match("^%d%d%d%d$") ~= nil, "generatePin liefert genau 4 Ziffern")
+
+local uid1 = SyncService:generateUid()
+check(uid1:match("^pd%-[0-9a-f][0-9a-f]*$") ~= nil, "generateUid liefert pd-<hex>-Format")
+check(#uid1 == 19, "generateUid: 'pd-' + 16 Hex-Zeichen (19 Zeichen gesamt)")
+
+section("SyncService: sync/state Persistenz")
+SyncService:saveState({})
+local firstUid = SyncService:getOrCreateUid()
+check(datastoreFiles["sync/state"] ~= nil, "saveState schreibt unter dem Pfad sync/state")
+check(datastoreFiles["sync/state"].uid == firstUid, "getOrCreateUid persistiert die UID im Datastore")
+local secondUid = SyncService:getOrCreateUid()
+check(secondUid == firstUid, "getOrCreateUid liefert bei zweitem Aufruf dieselbe UID (kein Neu-Generieren)")
+
+-- ── SelectionRoom: Crank-Sync-Geste (Spec 004, FR-002) ───────────────────────
+
+section("SelectionRoom: Crank-Akkumulator loest SyncService.startSync bei 720 Grad aus")
+SyncService:dismissQrOverlay()
+local syncStartCalls = {}
+local realStartSync = SyncService.startSync
+SyncService.startSync = function(self, imageId) table.insert(syncStartCalls, imageId) end
+
+SelectionRoom:entered()
+SelectionRoom:setSelectedIndex(1)  -- erstes Bild (kind == "image")
+crankChangeValue = 400
+SelectionRoom:update()
+check(#syncStartCalls == 0, "400 Grad allein loesen noch nichts aus")
+
+crankChangeValue = 400
+SelectionRoom:update()
+check(#syncStartCalls == 1, "800 Grad kumuliert (>=720) loesen genau einen Sync-Start aus")
+
+crankChangeValue = 0
+SelectionRoom:update()
+check(#syncStartCalls == 1, "Akkumulator wurde nach Ausloesen zurueckgesetzt (kein Doppel-Trigger)")
+
+section("SelectionRoom: Crank ohne Bildauswahl bleibt wirkungslos")
+syncStartCalls = {}
+-- Nach "Entered SelectionRoom" mit 3 Eintraegen (bild1, meinbild, Neu-Eintrag):
+-- Index 3 ist der "Neu"-Eintrag (kind == "new")
+SelectionRoom:setSelectedIndex(3)
+crankChangeValue = 800
+SelectionRoom:update()
+check(#syncStartCalls == 0, "Crank-Geste auf dem Neu-Eintrag loest keinen Sync aus")
+
+section("SelectionRoom: Bildwechsel setzt den Akkumulator zurueck")
+syncStartCalls = {}
+SelectionRoom:setSelectedIndex(1)  -- bild1
+crankChangeValue = 400
+SelectionRoom:update()  -- accum = 400
+SelectionRoom:setSelectedIndex(2)  -- meinbild (anderes Bild) -> Reset
+crankChangeValue = 400
+SelectionRoom:update()  -- accum = 400 (nicht 800!), kein Trigger
+check(#syncStartCalls == 0, "Wechsel zwischen zwei Bildern verhindert Trigger unterhalb der Schwelle")
+
+crankChangeValue = 0
+SyncService.startSync = realStartSync
+
+section("SyncService: Crank-Hinweis verschwindet dauerhaft nach erster tatsaechlicher Kurbel-Nutzung")
+SyncService:saveState({})
+SyncService:dismissQrOverlay()
+SelectionRoom:entered()
+SelectionRoom:setSelectedIndex(1)  -- Bild
+
+crankChangeValue = 0
+local drawCountBefore = playdate.ui.crankIndicator.drawCount
+SelectionRoom:update()
+check(playdate.ui.crankIndicator.drawCount > drawCountBefore, "Crank-Hinweis wird vor der ersten Nutzung gezeichnet")
+check(not SyncService:hasUsedCrank(), "hasUsedCrank ist vor jeder Kurbel-Bewegung false")
+
+crankChangeValue = 100  -- kleine Bewegung, weit unter der 720-Grad-Sync-Schwelle
+SelectionRoom:update()
+check(SyncService:hasUsedCrank(), "hasUsedCrank wird bereits durch eine kleine Bewegung true (nicht erst bei Schwelle)")
+
+crankChangeValue = 0
+local drawCountAfterUse = playdate.ui.crankIndicator.drawCount
+SelectionRoom:update()
+check(playdate.ui.crankIndicator.drawCount == drawCountAfterUse, "Crank-Hinweis wird nach der ersten Nutzung nicht mehr gezeichnet")
+
+section("SyncService: hasUsedCrank bleibt nach App-Neustart erhalten (in sync/state persistiert)")
+check(datastoreFiles["sync/state"].crankUsed == true, "crankUsed wird zusammen mit dem uebrigen Sync-Zustand persistiert")
+
+crankChangeValue = 0
+
+-- ── SyncService: Datei-Lesen und Multipart-Body (Spec 004, US2, T017/T018) ───
+
+section("SyncService: readFileBytes liest rohe Bytes, nicht ueber datastore")
+mockRawFiles["saves/testimg/sheet"] = "RAWSHEETDATA"
+check(SyncService:readFileBytes("saves/testimg/sheet") == "RAWSHEETDATA", "readFileBytes liefert die rohen Bytes unveraendert")
+check(SyncService:readFileBytes("saves/does-not-exist/sheet.pdi") == nil, "readFileBytes liefert nil fuer fehlende Datei")
+
+section("SyncService: buildMultipartBody enthaelt alle erwarteten Teile")
+local mpBody = SyncService:buildMultipartBody("BOUND123", "pd-uid1", "tok-1", "img-1", "RAWPDI", '{"a":1}')
+check(mpBody:find('name="uid"', 1, true) ~= nil, "Body enthaelt uid-Feld")
+check(mpBody:find("pd-uid1", 1, true) ~= nil, "Body enthaelt uid-Wert")
+check(mpBody:find('name="token"', 1, true) ~= nil, "Body enthaelt token-Feld")
+check(mpBody:find('name="image_id"', 1, true) ~= nil, "Body enthaelt image_id-Feld")
+check(mpBody:find('filename="img-1.pdi"', 1, true) ~= nil, "Body enthaelt pdi-Dateiteil mit korrektem Dateinamen")
+check(mpBody:find("RAWPDI", 1, true) ~= nil, "Body enthaelt die rohen PDI-Bytes")
+check(mpBody:find('filename="img-1.json"', 1, true) ~= nil, "Body enthaelt json-Dateiteil mit korrektem Dateinamen")
+check(mpBody:find("--BOUND123--", 1, true) ~= nil, "Body endet mit schliessendem Boundary")
+
+-- ── SyncService: Pairing-Flow ueber die Mock-HTTP-Verbindung (Spec 004, US1) ──
+--
+-- research.md R13-Redesign: Es gibt keinen separaten, auf eine
+-- Website-Bestaetigung wartenden Pairing-Schritt mehr. SyncService:startSync()
+-- loest direkt Login -> bei Bedarf autonomes (Re-)Pair -> Login-Retry ->
+-- Upload aus, alles in EINER RoomOperation-Kette. Das Ergebnis-Overlay
+-- (QR+PIN) erscheint erst NACH erfolgreichem Upload, nicht mehr davor.
+
+section("SyncService: Login 404 (unbekannte UID) pairt automatisch nach und laedt hoch (kein Website-Schritt noetig)")
+SyncService:saveState({})
+SyncService:dismissQrOverlay()
+mockRawFiles["saves/bild1/sheet"] = "PDIRAWBYTES"
+mockRawFiles["saves/bild1/frames.json"] = '{"frames":[]}'
+
+SyncService:startSync("bild1")
+SyncService:tick()  -- Login-Yield (Versuch 1, unbekannte UID)
+simulateHttpResponse(404, "")
+SyncService:tick()  -- 404 erkannt -> pair() gestartet, Yield
+check(not SyncService:isShowingQrOverlay(), "Waehrend der Kette ist noch kein Ergebnis-Overlay sichtbar")
+check(SyncService:isBusy(), "Die Pairing+Login+Upload-Kette laeuft weiter ohne Nutzerinteraktion")
+
+local pairConn = mockConnections[#mockConnections]
+check(pairConn.lastPath == "/pair", "Nach 404 wird automatisch /pair aufgerufen (autonomes Pairing)")
+simulateHttpResponse(201, json.encode({ status = "success", uid = SyncService:getState().uid }))
+SyncService:tick()  -- pair() fertig -> Login-Retry (Versuch 2), Yield
+simulateHttpResponse(200, json.encode({
+    status = "success", session_token = "tok-123", expires_at = "2026-01-01T00:00:00Z"
+}))
+SyncService:tick()  -- Login fertig -> Dateien lesen -> Multipart-POST /upload, Yield
+simulateHttpResponse(201, json.encode({ status = "success", image_id = "srv-uuid-1" }))
+SyncService:tick()  -- Upload abgeschlossen
+check(not SyncService:isBusy(), "Kette ist nach erfolgreichem Upload beendet")
+check(SyncService:getState().paired == true, "Erfolgreicher Upload markiert den Zustand als verknuepft")
+check(SyncService:isShowingQrOverlay(), "Nach Upload zeigt SyncService das Ergebnis-Overlay (QR+PIN, FR-007a)")
+
+local lastConn = mockConnections[#mockConnections]
+check(lastConn.lastPath == "/upload", "Letzter Request ging an /upload")
+check(lastConn.lastBody:find('name="image_id"', 1, true) ~= nil and lastConn.lastBody:find("bild1", 1, true) ~= nil,
+    "Multipart-Body enthaelt die lokale Bild-ID")
+check(lastConn.lastBody:find("PDIRAWBYTES", 1, true) ~= nil, "Multipart-Body enthaelt die rohen PDI-Bytes")
+
+section("SyncService: bereits verknuepftes Geraet laedt mit einem einzigen Login hoch (kein /pair-Aufruf)")
+SyncService:dismissQrOverlay()
+mockRawFiles["saves/bild1/sheet"] = "PDIRAWBYTES"
+mockRawFiles["saves/bild1/frames.json"] = '{"frames":[]}'
+
+local connectionsBeforeUpload = #mockConnections
+SyncService:startSync("bild1")
+SyncService:tick()  -- Login-Yield
+simulateHttpResponse(200, json.encode({
+    status = "success", session_token = "tok-124", expires_at = "2026-01-01T00:00:00Z"
+}))
+SyncService:tick()  -- Login fertig -> Upload-POST, Yield
+simulateHttpResponse(201, json.encode({ status = "success", image_id = "srv-uuid-1b" }))
+SyncService:tick()
+check(#mockConnections == connectionsBeforeUpload + 2, "Genau 2 Requests (Login + Upload), kein zusaetzlicher /pair-Aufruf")
+check(SyncService:isShowingQrOverlay(), "Ergebnis-Overlay erscheint auch beim wiederholten Upload")
+
+section("SyncService: Login 400 (PIN passt nicht, Altlast) heilt sich ueber autonomes Re-Pair selbst")
+SyncService:dismissQrOverlay()
+SyncService:startSync("bild1")
+SyncService:tick()  -- Login-Yield (Versuch 1)
+simulateHttpResponse(400, "")
+SyncService:tick()  -- 400 erkannt -> pair() gestartet (Self-Heal, research.md R12), Yield
+local rePairConn = mockConnections[#mockConnections]
+check(rePairConn.lastPath == "/pair", "Nach 400 wird automatisch neu gepairt statt aufzugeben")
+simulateHttpResponse(201, json.encode({ status = "success", uid = SyncService:getState().uid }))
+SyncService:tick()  -- Re-Pair fertig -> Login-Retry, Yield
+simulateHttpResponse(200, json.encode({
+    status = "success", session_token = "tok-125", expires_at = "2026-01-01T00:00:00Z"
+}))
+SyncService:tick()  -- Login fertig -> Upload-POST, Yield
+simulateHttpResponse(201, json.encode({ status = "success", image_id = "srv-uuid-1c" }))
+SyncService:tick()
+check(SyncService:isShowingQrOverlay(), "Nach Self-Heal + erfolgreichem Upload zeigt SyncService das Ergebnis-Overlay")
+
+section("SyncService: Login 429 (gesperrt) versucht KEIN Re-Pair, zeigt sofort eine Fehlermeldung")
+SyncService:dismissQrOverlay()
+local connectionsBefore429 = #mockConnections
+SyncService:startSync("bild1")
+SyncService:tick()
+simulateHttpResponse(429, "")
+SyncService:tick()
+check(#mockConnections == connectionsBefore429 + 1, "429 loest KEINEN automatischen /pair-Aufruf aus (Sperre wuerde nicht behoben)")
+check(not SyncService:isShowingQrOverlay(), "429 -> kein Ergebnis-Overlay")
+check(not SyncService:isBusy(), "Operation ist nach der Fehlermeldung beendet")
+check(SyncService:getTransientStatusMessage() ~= nil, "429 -> Statusmeldung gesetzt (Sperre)")
+
+section("SyncService: /pair liefert 409 (uid_taken) -> klare Fehlermeldung statt Endlosschleife")
+SyncService:dismissQrOverlay()
+SyncService:startSync("bild1")
+SyncService:tick()
+simulateHttpResponse(404, "")
+SyncService:tick()  -- 404 -> pair() gestartet
+simulateHttpResponse(409, "")
+SyncService:tick()  -- pair() liefert 409 -> Kette bricht mit klarer Fehlermeldung ab, kein Login-Retry
+check(not SyncService:isBusy(), "Operation endet nach 409, kein unendlicher Retry")
+check(not SyncService:isShowingQrOverlay(), "409 -> kein Ergebnis-Overlay")
+local conflictMsg = SyncService:getTransientStatusMessage()
+check(conflictMsg ~= nil, "409 -> Statusmeldung gesetzt (Device-ID-Konflikt)")
+
+section("SelectionRoom: B-Taste schliesst das Ergebnis-Overlay")
+SyncService:dismissQrOverlay()
+SyncService:startSync("bild1")
+SyncService:tick()
+simulateHttpResponse(200, json.encode({
+    status = "success", session_token = "tok-126", expires_at = "2026-01-01T00:00:00Z"
+}))
+SyncService:tick()
+simulateHttpResponse(201, json.encode({ status = "success", image_id = "srv-uuid-1d" }))
+SyncService:tick()
+check(SyncService:isShowingQrOverlay(), "Vorbedingung: Overlay ist sichtbar")
+SelectionRoom:handleBButton()
+check(not SyncService:isShowingQrOverlay(), "B schliesst das Overlay")
+
+section("SyncService: Statusanzeige vor jeder Verknuepfung")
+SyncService:saveState({})
+check(SyncService:getStatusText() == "not linked yet", "getStatusText ohne Verknuepfung")
+
+-- ── SyncService: Upload-Fehlerpfade (Spec 004, US2, T022) ────────────────────
+
+section("SyncService: Upload mit abgelaufenem Token (401) macht genau einen Retry")
+SyncService:dismissQrOverlay()
+SyncService:saveState({ uid = SyncService:getState().uid or SyncService:generateUid(), pin = SyncService:getState().pin or SyncService:generatePin(), paired = true })
+mockRawFiles["saves/bild1/sheet"] = "PDIRAWBYTES2"
+mockRawFiles["saves/bild1/frames.json"] = '{"frames":[]}'
+
+SyncService:startSync("bild1")  -- Login gelingt sofort (Versuch 1), kein Re-Pair noetig
+SyncService:tick()  -- Login (Versuch 1) bis Yield
+simulateHttpResponse(200, json.encode({ status = "success", session_token = "tok-a", expires_at = "2026-01-01T00:00:00Z" }))
+SyncService:tick()  -- Login fertig -> Upload-POST (Versuch 1) bis Yield
+simulateHttpResponse(401, "")
+SyncService:tick()  -- 401 erkannt -> sofortiger Retry -> Login (Versuch 2) bis Yield
+simulateHttpResponse(200, json.encode({ status = "success", session_token = "tok-b", expires_at = "2026-01-01T00:00:00Z" }))
+SyncService:tick()  -- Login fertig -> Upload-POST (Versuch 2) bis Yield
+simulateHttpResponse(201, json.encode({ status = "success", image_id = "srv-uuid-2" }))
+SyncService:tick()  -- Upload (Versuch 2) erfolgreich
+check(not SyncService:isBusy(), "Nach erfolgreichem Retry ist die Operation beendet")
+check(SyncService:isShowingQrOverlay(), "Erfolgreicher Retry zeigt das Post-Upload-QR-Overlay")
+
+section("SyncService: Netzwerkfehler beim Upload setzt pendingUpload")
+SyncService:dismissQrOverlay()
+SyncService:saveState({ uid = SyncService:getState().uid, pin = SyncService:getState().pin, paired = true })
+mockRawFiles["saves/bild2/sheet"] = "X"
+mockRawFiles["saves/bild2/frames.json"] = "{}"
+
+SyncService:startSync("bild2")
+SyncService:tick()  -- Login-Yield
+simulateHttpResponse(200, json.encode({ status = "success", session_token = "tok-c", expires_at = "2026-01-01T00:00:00Z" }))
+SyncService:tick()  -- Upload-POST-Yield
+local abortedConn = mockConnections[#mockConnections]
+abortedConn.errorMsg = "connection lost"
+if abortedConn.onClosed then abortedConn.onClosed() end
+SyncService:tick()
+check(SyncService:getState().pendingUpload ~= nil, "Netzwerkfehler setzt pendingUpload (research.md R8)")
+check(SyncService:getState().pendingUpload.imageId == "bild2", "pendingUpload verweist auf das betroffene Bild")
 
 -- ── ImageStoreCodec: reine Helfer (kein gfx noetig) ──────────────────────────
 

@@ -15,3 +15,27 @@ scripts/deploy/.env
 
 # Backend Uploads (generierte Dateien)
 /uploads/
+
+# PHP/Composer
+vendor/
+*.log
+*.cache
+.env*
+!.env.example
+
+# IDE
+.idea/
+
+# Universal
+*.tmp
+*.swp
+
+# Backend Secrets & generierte/laufzeiterzeugte Dateien (NIE einchecken!)
+backend/.deploy.env
+backend/.deploy.env.*
+!backend/.deploy.env.example
+backend/includes/config.php
+backend/.htaccess
+backend/uploads/
+backend/storage/
+backend/logs/

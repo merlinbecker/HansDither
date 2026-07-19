@@ -1,18 +1,27 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0
+- Version change: 1.1.0 → 1.2.0
 - Modified principles: keine umbenannt
-- Added sections:
-  - V. Testpflicht (NICHT VERHANDELBAR) — Headless-Tests + pdc-Build als
-    Abschluss-Gate jeder Implementierung, harness-übergreifend
+- Added sections: keine (bestehender Randbedingungs-Punkt "Persistenz"
+  präzisiert + neuer Randbedingungs-Punkt "Netzwerk (Sync-Ausnahme)")
 - Removed sections: keine
 - Modified sections:
-  - Entwicklungs-Workflow: Verifikationsabsatz um Test-Gate ergänzt
+  - Technische Randbedingungen: "Persistenz"-Punkt auf die Kern-
+    Zeichenpersistenz (Editor Save/Load) präzisiert; neuer Punkt
+    "Netzwerk (Sync-Ausnahme)" ergänzt, der Netzwerkkommunikation
+    explizit — aber ausschließlich — für das Backend-Sync-Feature
+    (Spec 004) zulässt und dessen Optionalität festschreibt.
 - Templates requiring updates:
   - ✅ .specify/templates/plan-template.md (Constitution Check ist generisch, kompatibel)
   - ✅ .specify/templates/spec-template.md (keine constitution-spezifischen Pflichtabschnitte nötig)
   - ✅ .specify/templates/tasks-template.md (Polish-/Verifikationsphase deckt Test-Tasks ab)
-- Follow-up TODOs: keine
+- Follow-up TODOs:
+  - arc42/04-loesungsstrategie.md Abschnitt 4.4 ("Nicht-Ziele der
+    aktuellen Version") nennt noch "Kein Cloud-Sync", "Keine Netzwerk-
+    ... funktionen" — muss im Rahmen der Spec-004-Planung/Umsetzung
+    aktualisiert werden (bereits als Erwartete Evidenz in Spec 004
+    Architecture Governance vermerkt, hier nur zur Nachverfolgung
+    referenziert).
 -->
 
 # Hans Dither Constitution
@@ -113,8 +122,18 @@ für alle Harnesses gleichermaßen verbindlich ist.
   das offizielle Playdate SDK (`pdc`).
 - Eingaben: D-Pad, A/B-Buttons und Crank sind die einzigen
   Eingabegeräte; jede Funktion MUSS damit erreichbar sein.
-- Persistenz: ausschließlich über `playdate.file` / `playdate.datastore`
-  unter dem App-Datenverzeichnis; keine Netzwerkabhängigkeiten.
+- Persistenz: Die Kern-Zeichenpersistenz (Speichern/Laden von Hans-Dither-
+  Projekten im Editor) erfolgt ausschließlich über `playdate.file` /
+  `playdate.datastore` unter dem App-Datenverzeichnis und MUSS vollständig
+  offline funktionieren; sie hat keine Netzwerkabhängigkeit.
+- Netzwerk (Sync-Ausnahme): Netzwerkkommunikation (`playdate.net`) ist
+  ausschließlich für das explizit als solches spezifizierte Backend-
+  Sync-Feature erlaubt (Export/Upload von Zeichnungen an ein Web-Backend,
+  siehe Spec 004). Das Sync-Feature MUSS optional und additiv bleiben:
+  alle Kern-Editor-Funktionen (Zeichnen, Speichern, Laden, Anzeigen)
+  MÜSSEN ohne Netzwerkverbindung vollständig nutzbar sein. Jede weitere
+  Netzwerknutzung außerhalb des Sync-Kontexts MUSS gesondert begründet
+  und als ADR dokumentiert werden.
 - Performance: Interaktionen müssen auf der Zielhardware flüssig bleiben;
   langlaufende Save/Load-Operationen laufen kooperativ (Coroutine +
   Fortschrittsanzeige), nicht blockierend in einem Frame.
@@ -146,4 +165,4 @@ unter `.specify/templates/` auf Konsistenz. Reviews von Plans und Specs
 MÜSSEN die Einhaltung der Prinzipien verifizieren; nicht begründbare
 Komplexität wird abgelehnt.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-05
+**Version**: 1.2.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-18

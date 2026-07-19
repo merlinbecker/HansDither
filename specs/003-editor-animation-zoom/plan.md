@@ -16,7 +16,7 @@ Ein neuer `EditorRoom` ersetzt den Pulp-gekoppelten TileRoom: 25×15-Raster aus 
 
 **Storage**: Ausschließlich über den Spec-001-Contract (keine eigenen Formate); Editor mutiert die Laufzeitrepräsentation `imageData` (frames, imagetable, hashIndex)
 
-**Testing**: Manuelle Simulator-Szenarien in [quickstart.md](quickstart.md); Crank-Rastung zusätzlich auf Hardware prüfen (Constitution: hardware-nahe Funktionen am Gerät)
+**Testing**: Headless-Tests (`lua tests/headless_tests.lua`, Constitution V Gate 1 — MUSS mit "ALLE TESTS BESTANDEN" enden) + Manuelle Simulator-Szenarien in [quickstart.md](quickstart.md) (Constitution: hardware-nahe Funktionen am Gerät; Crank-Rastung zusätzlich auf Hardware prüfen). Gate 2 (pdc-Build) als offener Punkt dokumentiert (kein SDK auf dieser Maschine, siehe quickstart.md).
 
 **Target Platform**: Playdate (Device + Simulator), 400×240, 1-Bit
 

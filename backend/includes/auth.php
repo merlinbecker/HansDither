@@ -21,30 +21,44 @@ class Auth {
         if (empty($uid)) {
             return ['status' => 'error', 'error' => 'UID darf nicht leer sein', 'http_code' => 400];
         }
-        
+
+        if (!self::isValidUid($uid)) {
+            return ['status' => 'error', 'error' => 'Ungültige UID. Erlaubt: Buchstaben, Ziffern, "-", "_" (max. 64 Zeichen)', 'http_code' => 400];
+        }
+
         if (!preg_match(PIN_REGEX, $pin)) {
             return ['status' => 'error', 'error' => 'PIN muss genau ' . PIN_LENGTH . ' Ziffern enthalten', 'http_code' => 400];
         }
         
         // Prüfen ob UID bereits existiert (Race Condition Schutz)
-        $existing = db()->query('SELECT uid FROM users WHERE uid = ?', $uid);
-        if ($existing && is_array($existing) && count($existing) > 0) {
-            return ['status' => 'error', 'error' => 'UID bereits verknüpft', 'http_code' => 409];
-        }
-        
-        // PIN hashen
+        $existing = db()->query('SELECT uid, confirmed_at FROM users WHERE uid = ?', $uid);
         $pin_hash = password_hash($pin, PASSWORD_BCRYPT);
-        
-        // Nutzer speichern
-        $success = db()->execute(
-            'INSERT INTO users (uid, pin_hash, failed_attempts, locked_until) VALUES (?, ?, 0, NULL)',
-            $uid, $pin_hash
-        );
-        
+
+        if ($existing && is_array($existing) && count($existing) > 0) {
+            // Spec 004: Die PIN wird vom Playdate generiert, nicht vom Nutzer gewählt — überträgt
+            // der Nutzer beim Pairing versehentlich eine andere PIN als die auf dem Gerät gezeigte,
+            // kann sich das Gerät nie erfolgreich einloggen. Solange noch kein erfolgreicher Login
+            // stattgefunden hat (confirmed_at IS NULL), ist die Verknüpfung daher überschreibbar —
+            // erst ein bestätigtes Pairing ist vor Übernahme geschützt (research.md R12).
+            if ($existing[0]['confirmed_at'] !== null) {
+                return ['status' => 'error', 'error' => 'UID bereits verknüpft', 'http_code' => 409];
+            }
+
+            $success = db()->execute(
+                'UPDATE users SET pin_hash = ?, failed_attempts = 0, locked_until = NULL WHERE uid = ?',
+                $pin_hash, $uid
+            );
+        } else {
+            $success = db()->execute(
+                'INSERT INTO users (uid, pin_hash, failed_attempts, locked_until) VALUES (?, ?, 0, NULL)',
+                $uid, $pin_hash
+            );
+        }
+
         if (!$success) {
             return ['status' => 'error', 'error' => 'Fehler beim Speichern', 'http_code' => 500];
         }
-        
+
         return ['status' => 'success', 'message' => 'Verknüpfung erfolgreich hergestellt', 'uid' => $uid, 'http_code' => 201];
     }
     
@@ -56,6 +70,10 @@ class Auth {
      * @return array Ergebnis mit Session-Token
      */
     public static function login(string $uid, string $pin): array {
+        if (!self::isValidUid($uid)) {
+            return ['status' => 'error', 'error' => 'Ungültige UID', 'http_code' => 400];
+        }
+
         // Nutzer finden
         $user = db()->query('SELECT uid, pin_hash, failed_attempts, locked_until FROM users WHERE uid = ?', $uid);
         
@@ -103,8 +121,12 @@ class Auth {
             $token, $uid, $expires_at
         );
         
-        // Fehlversuche zurücksetzen
-        db()->execute('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE uid = ?', $uid);
+        // Fehlversuche zurücksetzen + Verknüpfung als bestätigt markieren (research.md R12) —
+        // ab hier verweigert pair() ein Überschreiben dieser UID (Schutz vor Übernahme)
+        db()->execute(
+            'UPDATE users SET failed_attempts = 0, locked_until = NULL, confirmed_at = COALESCE(confirmed_at, NOW()) WHERE uid = ?',
+            $uid
+        );
         
         return [
             'status' => 'success',
@@ -171,14 +193,36 @@ class Auth {
     }
     
     /**
+     * Prüft das UID-Format gegen die Whitelist (contracts S-01, data-model VARCHAR(64))
+     *
+     * @param string $uid Playdate-Geräte-ID
+     * @return bool
+     */
+    public static function isValidUid(string $uid): bool {
+        return preg_match(UID_REGEX, $uid) === 1;
+    }
+
+    /**
      * Prüfen ob UID existiert
-     * 
+     *
      * @param string $uid Playdate-Geräte-ID
      * @return bool
      */
     public static function uidExists(string $uid): bool {
         $user = db()->query('SELECT uid FROM users WHERE uid = ?', $uid);
         return $user && !empty($user);
+    }
+
+    /**
+     * Prüft ob eine UID bereits einen erfolgreichen Login hatte (research.md R12).
+     * Unbestätigte UIDs dürfen erneut gepaired werden (siehe pair()).
+     *
+     * @param string $uid Playdate-Geräte-ID
+     * @return bool
+     */
+    public static function isConfirmed(string $uid): bool {
+        $user = db()->query('SELECT confirmed_at FROM users WHERE uid = ?', $uid);
+        return $user && !empty($user) && $user[0]['confirmed_at'] !== null;
     }
     
     /**

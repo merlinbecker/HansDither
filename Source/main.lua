@@ -61,6 +61,10 @@ playdate.inputHandlers.push(currentRoom:inputHandler())
 -- Die Game Loop des SDK: muss definiert sein, sonst zeigt der Simulator
 -- nur einen schwarzen Bildschirm. Räume zeichnen selbst (kein Sprite-System).
 function playdate.update()
+    -- playdate.graphics.generateQRCode (Spec 004, SyncService) ist Timer-
+    -- getrieben (siehe CoreLibs/qrcode.lua) und braucht daher eine laufende
+    -- Timer-Pumpe, sonst feuert ihr Callback nie.
+    playdate.timer.updateTimers()
     currentRoom:update()
 end
 

@@ -40,16 +40,17 @@ Alle Unbekannten auf Basis der Spec und Constitution gelöst. Fokus auf PHP/MySQ
 - **Rationale**: PDI ist ein Playdate-spezifisches Binärformat; es gibt keine native PHP-Unterstützung. Zwei Optionen:
   - **Option A: GD-Bibliothek** (empfohlen): Standardmäßig auf all-inkl.com verfügbar. PDI muss manuell geparsed werden (Tile-IDs → Pixel-Daten), dann mit `imagecreate()` ein 400×240 1-Bit Bild erzeugen.
   - **Option B: Imagick** (alternativ): Bietet mehr Bildformate, aber möglicherweise nicht auf allen Shared-Hosting-Paketen verfügbar.
-- **PDI-Format** (aus Spec 001):
-  - Header: Magic Bytes `PDI\0`, Version (4 Bytes), Tile-Größe (z. B. 16×16), Anzahl Tiles
-  - Tile-Daten: Sequenz von RGBA8888-Pixels pro Tile
-  - Imagetable: Referenziert Tiles via Index
+- **PDI-Format** (korrigiert 2026-07-18, gegen echte SDK-Dateien verifiziert): sheet.pdi entsteht via `playdate.datastore.writeImage()` und ist das echte Playdate-Image-Format — nicht das ursprünglich angenommene `PDI\0`-Kunstformat:
+  - 12 Bytes Magic `Playdate IMG`, uint32 LE Flags (Bit 0x80000000 = zlib-komprimiert)
+  - falls komprimiert: 16-Byte-Prä-Header (decompressed_size, width, height, reserved), dann zlib-Stream
+  - Cell-Daten: 8×uint16 LE (clip_width, clip_height, stride, clips, flags mit Alpha-Bit), danach 1-Bit-Farb-Bitmap (MSB zuerst, 1 = weiß), optional Alpha-Bitmap
+  - Referenz: cranksters/playdate-reverse-engineering (`formats/pdi.md`, `tools/pdi2png.py`); PHP-Parser: `backend/includes/pdi_parser.php` — pixelidentisch (0 diff) zur Python-Referenz verifiziert (card.pdi aus Hans Dither.pdx)
 - **Rendering-Algorithmus**:
-  1. PDI-Header parsen (Version, Tile-Größe)
-  2. Tile-Daten extrahieren
-  3. frames.json laden (25×15 Grid mit Tile-Indizes)
-  4. Für jeden Grid-Eintrag: corresponding Tile-Pixel in 400×240 Bild setzen
-  5. Als PNG exportieren (1-Bit Farbtiefe für Authentizität)
+  1. sheet.pdi parsen (PdiParser, inkl. zlib-Dekompression)
+  2. Tiles slicen: 16×16-Zellen, 25 pro Zeile, 1-basierte Indizes (Spec 001)
+  3. frames.json laden (gridWidth 25 × gridHeight 15, `frames[f]` = 375 Tile-Indizes; ungültige Indizes → Fallback Tile 1/Weiß)
+  4. Für jeden Grid-Eintrag: Tile-Pixel in 400×240-Canvas setzen
+  5. Export: PNG (Frame 1, via GD) und animiertes GIF (alle Frames, FR-014) via eigenem GIF89a/LZW-Encoder `backend/includes/gif_encoder.php` — GD kann keine animierten GIFs, Imagick ist auf Shared Hosting nicht verlässlich
 - **Alternatives considered**:
   - Client-seitiges Rendern (verworfen: Nutzer möchte serverseitiges PNG)
   - Externer Rendering-Service (verworfen: zusätzliche Komplexität und Kosten)

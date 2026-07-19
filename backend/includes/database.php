@@ -17,7 +17,7 @@ class Database {
         
         if ($this->connection->connect_error) {
             $this->logError('Datenbank-Verbindungsfehler: ' . $this->connection->connect_error);
-            die(json_encode(['error' => 'Datenbank nicht erreichbar']));
+            self::failWithDbError();
         }
         
         // Zeichenkodierung setzen
@@ -44,9 +44,21 @@ class Database {
         $stmt = $this->connection->prepare($query);
         if (!$stmt) {
             $this->logError('Prepare-Fehler: ' . $this->connection->error . ' - Query: ' . $query);
-            die(json_encode(['error' => 'Datenbankfehler']));
+            self::failWithDbError();
         }
         return $stmt;
+    }
+
+    /**
+     * Bricht den Request mit HTTP 500 und nutzerfreundlicher Meldung ab
+     * (Edge Case spec.md: "Datenbankfehler — bitte später erneut versuchen")
+     */
+    private static function failWithDbError(): void {
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json');
+        }
+        die(json_encode(['error' => 'Datenbankfehler — bitte später erneut versuchen']));
     }
     
     /**
@@ -66,22 +78,27 @@ class Database {
         
         if (!$stmt->execute()) {
             $this->logError('Execute-Fehler: ' . $stmt->error);
+            $stmt->close();
             return false;
         }
-        
+
         $result = $stmt->get_result();
         if (!$result) {
             // Für INSERT/UPDATE/DELETE
-            return $stmt->affected_rows > 0;
+            $affected = $stmt->affected_rows > 0;
+            $stmt->close();
+            return $affected;
         }
-        
+
         $rows = [];
         while ($row = $result->fetch_assoc()) {
             $rows[] = $row;
         }
-        
+
         $stmt->close();
-        return !empty($rows) ? $rows : true;
+        // Leeres SELECT-Ergebnis MUSS [] liefern (nicht true) — sonst kippt
+        // jede empty()/count()-Prüfung der Aufrufer (uidExists, login, validateToken)
+        return $rows;
     }
     
     /**
@@ -98,8 +115,8 @@ class Database {
         while ($row = $result->fetch_assoc()) {
             $rows[] = $row;
         }
-        
-        return !empty($rows) ? $rows : true;
+
+        return $rows;
     }
     
     /**

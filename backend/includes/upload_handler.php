@@ -13,30 +13,34 @@ class UploadHandler {
     
     /**
      * Verarbeitet einen Upload-Request
-     * 
+     *
      * @param string $uid UID des Nutzers
      * @param array $pdi_file $_FILES-Array für PDI-Datei
      * @param array $json_file $_FILES-Array für JSON-Datei
+     * @param string|null $client_image_id Optionale lokale Bild-ID vom Playdate (Spec 004,
+     *        research.md R9). Bekannt aus einem vorherigen Upload derselben UID -> bestehender
+     *        Eintrag wird aktualisiert (Update-in-place) statt ein Duplikat anzulegen. Fehlt der
+     *        Parameter, bleibt das Verhalten exakt wie zuvor (immer Neuanlage).
      * @return array Ergebnis
      */
-    public static function handleUpload(string $uid, array $pdi_file, array $json_file): array {
+    public static function handleUpload(string $uid, array $pdi_file, array $json_file, ?string $client_image_id = null): array {
         // 1. UID prüfen
         if (!Auth::uidExists($uid)) {
             return ['status' => 'error', 'error' => 'UID nicht gefunden', 'http_code' => 404];
         }
-        
+
         // 2. PDI-Datei validieren
         $pdi_validation = Validation::validateUploadedFile($pdi_file);
         if (!$pdi_validation['valid']) {
-            return ['status' => 'error', 'error' => $pdi_validation['error'], 'http_code' => 400];
+            return ['status' => 'error', 'error' => $pdi_validation['error'], 'http_code' => $pdi_validation['http_code'] ?? 400];
         }
-        
+
         // 3. JSON-Datei validieren
         $json_validation = Validation::validateUploadedFile($json_file);
         if (!$json_validation['valid']) {
-            return ['status' => 'error', 'error' => $json_validation['error'], 'http_code' => 400];
+            return ['status' => 'error', 'error' => $json_validation['error'], 'http_code' => $json_validation['http_code'] ?? 400];
         }
-        
+
         // 4. Upload-Verzeichnis für UID erstellen
         $upload_dir = UPLOADS_DIR . '/' . $uid;
         if (!is_dir($upload_dir)) {
@@ -44,43 +48,65 @@ class UploadHandler {
                 return ['status' => 'error', 'error' => 'Konnte Upload-Verzeichnis nicht erstellen', 'http_code' => 500];
             }
         }
-        
-        // 5. UUID für Image generieren
-        $image_id = self::generateUUID();
-        
-        // 6. Dateien speichern
+
+        // 4a. Update-in-place: existiert bereits ein Eintrag für (uid, client_image_id)?
+        $existing_image_id = null;
+        if ($client_image_id !== null && $client_image_id !== '') {
+            $existing = db()->query(
+                'SELECT id FROM images WHERE uid = ? AND client_image_id = ?',
+                $uid, $client_image_id
+            );
+            if ($existing && !empty($existing)) {
+                $existing_image_id = $existing[0]['id'];
+            }
+        }
+
+        // 5. Image-ID bestimmen: bestehende Server-UUID (Update) oder neue (Neuanlage)
+        $image_id = $existing_image_id ?? self::generateUUID();
+
+        // 6. Dateien speichern (überschreibt bei Update-in-place dieselben Pfade)
         $pdi_path = $upload_dir . '/' . $image_id . '.pdi';
         $json_path = $upload_dir . '/' . $image_id . '.json';
-        
+
         if (!move_uploaded_file($pdi_file['tmp_name'], $pdi_path)) {
             return ['status' => 'error', 'error' => 'Konnte PDI-Datei nicht speichern', 'http_code' => 500];
         }
-        
+
         if (!move_uploaded_file($json_file['tmp_name'], $json_path)) {
-            // PDI wieder löschen
-            unlink($pdi_path);
+            if ($existing_image_id === null) {
+                unlink($pdi_path);
+            }
             return ['status' => 'error', 'error' => 'Konnte JSON-Datei nicht speichern', 'http_code' => 500];
         }
-        
-        // 7. DB-Eintrag erstellen
-        $success = db()->execute(
-            'INSERT INTO images (id, uid, pdi_path, json_path, png_path) VALUES (?, ?, ?, ?, NULL)',
-            $image_id, $uid, $pdi_path, $json_path
-        );
-        
+
+        // 7. DB-Eintrag erstellen oder aktualisieren
+        if ($existing_image_id !== null) {
+            // Update-in-place: PNG/GIF zurücksetzen -> Neu-Rendering beim nächsten Abruf
+            $success = db()->execute(
+                'UPDATE images SET png_path = NULL, gif_path = NULL, uploaded_at = NOW() WHERE id = ?',
+                $image_id
+            );
+        } else {
+            $success = db()->execute(
+                'INSERT INTO images (id, uid, client_image_id, pdi_path, json_path, png_path) VALUES (?, ?, ?, ?, ?, NULL)',
+                $image_id, $uid, $client_image_id, $pdi_path, $json_path
+            );
+        }
+
         if (!$success) {
-            // Dateien löschen
-            unlink($pdi_path);
-            unlink($json_path);
+            if ($existing_image_id === null) {
+                unlink($pdi_path);
+                unlink($json_path);
+            }
             return ['status' => 'error', 'error' => 'Fehler beim Speichern in Datenbank', 'http_code' => 500];
         }
-        
+
         // 8. PNG asynchron generieren (on-demand, nicht sofort)
-        
+
         return [
             'status' => 'success',
             'image_id' => $image_id,
-            'message' => 'Upload erfolgreich. PNG wird generiert.',
+            'message' => $existing_image_id !== null ? 'Aktualisierung erfolgreich. PNG wird neu generiert.' : 'Upload erfolgreich. PNG wird generiert.',
             'http_code' => 201
         ];
     }
@@ -109,7 +135,7 @@ class UploadHandler {
      */
     public static function getImage(string $image_id, string $uid) {
         $images = db()->query(
-            'SELECT id, uid, pdi_path, json_path, png_path, uploaded_at FROM images WHERE id = ? AND uid = ?',
+            'SELECT id, uid, pdi_path, json_path, png_path, gif_path, uploaded_at FROM images WHERE id = ? AND uid = ?',
             $image_id, $uid
         );
         
@@ -128,7 +154,7 @@ class UploadHandler {
      */
     public static function getAllImages(string $uid): array {
         $images = db()->query(
-            'SELECT id, uid, pdi_path, json_path, png_path, uploaded_at FROM images WHERE uid = ? ORDER BY uploaded_at DESC',
+            'SELECT id, uid, pdi_path, json_path, png_path, gif_path, uploaded_at FROM images WHERE uid = ? ORDER BY uploaded_at DESC',
             $uid
         );
         
@@ -154,6 +180,9 @@ class UploadHandler {
         if ($image['png_path']) {
             $files_to_delete[] = $image['png_path'];
         }
+        if (!empty($image['gif_path'])) {
+            $files_to_delete[] = $image['gif_path'];
+        }
         
         foreach ($files_to_delete as $file) {
             if (file_exists($file)) {
@@ -176,6 +205,20 @@ class UploadHandler {
         return db()->execute(
             'UPDATE images SET png_path = ? WHERE id = ?',
             $png_path, $image_id
+        );
+    }
+
+    /**
+     * Speichert den GIF-Pfad in der Datenbank
+     *
+     * @param string $image_id Image-UUID
+     * @param string $gif_path Pfad zur GIF-Datei
+     * @return bool
+     */
+    public static function saveGifPath(string $image_id, string $gif_path): bool {
+        return db()->execute(
+            'UPDATE images SET gif_path = ? WHERE id = ?',
+            $gif_path, $image_id
         );
     }
     

@@ -14,8 +14,19 @@ require_once __DIR__ . '/../includes/upload_handler.php';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 
-// Session-Token aus Header oder Parameter
-$session_token = $_SERVER['HTTP_X_SESSION_TOKEN'] ?? ($_GET['token'] ?? null);
+/**
+ * Liest den Session-Token aus Header (X-Session-Token), Query-Parameter oder Cookie
+ */
+function requestSessionToken(): ?string {
+    return $_SERVER['HTTP_X_SESSION_TOKEN'] ?? ($_GET['token'] ?? ($_COOKIE['session_token'] ?? null));
+}
+
+/**
+ * Web-Formulare markieren sich mit web=1 und erwarten Redirects statt JSON.
+ */
+function isWebFormSubmission(): bool {
+    return ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (($_POST['web'] ?? '') === '1');
+}
 
 // Routing
 switch ($path) {
@@ -66,6 +77,23 @@ switch ($path) {
  * Zeigt das UID-Eingabeformular
  */
 function showUidForm(): void {
+    // UID-Routing MUSS vor jeglicher HTML-Ausgabe passieren (header() sonst wirkungslos)
+    $error_message = '';
+    if (isset($_GET['uid']) && $_GET['uid'] !== '') {
+        $uid = trim($_GET['uid']);
+        if (!Auth::isValidUid($uid)) {
+            $error_message = 'Ungültige UID. Erlaubt: Buchstaben, Ziffern, "-", "_" (max. 64 Zeichen).';
+        } elseif (Auth::isConfirmed($uid)) {
+            // UID ist bestätigt verknüpft -> zu Login weiterleiten
+            header('Location: /login?uid=' . urlencode($uid));
+            exit;
+        } else {
+            // UID existiert noch nicht ODER ist eine unbestätigte Verknüpfung
+            // (research.md R12) -> (erneut) zu Pairing weiterleiten
+            header('Location: /pair?uid=' . urlencode($uid));
+            exit;
+        }
+    }
     ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -79,27 +107,16 @@ function showUidForm(): void {
     <div class="container">
         <h1>Hans Dither Sync</h1>
         <p>Verbinde dein Playdate mit diesem Backend, um deine Zeichnungen zu speichern und herunterzuladen.</p>
-        
+
+        <?php if (!empty($error_message)): ?>
+            <div class="error"><?php echo htmlspecialchars($error_message); ?></div>
+        <?php endif; ?>
+
         <form action="/" method="GET" class="form">
             <label for="uid">Playdate UID:</label>
             <input type="text" id="uid" name="uid" placeholder="z. B. pd-abc123def456" required>
             <button type="submit">Weiter</button>
         </form>
-        
-        <?php
-        if (isset($_GET['uid']) && !empty($_GET['uid'])) {
-            $uid = trim($_GET['uid']);
-            if (Auth::uidExists($uid)) {
-                // UID existiert -> zu Login weiterleiten
-                header("Location: /login?uid=$uid");
-                exit;
-            } else {
-                // UID existiert nicht -> zu Pairing weiterleiten
-                header("Location: /pair?uid=$uid");
-                exit;
-            }
-        }
-        ?>
     </div>
 </body>
 </html>
@@ -110,19 +127,27 @@ function showUidForm(): void {
  * Zeigt das Pairing-Formular (UID + PIN eingeben)
  */
 function showPairForm(): void {
-    $uid = $_GET['uid'] ?? '';
-    
-    if (empty($uid)) {
+    $uid = trim($_GET['uid'] ?? '');
+    $error = $_GET['error'] ?? '';
+
+    if (empty($uid) || !Auth::isValidUid($uid)) {
         header('Location: /');
         exit;
     }
-    
-    // Prüfen ob UID bereits existiert
-    if (Auth::uidExists($uid)) {
-        header("Location: /login?uid=$uid&error=uid_exists");
+
+    // Bereits bestätigt verknüpfte UIDs nicht erneut pairen lassen (unbestätigte
+    // dürfen das, siehe Auth::pair() / research.md R12 — ermöglicht Retry nach
+    // einer PIN mit Tippfehler statt permanentem Dead-End)
+    if (Auth::isConfirmed($uid)) {
+        header('Location: /login?uid=' . urlencode($uid) . '&error=uid_exists');
         exit;
     }
-    
+
+    $error_message = '';
+    if ($error === 'invalid') {
+        $error_message = 'PIN muss genau 4 Ziffern enthalten.';
+    }
+
     ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -135,10 +160,15 @@ function showPairForm(): void {
 <body>
     <div class="container">
         <h1>Verknüpfung herstellen</h1>
-        <p>Gib eine 4-stellige PIN ein, um dein Playdate mit UID <strong><?php echo htmlspecialchars($uid); ?></strong> zu verknüpfen.</p>
+        <p>Gib die <strong>auf deinem Playdate angezeigte</strong> 4-stellige PIN ein, um dein Playdate mit UID <strong><?php echo htmlspecialchars($uid); ?></strong> zu verknüpfen. Die PIN erscheint auf dem Playdate-Bildschirm, sobald du dort die Sync-Kurbel-Geste ausführst.</p>
+
+        <?php if (!empty($error_message)): ?>
+            <div class="error"><?php echo htmlspecialchars($error_message); ?></div>
+        <?php endif; ?>
         
         <form action="/pair" method="POST" class="form">
             <input type="hidden" name="uid" value="<?php echo htmlspecialchars($uid); ?>">
+            <input type="hidden" name="web" value="1">
             <label for="pin">4-stellige PIN:</label>
             <input type="password" id="pin" name="pin" pattern="\d{4}" maxlength="4" placeholder="1234" required>
             <button type="submit">Verknüpfen</button>
@@ -159,7 +189,22 @@ function handlePairRequest(): void {
     $pin = $_POST['pin'] ?? '';
     
     $result = Auth::pair($uid, $pin);
-    
+
+    if (isWebFormSubmission()) {
+        if ($result['status'] === 'success') {
+            header('Location: /login?uid=' . urlencode($uid) . '&paired=1');
+            exit;
+        }
+
+        if (($result['http_code'] ?? 400) === 409) {
+            header('Location: /login?uid=' . urlencode($uid) . '&error=uid_exists');
+            exit;
+        }
+
+        header('Location: /pair?uid=' . urlencode($uid) . '&error=invalid');
+        exit;
+    }
+
     header('Content-Type: application/json');
     http_response_code($result['http_code'] ?? 500);
     echo json_encode($result);
@@ -169,17 +214,18 @@ function handlePairRequest(): void {
  * Zeigt das Login-Formular
  */
 function showLoginForm(): void {
-    $uid = $_GET['uid'] ?? '';
+    $uid = trim($_GET['uid'] ?? '');
     $error = $_GET['error'] ?? '';
-    
-    if (empty($uid)) {
+    $paired = $_GET['paired'] ?? '';
+
+    if (empty($uid) || !Auth::isValidUid($uid)) {
         header('Location: /');
         exit;
     }
-    
+
     // Prüfen ob UID existiert
     if (!Auth::uidExists($uid)) {
-        header("Location: /pair?uid=$uid");
+        header('Location: /pair?uid=' . urlencode($uid));
         exit;
     }
     
@@ -194,6 +240,11 @@ function showLoginForm(): void {
         case 'invalid':
             $error_message = 'UID oder PIN ungültig.';
             break;
+    }
+
+    $success_message = '';
+    if ($paired === '1') {
+        $success_message = 'Verknüpfung erfolgreich hergestellt. Bitte jetzt mit deiner PIN anmelden.';
     }
     
     ?>
@@ -213,9 +264,14 @@ function showLoginForm(): void {
         <?php if (!empty($error_message)): ?>
             <div class="error"><?php echo htmlspecialchars($error_message); ?></div>
         <?php endif; ?>
+
+        <?php if (!empty($success_message)): ?>
+            <div class="success"><?php echo htmlspecialchars($success_message); ?></div>
+        <?php endif; ?>
         
         <form action="/login" method="POST" class="form">
             <input type="hidden" name="uid" value="<?php echo htmlspecialchars($uid); ?>">
+            <input type="hidden" name="web" value="1">
             <label for="pin">4-stellige PIN:</label>
             <input type="password" id="pin" name="pin" pattern="\d{4}" maxlength="4" placeholder="1234" required>
             <button type="submit">Anmelden</button>
@@ -246,14 +302,28 @@ function handleLoginRequest(): void {
             'httponly' => true,
             'samesite' => 'Strict'
         ]);
-        
-        // Weiterleiten zu Images-Liste
+
+        if (isWebFormSubmission()) {
+            header('Location: /images?uid=' . urlencode($uid) . '&token=' . urlencode($result['session_token']));
+            exit;
+        }
+
         header('Content-Type: application/json');
         echo json_encode([
             'status' => 'success',
+            'session_token' => $result['session_token'],
+            'expires_at' => $result['expires_at'],
+            'uid' => $uid,
             'redirect' => '/images?uid=' . $uid . '&token=' . $result['session_token']
         ]);
     } else {
+        if (isWebFormSubmission()) {
+            $code = $result['http_code'] ?? 400;
+            $error = $code === 429 ? 'locked' : 'invalid';
+            header('Location: /login?uid=' . urlencode($uid) . '&error=' . $error);
+            exit;
+        }
+
         header('Content-Type: application/json');
         http_response_code($result['http_code'] ?? 400);
         echo json_encode($result);
@@ -264,8 +334,8 @@ function handleLoginRequest(): void {
  * Verarbeitet Images-Request (GET /images)
  */
 function handleImagesRequest(): void {
-    $uid = $_GET['uid'] ?? '';
-    $token = $_GET['token'] ?? $session_token ?? '';
+    $uid = trim($_GET['uid'] ?? '');
+    $token = requestSessionToken() ?? '';
     
     // Authentifizierung prüfen
     if (empty($uid) || empty($token)) {
@@ -297,9 +367,11 @@ function handleImagesRequest(): void {
                 'id' => $image['id'],
                 'uploaded_at' => $image['uploaded_at'],
                 'has_png' => !empty($image['png_path']),
+                'has_gif' => !empty($image['gif_path']),
                 'pdi_url' => '/download/pdi/' . $image['id'] . '?token=' . $token,
                 'json_url' => '/download/json/' . $image['id'] . '?token=' . $token,
-                'png_url' => '/download/png/' . $image['id'] . '?token=' . $token
+                'png_url' => '/download/png/' . $image['id'] . '?token=' . $token,
+                'gif_url' => '/download/gif/' . $image['id'] . '?token=' . $token
             ];
         }
         
@@ -318,6 +390,8 @@ function handleImagesRequest(): void {
  * Zeigt die Images-Liste als HTML
  */
 function showImagesPage(string $uid, string $token, array $images): void {
+    $uploadStatus = $_GET['upload'] ?? '';
+    $uploadError = $_GET['error'] ?? '';
     ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -332,11 +406,18 @@ function showImagesPage(string $uid, string $token, array $images): void {
         <h1>Meine Projekte</h1>
         <p>UID: <strong><?php echo htmlspecialchars($uid); ?></strong></p>
         <p><a href="/logout?token=<?php echo htmlspecialchars($token); ?>">Abmelden</a></p>
+
+        <?php if ($uploadStatus === 'ok'): ?>
+            <div class="success">Upload erfolgreich.</div>
+        <?php elseif ($uploadError === 'invalid'): ?>
+            <div class="error">Upload fehlgeschlagen. Bitte prüfe PDI/JSON und versuche es erneut.</div>
+        <?php endif; ?>
         
         <h2>Upload-Formular</h2>
         <form action="/upload.php" method="POST" enctype="multipart/form-data" class="form">
             <input type="hidden" name="uid" value="<?php echo htmlspecialchars($uid); ?>">
             <input type="hidden" name="token" value="<?php echo htmlspecialchars($token); ?>">
+            <input type="hidden" name="web" value="1">
             <label for="pdi">PDI-Datei:</label>
             <input type="file" id="pdi" name="pdi" accept=".pdi" required>
             <label for="json">JSON-Datei:</label>
@@ -354,9 +435,11 @@ function showImagesPage(string $uid, string $token, array $images): void {
                     <tr>
                         <th>ID</th>
                         <th>Datum</th>
+                        <th>Vorschau</th>
                         <th>PDI</th>
                         <th>JSON</th>
                         <th>PNG</th>
+                        <th>GIF</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -365,17 +448,23 @@ function showImagesPage(string $uid, string $token, array $images): void {
                             <td><?php echo htmlspecialchars(substr($image['id'], 0, 8)); ?>...</td>
                             <td><?php echo htmlspecialchars(date('d.m.Y H:i', strtotime($image['uploaded_at']))); ?></td>
                             <td>
+                                <img
+                                    src="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>&inline=1"
+                                    alt="Vorschau <?php echo htmlspecialchars(substr($image['id'], 0, 8)); ?>"
+                                    class="preview-image"
+                                >
+                            </td>
+                            <td>
                                 <a href="/download/pdi/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>PDI</a>
                             </td>
                             <td>
                                 <a href="/download/json/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>JSON</a>
                             </td>
                             <td>
-                                <?php if (!empty($image['png_path'])): ?>
-                                    <a href="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>PNG</a>
-                                <?php else: ?>
-                                    <span class="pending">Wird generiert...</span>
-                                <?php endif; ?>
+                                <a href="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>PNG</a>
+                            </td>
+                            <td>
+                                <a href="/download/gif/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>GIF</a>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -392,7 +481,7 @@ function showImagesPage(string $uid, string $token, array $images): void {
  * Verarbeitet Logout-Request
  */
 function handleLogoutRequest(): void {
-    $token = $_GET['token'] ?? $session_token ?? '';
+    $token = requestSessionToken() ?? '';
     
     if (!empty($token)) {
         Auth::invalidateToken($token);

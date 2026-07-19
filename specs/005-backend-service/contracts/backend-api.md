@@ -126,7 +126,7 @@ Definiert die API-Schnittstellen des Backend-Service für Hans Dither Sync. Alle
 1. Session-Token oder UID+PIN muss gültig sein
 2. Dateien müssen `.pdi` und `.json` Endung haben
 3. **JSON**: `json_decode()` muss erfolgreich sein und ein Objekt/Array zurückgeben
-4. **PDI**: Erste 4 Bytes müssen `PDI\0` (Magic Bytes) sein
+4. **PDI**: Playdate-SDK-Format (Magic `Playdate IMG`, optional zlib-komprimiert); Bilddaten müssen vollständig parsebar sein
 5. Dateigrößen: Max. 10MB pro Datei
 
 **Verarbeitung**:
@@ -170,9 +170,11 @@ Definiert die API-Schnittstellen des Backend-Service für Hans Dither Sync. Alle
       "id": "{uuid}",
       "uploaded_at": "{ISO-8601-Timestamp}",
       "has_png": true/false,
+      "has_gif": true/false,
       "pdi_url": "/download/pdi/{uuid}",
       "json_url": "/download/json/{uuid}",
-      "png_url": "/download/png/{uuid}"
+      "png_url": "/download/png/{uuid}",
+      "gif_url": "/download/gif/{uuid}"
     },
     ...
   ]
@@ -230,7 +232,22 @@ Definiert die API-Schnittstellen des Backend-Service für Hans Dither Sync. Alle
 - Content-Disposition: `attachment; filename="{id}.png"`
 - Body: PNG-Binärdaten (400×240, 1-Bit)
 
-**Hinweis**: Falls PNG noch nicht generiert wurde, wird es on-demand erstellt (kann Verzögerung verursachen).
+**Hinweis**: Falls PNG noch nicht generiert wurde, wird es on-demand erstellt (kann Verzögerung verursachen). Das PNG zeigt Frame 1.
+
+---
+
+### E-09: GET `/download/gif/{id}` — Animiertes GIF herunterladen
+
+**Zweck**: Animiertes GIF (400×240, Endlos-Loop) herunterladen; jeder Tilemap-Frame aus frames.json ist ein GIF-Frame
+
+**Request/Validierung**: Analog zu E-06
+
+**Response (200 OK)**:
+- Content-Type: `image/gif`
+- Content-Disposition: `attachment; filename="{id}.gif"`
+- Body: GIF89a-Binärdaten (400×240, 2 Farben, NETSCAPE-Loop, Frame-Delay 200 ms)
+
+**Hinweis**: Wird on-demand generiert (reiner PHP-GIF89a/LZW-Encoder, kein Imagick nötig).
 
 ---
 
@@ -240,7 +257,7 @@ Definiert die API-Schnittstellen des Backend-Service für Hans Dither Sync. Alle
 
 | Dateityp | Endung | MIME-Type | Validierung |
 |---|---|---|---|
-| PDI | `.pdi` | `application/octet-stream` | Magic Bytes `PDI\0` + Header |
+| PDI | `.pdi` | `application/octet-stream` | Playdate-SDK-Format: Magic `Playdate IMG` (12 Bytes), optional zlib-komprimiert, Bilddaten vollständig parsebar (Referenz: cranksters/playdate-reverse-engineering) |
 | JSON | `.json` | `application/json` | `json_decode()` erfolgreich |
 
 **Abgelehnt**: Alle anderen Dateitypen (insbesondere `.php`, `.exe`, `.sh`, `.js`, `.html`)

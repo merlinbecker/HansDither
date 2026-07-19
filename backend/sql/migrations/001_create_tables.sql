@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS `images` (
     `pdi_path` VARCHAR(255) NOT NULL COMMENT 'Pfad zur PDI-Datei',
     `json_path` VARCHAR(255) NOT NULL COMMENT 'Pfad zur frames.json',
     `png_path` VARCHAR(255) NULL COMMENT 'Pfad zum gerenderten PNG (NULL wenn noch nicht generiert)',
+    `gif_path` VARCHAR(255) NULL COMMENT 'Pfad zum gerenderten animierten GIF (NULL wenn noch nicht generiert)',
     `uploaded_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Upload-Zeitpunkt',
     
     PRIMARY KEY (`id`),
