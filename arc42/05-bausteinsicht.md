@@ -21,11 +21,11 @@ Die Navigation ist bewusst gerichtet: Der TitleRoom ist eine Einbahnstrasse (nur
 
 | Baustein | Verantwortung |
 |---|---|
-| main.lua | Initialisierung, Room-Verdrahtung, zentrales playdate.update, Terminate-Hook (Commit-Kette der Zoomstufen + Save des offenen Bildes). |
+| main.lua | Initialisierung, Room-Verdrahtung, zentrales playdate.update, Terminate-Hook (Commit-Kette der Zoomstufen + Save des offenen Bildes); seit Spec 006 zusaetzlich gameWillPause-Hook (setzt/entfernt das System-Pause-Menuebild ueber EditorRoom:buildPauseMenuImage()). |
 | TitleRoom | Einstieg/Startbildschirm; fuehrt zum SelectionRoom. |
-| SelectionRoom | Bild-Auswahlscreen (3x3-Raster mit maskierten Thumbnails, endloses Scrollen); Anlage/Kopie/Loeschen ueber Systemmenue; setzt EditorRoom:setImage(id) und wechselt direkt in den Editor (AD-018). |
-| EditorRoom | Haupteditor: 25x15-Raster aus 16x16-Tiles auf nativen 400x240 via SDK-tilemap (AD-016). Cursor (D-Pad, SDK-keyRepeatTimer), A = Zeichnen/Toggle, B = Pipette, Crank = Frame-Verwaltung (max. 12, Rotation), B+Crank = Zoomtrigger, Systemmenue (save + exit, delete frame, show grid), Dedup-Commit-Pfad applyTileEdits. |
-| ZoomRoom | Mittlere Zoomstufe: 3x3-Tile-Kontext als 24x24-Malraster, eine Zelle = 2x2 native Pixel; Commit geaenderter Slots an EditorRoom:applyTileEdits; "All Similar" schreibt in-place in die Imagetable. |
+| SelectionRoom | Bild-Auswahlscreen (3x3-Raster mit maskierten Thumbnails, endloses Scrollen); Anlage/Kopie/Loeschen ueber Systemmenue; setzt EditorRoom:setImage(id) und wechselt direkt in den Editor (AD-018). Seit Spec 006: der aktuell selektierte Eintrag zeigt zusaetzlich einen vollflaechigen, animierten Hintergrund (Lazy-Load der vollen Bilddaten, verwirft Ladevorgaenge bei schnellem Selektionswechsel) mit Muster-Stoereffekt; alle anderen Eintraege bleiben unveraendert statische Kreis-Thumbnails. |
+| EditorRoom | Haupteditor: 25x15-Raster aus 16x16-Tiles auf nativen 400x240 via SDK-tilemap (AD-016). Cursor (D-Pad, SDK-keyRepeatTimer), A = Zeichnen/Toggle, B = Pipette, Crank = Frame-Verwaltung (max. 12, Rotation; seit Spec 006 erst nach voller 360°-Umdrehung statt 90°-Rasterung), B+Crank = Zoomtrigger, Systemmenue (save + exit, reset frame [ersetzt seit Spec 006 "delete frame", AD-032], show grid), Dedup-Commit-Pfad applyTileEdits. Seit Spec 006 zusaetzlich: Inaktivitaets-gesteuerte, cursor-abgewandte Frame-Positions-Bauchbinde und buildPauseMenuImage() (Tile-Uebersicht + Metadaten fuer das System-Pause-Menuebild). |
+| ZoomRoom | Mittlere Zoomstufe: 3x3-Tile-Kontext als 24x24-Malraster, eine Zelle = 2x2 native Pixel; Commit geaenderter Slots an EditorRoom:applyTileEdits; "All Similar" schreibt in-place in die Imagetable. Seit Spec 006: unbearbeitete Zellen zeigen die vier echten Quellpixel als Subpixel-Quadranten statt einer einfarbigen Stichprobe. |
 | PixelRoom | Innerste Zoomstufe: ein Tile mit echten 16x16 Pixeln; Menueaktionen All Similar und Invert; Rueckgabe an ZoomRoom. |
 | ImageStore | Bildverwaltung: Index (saves/index), Anlage/Kopie/Loeschen, Preview-Zugriff. |
 | ImageStoreCodec | Coroutine-basierte Save-/Load-Operationen: PDI-Sheet (deduplizierte Tiles) + frames.json (Positionen je Frame), FNV-1a-hashTile, Slicing zur Laufzeit-Imagetable inkl. hashIndex. |
@@ -51,6 +51,7 @@ Die Navigation ist bewusst gerichtet: Der TitleRoom ist eine Einbahnstrasse (nur
 - EditorRoom:setImage(id) / entered(): Kontextsetzung durch SelectionRoom; das Laden laeuft asynchron als RoomOperation beim Room-Eintritt.
 - EditorRoom:applyTileEdits(edits): Ruecknahme geaenderter Zoom-Slots ueber den Dedup-Pfad (hashIndex + Pixelvergleich); schreibt nur den aktiven Frame.
 - EditorRoom:getImageData(): Zugriff fuer den Terminate-Hook in main.lua.
+- EditorRoom:buildPauseMenuImage(): liefert das 400x240-Menuebild fuer playdate.setMenuImage() (Spec 006); nil ohne geladenes imageData. Ausschliesslich aus main.lua:gameWillPause() aufgerufen.
 - ZoomRoom:setFromEditorContext(ctx): Uebernahme des 3x3-Kontexts (Slots, 24x24-gridState, showGrid, imageData-Referenz).
 - ZoomRoom:setNewTile(tile) / updateExistingTile(tile, idx): Rueckgabe aus PixelRoom (Standard- bzw. All-Similar-Pfad).
 - ZoomRoom:commitForTerminate() / PixelRoom:commitForTerminate(): Commit ohne Room-Wechsel fuer den Terminate-Hook.
@@ -71,6 +72,7 @@ Interne Logik:
 - Display-Scale ist auf 1 gesetzt; alle Rooms arbeiten nativ auf 400x240.
 - Beim Raumwechsel werden Input-Handler ausgetauscht, danach entered() aufgerufen.
 - gameWillTerminate(): aktive Zoomstufen committen zuerst (PixelRoom -> ZoomRoom -> EditorRoom), dann wird das offene Bild synchron ueber ImageStoreCodec gespeichert.
+- gameWillPause() (Spec 006, AD-031): ruft EditorRoom:buildPauseMenuImage() + playdate.setMenuImage() auf, wenn currentRoom EditorRoom/ZoomRoom/PixelRoom ist (alle drei referenzieren dasselbe imageData), sonst setMenuImage(nil) — laeuft nur beim tatsaechlichen Pausieren, nicht pro Frame.
 
 ### 5.2.2 Whitebox SelectionRoom
 
@@ -84,6 +86,7 @@ Interne Logik:
 - Selektion laeuft ausschliesslich ueber setSelectedIndex() und ist damit immer mit der Gridview-Selektion (setSelection/scrollToCell) synchron; Navigation klemmt an vorhandenen Eintraegen.
 - Namenseingabe ueber das SDK-Keyboard: Commit/Abbruch via keyboardWillHideCallback(ok); waehrend das Keyboard sichtbar ist, wird jeder Frame neu gezeichnet (Raster + Eingabezeile unten links).
 - Thumbnail-Cache mit Negativ-Eintraegen (false = "Preview fehlt"), damit fehlende Previews nicht pro Frame von der Platte gelesen werden.
+- Spec 006 (Titelscreen-Animation): setSelectedIndex() startet bei jedem Wechsel einen Lazy-Load der vollen Bilddaten (ImageStoreCodec.newLoadOperation + RoomOperation, stiller Overlay ohne sichtbare loadingBar) fuer den neu selektierten Eintrag; ein Ladevorgang fuer einen bereits verlassenen Eintrag wird durch reines Ueberschreiben der Referenz nicht mehr resumed (kein Cancel-Callback noetig, reiner Lesevorgang). Nach Abschluss zeichnet update() ein Tilemap-basiertes 400x240-Vollbild plus einen zeitlich wechselnden Muster-Overlay (gfx.setPattern-Phasenwechsel) VOR dem Gridview; drawCell() laesst die Zelle des betroffenen Eintrags frei, alle anderen Zellen bleiben unveraendert.
 
 ### 5.2.3 Whitebox EditorRoom
 
@@ -97,6 +100,10 @@ Besonders relevante interne Teile:
 - tilemap:setTiles(frames[currentFrame], 25) als einziger Frame-Wechsel-Pfad (keine Bildkopien im Update-Pfad).
 - appendTileImage() laesst die Imagetable beim Malen wachsen (mit Neuaufbau-Fallback) und haelt den hashIndex konsistent.
 - Eingaben sind waehrend laufender Save-/Load-Operationen blockiert (inkl. Menueaktionen).
+- Spec 006 (Crank-Volldrehung): pro update() wird GENAU EINE Crank-Lese-API verwendet — getCrankChange() als signierter Grad-Akkumulator (crankAccumDegrees) ohne B, unveraendert getCrankTicks(4) fuer die B+Crank-Zoomkette; ein Frame-Wechsel loest erst bei ±360° netto aus, Teildrehungen/Richtungswechsel heben sich im Akkumulator von selbst auf.
+- Spec 006 (Bauchbinde): lastActivityMs wird bei jeder Eingabe (D-Pad, A, B, beide Crank-Pfade) aktualisiert; draw() zeigt die Frame-Positions-Bauchbinde nur, wenn seit der letzten Eingabe < 5s vergangen sind, auf der dem Cursor gegenueberliegenden Bildschirmhaelfte. Ein Sichtbarkeits-Uebergang wird in update() per Zeitvergleich erkannt und loest gezielt genau einen Redraw aus (analog zum bestehenden statusMessage-Timeout-Muster) — sonst wuerde die Bauchbinde bei reiner Inaktivitaet nie tatsaechlich verschwinden, da draw() nur bei needsRedraw==true laeuft.
+- Spec 006 (Reset Frame, AD-032): resetCurrentFrameToPrevious() kopiert alle 375 Tile-Indizes elementweise vom Vorgaenger-Frame; no-op auf Frame 1. Ausgeloest ueber den Systemmenuepunkt "reset frame", der "delete frame" ersetzt (deleteCurrentFrame() bleibt im Code, hat aber keinen Menue-Aufrufer mehr).
+- Spec 006 (Pause-Ansicht): buildPauseMenuImage() zaehlt unterschiedliche Tile-Indizes durch Iteration ueber alle frames[*] (NICHT imagetable:getLength(), das koennte nicht mehr referenzierte Alt-Eintraege mitzaehlen), zeichnet bis zu 120 Vorschauen im 12x10-Raster (bei mehr: Truncation, Gesamtzahl bleibt korrekt) sowie Gesamtzahl/Frame-Anzahl, ausschliesslich im linken 200px-Bereich (rechte Haelfte vom System-Menue ueberdeckt).
 
 ### 5.2.4 Whitebox ZoomRoom
 
@@ -110,6 +117,7 @@ Interne Logik:
 - gridState (24x24, boolesch) plus baselineGrid als Dekodier-Snapshot; Nutzeraenderungen = Abweichungen von der Baseline.
 - buildWorkingImage() brennt nur geaenderte Zellen als 2x2-Bloecke ins Basisbild und erhaelt damit feinere Pixel-Details aus dem PixelRoom.
 - "All Similar" aus dem PixelRoom schreibt das Tile in-place in die Imagetable (wirkt auf alle Verwendungen ueber alle Frames, FR-013-Ausnahme) und fuehrt den hashIndex nach.
+- Spec 006 (Subpixel-Rendering): drawGrid() zeichnet fuer Zellen mit gridState[r][c] == baselineGrid[r][c] (unbearbeitet) die vier echten Quellpixel des zugehoerigen 2x2-Blocks einzeln als 5x5-Quadranten statt einer einfarbigen 10x10-Flaeche; bearbeitete Zellen bleiben unveraendert flaechig (Editier-Semantik selbst unangetastet).
 
 ### 5.2.5 Whitebox PixelRoom
 
@@ -170,10 +178,10 @@ Interne Logik:
 | `public/upload.php` | Upload-Handler für PDI + JSON-Dateien | PHP 8.x |
 | `public/download.php` | Download-Handler für PDI/JSON/PNG-Dateien | PHP 8.x |
 | `includes/config.php` | Konfiguration: DB-Zugang, Pfade, Konstanten | PHP 8.x |
-| `includes/database.php` | MySQL-Datenbankverbindung mit Prepared Statements | MySQLi |
+| `includes/database.php` | MySQL-Datenbankverbindung mit Prepared Statements; seit Spec 007 auch Transaktions-Wrapper (`beginTransaction()`/`commit()`/`rollback()`) für den race-sicheren Upload-Zähl-Check (ADR-033) | MySQLi |
 | `includes/auth.php` | PIN-Authentifizierung, bcrypt-Hashing, Rate-Limiting, Session-Management | PHP 8.x |
-| `includes/validation.php` | Dateivalidierung: PDI (Magic Bytes + Header), JSON (Schema-Prüfung) | PHP 8.x |
-| `includes/upload_handler.php` | Datei-Speicherung, UUID-Generierung, DB-Einträge | PHP 8.x |
+| `includes/validation.php` | Dateivalidierung: PDI (Magic Bytes + vollständiges Parsing via `pdi_parser.php`), JSON (Syntax + seit Spec 007 Struktur-Schema via `validateFramesJsonSchema()`, ADR-034); Dateigrößen-Limit seit Spec 007 auf 300 KB gesenkt | PHP 8.x |
+| `includes/upload_handler.php` | Datei-Speicherung, UUID-Generierung, DB-Einträge; seit Spec 007 zusätzlich pro-UID-Obergrenze von 12 Bildern via Transaktion + Row-Lock (ADR-033) | PHP 8.x |
 | `includes/renderer.php` | PNG-Rendering aus PDI + JSON via GD-Bibliothek | PHP GD |
 | `MySQL-Datenbank` | Speicherung von UID→PIN-Hash, Images-Metadaten, Sessions | MySQL 8.x |
 | `Dateisystem` | Speicherung von PDI/JSON/PNG-Dateien unter `/uploads/{UID}/` | all-inkl.com Hosting |
@@ -194,7 +202,7 @@ graph TD
 
 **Interne Logik:**
 - **Authentifizierungsfluss:** UID-Eingabe → (UID existiert?) → Login oder Pairing → Session-Token (UUID, 30 Min Gültigkeit)
-- **Upload-Fluss:** Token-Prüfung → Dateivalidierung (PDI: Magic Bytes, JSON: json_decode) → UUID-Generierung → Datei-Speicherung → DB-Eintrag
+- **Upload-Fluss:** Token-Prüfung → Dateivalidierung (PDI: Magic Bytes + vollständiges Parsing, JSON: json_decode + Struktur-Schema seit Spec 007) → Dateigröße ≤ 300 KB (Spec 007) → Transaktion mit Row-Lock auf `users` + Zähl-Check ≤ 12 Bilder/UID bei Neuanlage (Spec 007, ADR-033) → UUID-Generierung → Datei-Speicherung → DB-Eintrag → Commit. Ein am Limit abgelehnter Upload (403) wird auf dem Playdate-Gerät (`Source/SyncService.lua`) als eigene, von anderen Fehlern unterscheidbare Meldung angezeigt (Spec 007, research.md R6) statt im generischen Fehlerpfad zu verschwinden.
 - **Download-Fluss:** Token-Prüfung → Berechtigung (Image.uid == Session.uid) → Datei-Auslieferung (PNG on-demand generieren)
 - **Rate-Limiting:** 3 Fehlversuche → 5 Min Sperre (locked_until Timestamp in DB)
 

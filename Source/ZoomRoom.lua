@@ -23,6 +23,7 @@ local SLOTS = 3            -- Raster: 3×3 Tile-Slots
 local GRID_COLS = CELLS_PER_TILE * SLOTS  -- 24 Zellen
 local GRID_ROWS = CELLS_PER_TILE * SLOTS  -- 24 Zellen
 local CELL_SIZE = 10       -- px pro Zelle auf dem Display (240×240 zentriert)
+local SUBPIXEL_SIZE = 5    -- CELL_SIZE / 2: Kantenlaenge je Subpixel-Quadrant (R2, FR-007/009)
 
 -- Grid zentriert: (400 - 240) / 2 = 80 px links, 0 px oben
 local OFFSET_X = 80
@@ -172,13 +173,37 @@ local function drawGrid()
     gfx.fillRect(OFFSET_X + totalW, 0, OFFSET_X, totalH)
     gfx.setColor(gfx.kColorBlack)
 
-    -- Zellen zeichnen
+    -- Zellen zeichnen: unbearbeitete Zellen zeigen die echten 2x2-Quellpixel
+    -- als vier 5x5-Subpixel-Quadranten (R2, FR-007/009); bearbeitete Zellen
+    -- bleiben ein flaechiger 10x10-Block (FR-008 - Editier-Ergebnis ist real
+    -- einheitlich, keine Subpixel-Illusion vortaeuschen).
     for r = 1, GRID_ROWS do
         for c = 1, GRID_COLS do
             local x = OFFSET_X + (c - 1) * CELL_SIZE
             local y = OFFSET_Y + (r - 1) * CELL_SIZE
-            gfx.setColor(gridState[r][c] and gfx.kColorBlack or gfx.kColorWhite)
-            gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
+            local sr, sc = getSlotForCell(r, c)
+            local slot = slots[sr][sc]
+            local base = (slot and not slot.oob) and (slot.editedImage or slot.originalImage) or nil
+
+            if base and gridState[r][c] == baselineGrid[r][c] then
+                local baseRow = (sr - 1) * CELLS_PER_TILE
+                local baseCol = (sc - 1) * CELLS_PER_TILE
+                local px = (c - baseCol - 1) * PX_PER_CELL
+                local py = (r - baseRow - 1) * PX_PER_CELL
+                local quadrants = {
+                    { base:sample(px, py), x, y },
+                    { base:sample(px + 1, py), x + SUBPIXEL_SIZE, y },
+                    { base:sample(px, py + 1), x, y + SUBPIXEL_SIZE },
+                    { base:sample(px + 1, py + 1), x + SUBPIXEL_SIZE, y + SUBPIXEL_SIZE }
+                }
+                for _, q in ipairs(quadrants) do
+                    gfx.setColor(q[1] == gfx.kColorBlack and gfx.kColorBlack or gfx.kColorWhite)
+                    gfx.fillRect(q[2], q[3], SUBPIXEL_SIZE, SUBPIXEL_SIZE)
+                end
+            else
+                gfx.setColor(gridState[r][c] and gfx.kColorBlack or gfx.kColorWhite)
+                gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
+            end
         end
     end
 

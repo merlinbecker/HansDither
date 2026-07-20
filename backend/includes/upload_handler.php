@@ -49,6 +49,14 @@ class UploadHandler {
             }
         }
 
+        // Ab hier: Transaktion mit Row-Lock auf den UID-eigenen users-Datensatz
+        // (Spec 007, AD-033) — serialisiert gleichzeitige Uploads derselben UID,
+        // damit der Zähl-Check unten (4b) race-sicher ist (FR-011). Validierung
+        // (Schritte 2/3) und Verzeichnis-Anlage (Schritt 4) laufen bewusst VOR der
+        // Transaktion, damit der Lock nicht länger als nötig gehalten wird.
+        db()->beginTransaction();
+        db()->query('SELECT uid FROM users WHERE uid = ? FOR UPDATE', $uid);
+
         // 4a. Update-in-place: existiert bereits ein Eintrag für (uid, client_image_id)?
         $existing_image_id = null;
         if ($client_image_id !== null && $client_image_id !== '') {
@@ -61,6 +69,18 @@ class UploadHandler {
             }
         }
 
+        // 4b. Upload-Obergrenze prüfen (Spec 007, FR-001/FR-002/FR-011) — NUR bei
+        // Neuanlage; Update-in-place (4a hat einen Treffer geliefert) erzeugt
+        // keinen zusätzlichen Speicherplatz-Slot und bleibt vom Limit unberührt
+        // (FR-003).
+        if ($existing_image_id === null) {
+            $count = db()->queryScalar('SELECT COUNT(*) FROM images WHERE uid = ?', $uid);
+            if ($count >= 12) {
+                db()->rollback();
+                return ['status' => 'error', 'error' => 'Upload-Limit erreicht (maximal 12 Bilder pro Gerät)', 'http_code' => 403];
+            }
+        }
+
         // 5. Image-ID bestimmen: bestehende Server-UUID (Update) oder neue (Neuanlage)
         $image_id = $existing_image_id ?? self::generateUUID();
 
@@ -69,6 +89,7 @@ class UploadHandler {
         $json_path = $upload_dir . '/' . $image_id . '.json';
 
         if (!move_uploaded_file($pdi_file['tmp_name'], $pdi_path)) {
+            db()->rollback();
             return ['status' => 'error', 'error' => 'Konnte PDI-Datei nicht speichern', 'http_code' => 500];
         }
 
@@ -76,6 +97,7 @@ class UploadHandler {
             if ($existing_image_id === null) {
                 unlink($pdi_path);
             }
+            db()->rollback();
             return ['status' => 'error', 'error' => 'Konnte JSON-Datei nicht speichern', 'http_code' => 500];
         }
 
@@ -98,8 +120,11 @@ class UploadHandler {
                 unlink($pdi_path);
                 unlink($json_path);
             }
+            db()->rollback();
             return ['status' => 'error', 'error' => 'Fehler beim Speichern in Datenbank', 'http_code' => 500];
         }
+
+        db()->commit();
 
         // 8. PNG asynchron generieren (on-demand, nicht sofort)
 

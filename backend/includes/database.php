@@ -157,6 +157,27 @@ class Database {
     }
     
     /**
+     * Transaktion starten (Spec 007, AD-033: race-safer Upload-Zähl-Check)
+     */
+    public function beginTransaction(): bool {
+        return $this->connection->begin_transaction();
+    }
+
+    /**
+     * Transaktion committen
+     */
+    public function commit(): bool {
+        return $this->connection->commit();
+    }
+
+    /**
+     * Transaktion zurückrollen
+     */
+    public function rollback(): bool {
+        return $this->connection->rollback();
+    }
+
+    /**
      * Letzte Insert-ID abrufen
      */
     public function getInsertId(): int {

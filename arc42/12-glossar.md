@@ -20,10 +20,12 @@
 | Pixel Room | Tiefste Zoomstufe: ein Tile mit echten 16x16 Pixeln; ein Malstrich setzt 1 Pixel. |
 | Slot (Zoomkontext) | Einer der 9 Teilbereiche (3x3) im Zoom Room, die je einem 16x16-Tile entsprechen; Randslots sind out-of-bounds. |
 | All Similar | PixelRoom-Option: bearbeitet ein bestehendes Tile in-place in der Imagetable und wirkt damit auf alle Verwendungen ueber alle Frames (dokumentierte FR-013-Ausnahme). |
-| Bauchbinde | Wiederverwendbares Hinweisband, u. a. fuer die Frame-Anzeige "Frame n/m". |
+| Bauchbinde | Wiederverwendbares, zustandsloses Zeichen-Helferlein fuer Hinweisbaender, u. a. fuer die Frame-Anzeige "Frame n/m". Die Frame-Positions-Bauchbinde im EditorRoom blendet seit Spec 006 nach 5s Inaktivitaet aus und positioniert sich auf der dem Cursor gegenueberliegenden Bildschirmhaelfte (Timer-/Seitenlogik lebt im EditorRoom, nicht im Modul selbst); die separate Status-Bauchbinde (Fehlertexte) ist davon unberuehrt. |
 | GridView | UI-Komponente fuer Rasternavigation und Zellrendering (SelectionRoom, PixelRoom). |
 | RoomOperation | Coroutine-Orchestrierung fuer room-lokale Langlaeufer inkl. loadingBar-Lifecycle. |
 | save + exit | Systemmenue-Aktion des Editors: automatisches Speichern und Rueckkehr zum SelectionRoom (Verlassen ohne Speichern existiert nicht). |
+| reset frame | Systemmenue-Aktion des Editors (Spec 006, AD-032, ersetzt "delete frame"): kopiert den Inhalt des unmittelbar vorhergehenden Frames elementweise in den aktiven Frame; auf Frame 1 (kein Vorgaenger) wirkungslos. |
+| Kontext-/Pause-Ansicht | Erweiterung des nativen System-Pause-Menues (Spec 006, AD-031): ein via `playdate.setMenuImage()`/`gameWillPause()` erzeugtes Bild zeigt zusaetzlich zu Volume/Home/Screenshot eine Tile-Uebersicht (bis zu 120 Vorschauen im 12x10-Raster) sowie Gesamt-Tile-Anzahl und Frame-Anzahl des aktuell geoeffneten Bildes. |
 | Preview | Gespeichertes Vorschaubild eines Bildes (preview.pdi), gerendert aus Frame 1. |
 
 ## Historische Begriffe (Pulp-Aera, bis v0.2)

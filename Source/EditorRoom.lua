@@ -48,6 +48,7 @@ local tilemap = nil              -- playdate.graphics.tilemap (25x15)
 local cursor = { x = 1, y = 1 }  -- Tile-Koordinaten 1..25 / 1..15
 local activeTile = nil           -- number/nil: Pipetten-Auswahl; nil = Toggle-Modus
 local zoomTickAccu = 0           -- Tick-Akkumulator für B+Crank; Reset bei B-Release
+local crankAccumDegrees = 0      -- Spec 006 R1: signierter Grad-Akkumulator fuer Frame-Navigation ohne B
 local bUsedForZoom = false       -- Crank während B-Hold unterdrückt die Pipette
 local showGrid = true            -- Grid-Overlay an/aus (Checkmark-Menüeintrag)
 local loadingOperation = nil     -- RoomOperation während des Ladens
@@ -56,6 +57,10 @@ local needsRedraw = true
 local pendingImageId = nil       -- via setImage(id), geladen in entered()
 local statusMessage = nil        -- Fehlerstatus (Bauchbinde links)
 local statusUntilMs = 0
+local lastActivityMs = 0         -- Spec 006 R3: letzte Nutzereingabe fuer Bauchbinden-Inaktivitaets-Timer
+local bauchbindeVisible = true   -- abgeleitet aus lastActivityMs (data-model.md Abschnitt 2); als Feld
+                                  -- gehalten, damit update() den Uebergang sichtbar->unsichtbar per
+                                  -- needsRedraw auch OHNE andere Eingabe erkennt (analog statusMessage)
 
 local overlay = loadingBar.new()
 local bauchbinde = Bauchbinde.new(gfx)
@@ -129,6 +134,7 @@ end
 local strokeTileIdx = nil  -- Tile-Index des laufenden A-Strichs; nil = kein Strich
 
 local function beginStroke()
+    lastActivityMs = playdate.getCurrentTimeMilliseconds()
     local current = imageData.frames[currentFrame][cursorCellIndex()]
     if activeTile then
         strokeTileIdx = (current == activeTile) and 1 or activeTile
@@ -144,6 +150,7 @@ end
 
 -- B (kurz): Pipette; auf Weiß (Index 1) -> Abwahl (FR-003, research.md R4)
 local function pipette()
+    lastActivityMs = playdate.getCurrentTimeMilliseconds()
     local idx = imageData.frames[currentFrame][cursorCellIndex()]
     if idx == 1 then
         activeTile = nil
@@ -183,7 +190,9 @@ local function tickBackward()
     needsRedraw = true
 end
 
--- FR-008a: aktiven Frame löschen, Nachrücker aktiv; letzter Frame gesperrt
+-- FR-008a: aktiven Frame löschen, Nachrücker aktiv; letzter Frame gesperrt.
+-- Bleibt im Code (Spec 006 AD-032), verliert aber ihren Menü-Aufrufer an
+-- resetCurrentFrameToPrevious() unten.
 local function deleteCurrentFrame()
     if inputBlocked() then return end
     local frames = imageData.frames
@@ -191,6 +200,20 @@ local function deleteCurrentFrame()
     table.remove(frames, currentFrame)
     if currentFrame > #frames then
         currentFrame = #frames
+    end
+    updateTilemapFrame()
+    needsRedraw = true
+end
+
+-- Spec 006 FR-014/FR-015, R7: kopiert den Vorgänger-Frame elementweise in den
+-- aktuellen Frame; no-op auf Frame 1 (kein Vorgänger, FR-015).
+local function resetCurrentFrameToPrevious()
+    if inputBlocked() then return end
+    if currentFrame == 1 then return end
+    local previous = imageData.frames[currentFrame - 1]
+    local current = imageData.frames[currentFrame]
+    for i = 1, #previous do
+        current[i] = previous[i]
     end
     updateTilemapFrame()
     needsRedraw = true
@@ -330,14 +353,16 @@ end
 
 -- ── Systemmenü (research.md R6: genau 3 Slots) ────────────────────────────────
 
+-- Spec 006 AD-032/CR-08: "delete frame" durch "reset frame" ersetzt (kein
+-- freier vierter Slot, siehe research.md R7) — "show grid" unveraendert.
 local function buildSystemMenu()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
     menu:addMenuItem("save + exit", function()
         handleSaveAndExit()
     end)
-    menu:addMenuItem("delete frame", function()
-        deleteCurrentFrame()
+    menu:addMenuItem("reset frame", function()
+        resetCurrentFrameToPrevious()
     end)
     menu:addCheckmarkMenuItem("show grid", showGrid, function(checked)
         showGrid = checked
@@ -349,6 +374,7 @@ end
 
 local function moveCursor(dx, dy)
     if inputBlocked() then return end
+    lastActivityMs = playdate.getCurrentTimeMilliseconds()
     local newX = math.max(1, math.min(GRID_COLS, cursor.x + dx))
     local newY = math.max(1, math.min(GRID_ROWS, cursor.y + dy))
     if newX ~= cursor.x or newY ~= cursor.y then
@@ -386,13 +412,19 @@ local function clearMoveTimers()
     end
 end
 
--- ── Crank (FR-005/FR-006/FR-009): ohne B = Frames, mit B = Zoom ───────────────
+-- ── Crank (FR-004/FR-005/FR-006, contracts CR-01): ohne B = volle Umdrehung
+-- fuer Frame-Navigation, mit B = Zoom (unveraendert) ──────────────────────────
+--
+-- Pro Aufruf wird GENAU EINE Crank-Lese-API verwendet (CR-01) — niemals
+-- beide im selben Frame, sonst gehen Grad-/Tick-Anteile verloren
+-- (research.md R1 Detailhinweis).
 
 local function handleCrank()
-    local crankTicks = playdate.getCrankTicks(4) or 0
     if playdate.buttonIsPressed(playdate.kButtonB) then
+        local crankTicks = playdate.getCrankTicks(4) or 0
         if crankTicks ~= 0 then
             bUsedForZoom = true
+            lastActivityMs = playdate.getCurrentTimeMilliseconds()
         end
         zoomTickAccu = zoomTickAccu + crankTicks
         if zoomTickAccu >= ZOOM_TICK_THRESHOLD then
@@ -404,14 +436,23 @@ local function handleCrank()
         end
     else
         zoomTickAccu = 0
-        -- Mehrere Ticks pro Update = mehrere Einzelschritte; jede Kopie
-        -- basiert auf ihrem direkten Vorgänger (Edge Case schnelles Drehen)
-        for _ = 1, math.abs(crankTicks) do
-            if crankTicks > 0 then
-                tickForward()
-            else
-                tickBackward()
-            end
+        -- Spec 006 R1: signierter Netto-Akkumulator statt sofortigem Tick bei
+        -- 90°-Rasterung — wechselt den Frame erst bei einer vollen 360°-Umdrehung
+        -- ab der AKTUELLEN Kurbelposition (FR-004/005); Teildrehungen und
+        -- Richtungswechsel heben sich im Summenwert von selbst auf, kein
+        -- Reset auf 0 noetig (FR-006 - Einklappen mitten in der Drehung laesst
+        -- den Akkumulator einfach liegen).
+        local change = playdate.getCrankChange() or 0
+        if change ~= 0 then
+            lastActivityMs = playdate.getCurrentTimeMilliseconds()
+        end
+        crankAccumDegrees = crankAccumDegrees + change
+        if crankAccumDegrees >= 360 then
+            crankAccumDegrees = crankAccumDegrees - 360
+            tickForward()
+        elseif crankAccumDegrees <= -360 then
+            crankAccumDegrees = crankAccumDegrees + 360
+            tickBackward()
         end
     end
 end
@@ -438,7 +479,12 @@ local function draw()
     end
     if imageData then
         PencilCursor.draw((cursor.x - 1) * TILE_PX, (cursor.y - 1) * TILE_PX, TILE_PX, TILE_PX)
-        bauchbinde:drawBottom(string.format("Frame %d/%d", currentFrame, #imageData.frames), "right", 400, 240)
+        -- Spec 006 R3/CR-02/CR-03: blendet nach 5s Inaktivitaet aus (FR-001) und
+        -- zeigt auf der dem Cursor gegenueberliegenden Bildschirmhaelfte (FR-003)
+        if bauchbindeVisible then
+            local side = (cursor.x <= GRID_COLS / 2) and "right" or "left"
+            bauchbinde:drawBottom(string.format("Frame %d/%d", currentFrame, #imageData.frames), side, 400, 240)
+        end
     end
     if statusMessage then
         bauchbinde:drawBottom(statusMessage, "left", 400, 240)
@@ -465,7 +511,10 @@ function EditorRoom:entered()
     clearMoveTimers()
     endStroke()
     zoomTickAccu = 0
+    crankAccumDegrees = 0
     bUsedForZoom = false
+    lastActivityMs = playdate.getCurrentTimeMilliseconds()
+    bauchbindeVisible = true
     needsRedraw = true
 
     if pendingImageId then
@@ -488,12 +537,79 @@ function EditorRoom:getImageData()
     return imageData
 end
 
+-- Spec 006 R4/CR-05..CR-07: 400x240-Bild fuer playdate.setMenuImage(); relevanter
+-- Inhalt ausschliesslich in x in [0,200) (SDK-Vorgabe, rechte Haelfte vom System-
+-- Menue ueberdeckt). Nur aus main.lua:gameWillPause() aufgerufen, NICHT pro Frame
+-- (kein Performance-Risiko). nil, wenn kein imageData geladen ist.
+local PAUSE_GRID_COLS = 12
+local PAUSE_GRID_ROWS = 10
+local PAUSE_MAX_TILES = PAUSE_GRID_COLS * PAUSE_GRID_ROWS  -- 120 (FR-010)
+local PAUSE_CELL_SIZE = 14  -- 13px Kachel + 1px Rand
+local PAUSE_TILE_SIZE = 13
+local PAUSE_TILE_SCALE = PAUSE_TILE_SIZE / TILE_PX
+
+function EditorRoom:buildPauseMenuImage()
+    if not imageData then return nil end
+
+    -- CR-06: NICHT imagetable:getLength() (koennte nie mehr referenzierte
+    -- Alt-Eintraege mitzaehlen) - frisches Set tatsaechlich referenzierter
+    -- Tile-Indizes ueber alle imageData.frames[*] hinweg (FR-011)
+    local seen = {}
+    local distinctIndices = {}
+    for _, frame in ipairs(imageData.frames) do
+        for _, tileIndex in ipairs(frame) do
+            if not seen[tileIndex] then
+                seen[tileIndex] = true
+                table.insert(distinctIndices, tileIndex)
+            end
+        end
+    end
+    table.sort(distinctIndices)
+    local totalDistinctTileCount = #distinctIndices
+
+    local img = gfx.image.new(400, 240, gfx.kColorWhite)
+    gfx.pushContext(img)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawText(imageData.name or "", 8, 6)
+
+        -- CR-07: bei > 120 nur die ersten 120 (aufsteigender Tile-Index) als
+        -- Vorschau; totalDistinctTileCount bleibt der vollstaendige Wert (FR-013)
+        local shown = math.min(totalDistinctTileCount, PAUSE_MAX_TILES)
+        for i = 1, shown do
+            local tileIndex = distinctIndices[i]
+            local tileImg = imageData.imagetable:getImage(tileIndex)
+            if tileImg then
+                local col = (i - 1) % PAUSE_GRID_COLS
+                local row = (i - 1) // PAUSE_GRID_COLS
+                tileImg:drawScaled(8 + col * PAUSE_CELL_SIZE, 26 + row * PAUSE_CELL_SIZE, PAUSE_TILE_SCALE)
+            end
+        end
+
+        gfx.drawText("Tiles: " .. totalDistinctTileCount, 8, 172)  -- FR-011
+        gfx.drawText("Frames: " .. #imageData.frames, 8, 188)      -- FR-012
+    gfx.popContext()
+
+    return img
+end
+
 function EditorRoom:update()
     playdate.timer.updateTimers()
 
     if statusMessage and playdate.getCurrentTimeMilliseconds() > statusUntilMs then
         statusMessage = nil
         needsRedraw = true
+    end
+
+    -- Spec 006 R3: Uebergang sichtbar->unsichtbar (bzw. umgekehrt) durch reinen
+    -- Zeitablauf erkennen und genau EINEN Redraw ausloesen — sonst wuerde die
+    -- Bauchbinde bei komplett fehlender Eingabe nie tatsaechlich verschwinden,
+    -- da draw() ausschliesslich bei needsRedraw==true laeuft (analog statusMessage)
+    if imageData then
+        local nowVisible = (playdate.getCurrentTimeMilliseconds() - lastActivityMs) < 5000
+        if nowVisible ~= bauchbindeVisible then
+            bauchbindeVisible = nowVisible
+            needsRedraw = true
+        end
     end
 
     if loadingOperation then
@@ -527,10 +643,19 @@ function EditorRoom:inputHandler()
             endStroke()
         end,
         BButtonDown = function()
+            -- CR-02: B-Druck zaehlt als Aktivitaet unabhaengig davon, ob
+            -- spaeter Pipette oder Zoom ausgeloest wird (sonst wuerde ein
+            -- langes B-Halten ohne Crank-Bewegung die Bauchbinde
+            -- faelschlich ausblenden lassen, bevor B losgelassen wird)
+            lastActivityMs = playdate.getCurrentTimeMilliseconds()
             bUsedForZoom = false
             zoomTickAccu = 0
         end,
         BButtonUp = function()
+            -- CR-02: B-Release zaehlt IMMER als Aktivitaet, auch wenn die
+            -- Pipette unten uebersprungen wird (bUsedForZoom==true); pipette()
+            -- setzt lastActivityMs zwar ebenfalls, aber nur im Nicht-Zoom-Fall
+            lastActivityMs = playdate.getCurrentTimeMilliseconds()
             -- Pipette bei B-Release ohne akkumulierte Zoom-Ticks
             if not bUsedForZoom and not inputBlocked() then
                 pipette()

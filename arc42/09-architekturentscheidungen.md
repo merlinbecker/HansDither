@@ -139,3 +139,17 @@
 - Entscheidung: Vor jeder Eigenimplementierung wird geprueft, ob das offizielle Playdate SDK die Funktion bietet oder sie sich damit abbilden laesst; so wenig Code wie moeglich ausserhalb des SDK. Jede wesentliche SDK-Nutzung und -Entscheidung wird in diesem Kapitel bzw. Kapitel 4/8 dokumentiert.
 - Begruendung: Constitution Prinzip I (`.specify/memory/constitution.md`); reduziert Wartungsaufwand und haelt das Projekt nahe an der Plattform.
 - Konsequenz: Kandidaten fuer v0.3.0: gridview (Auswahlraster), image masks (Kreis-Thumbnails), imagetable/tilemap (16x16-Rendering und PDI-Persistenz), animation loop (Frame-Preview), crank getCrankTicks (Frame-/Zoom-Rastung). Abweichungen muessen begruendet werden.
+
+## 9.21 AD-031: Kontext-/Pause-Ansicht via `playdate.setMenuImage()` statt eigenem Pause-Screen
+
+- Status: umgesetzt (Spec 006, US5)
+- Entscheidung: Die erweiterte Kontext-/Pause-Ansicht (Tile-Uebersicht + Metainformationen) wird ueber `playdate.setMenuImage()` + `playdate.gameWillPause()` realisiert statt ueber einen eigenen Room/Screen — das 3-Slot-Systemmenue bleibt unangetastet, da `setMenuImage` einen davon unabhaengigen Mechanismus nutzt.
+- Begruendung: `gameWillPause()` ist laut SDK-Doku wortwoertlich fuer genau diesen Anwendungsfall vorgesehen (research.md R4); kein neuer, vom Spiel eingefuehrter Eingabeweg noetig, der den nativen Playdate-Pause-Mechanismus verdoppeln wuerde (Constitution IV/Eingabe-Randbedingung).
+- Konsequenz: Layout auf die linken 200px begrenzt (SDK-Vorgabe, rechte Haelfte vom System-Menue ueberdeckt); Details in [ADR-031](adr/ADR-031-Pause-Ansicht-setMenuImage.md).
+
+## 9.22 AD-032: "Reset Frame" ersetzt "Delete Frame" im Systemmenue
+
+- Status: umgesetzt (Spec 006, US4, Projektinhaber-Vorgabe)
+- Entscheidung: Der dritte Systemmenue-Slot wechselt von "delete frame" auf "reset frame" (kopiert den Vorgaenger-Frame elementweise in den aktiven Frame); "show grid" bleibt unveraendert. `deleteCurrentFrame()` bleibt im Code, verliert aber ihren Menue-Aufrufer.
+- Begruendung: Kein freier vierter Menue-Slot, kein kollisionsfreier D-Pad/A/B/Crank-Chord identifiziert (research.md R7); "reset frame" adressiert denselben Fehlerkorrektur-Anwendungsfall wie "delete frame", ohne Frame-Anzahl/-Position zu veraendern.
+- Konsequenz: "delete frame" ist ab Spec 006 nicht mehr ueber das Menue erreichbar; ein Folge-Zugriffsweg waere bei Bedarf separat zu klaeren. Details in [ADR-032](adr/ADR-032-Reset-Frame-statt-Delete-Frame-im-Menue.md).

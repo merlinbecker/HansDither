@@ -47,6 +47,18 @@ local CELL_WIDTH = 133
 local CELL_HEIGHT = 80
 local CIRCLE_DIAMETER = 72
 
+-- Spec 006 US6 (revidiert nach Nutzer-Test): der SELEKTIERTE Eintrag bleibt
+-- innerhalb seines Kreises maskiert und schwenkt den sichtbaren Bildausschnitt
+-- leicht horizontal hin und her. Der zunaechst gebaute Vollbild-Hintergrund
+-- (Tilemap ueber den ganzen Screen + VHS-Pattern-Overlay) wirkte im Test wie
+-- ein fehlerhaft ueber alles gelegtes Bild und wurde verworfen — siehe
+-- plan.md Assumptions, wo genau diese Kreis-Schwenk-Variante urspruenglich
+-- zugunsten des Vollbilds verworfen worden war.
+local PAN_AMPLITUDE = 30    -- Pixel Auslenkung um die horizontale Bildmitte
+local PAN_PERIOD_MS = 4000  -- Dauer einer vollen Hin-und-her-Schwingung
+local circleMask = nil      -- kreisfoermige Maske, invariant, einmalig gebaut
+local previewCache = {}     -- rohe (unmaskierte) Previews: id -> image|false
+
 -- Initialisiert den Room
 function SelectionRoom:init(switchRoom, editorRoomReference)
     switchRoomFunction = switchRoom
@@ -62,7 +74,8 @@ function SelectionRoom:entered()
     
     -- Thumbnail-Cache leeren
     thumbCache = {}
-    
+    previewCache = {}
+
     -- Gridview aufbauen
     SelectionRoom:buildGridview()
     
@@ -179,7 +192,7 @@ function SelectionRoom:drawCell(section, row, column, selected, x, y, width, hei
 
     -- Zeichne Thumbnail oder Platzhalter
     if entry.kind == "image" then
-        SelectionRoom:drawImageThumbnail(entry, circleX, circleY)
+        SelectionRoom:drawImageThumbnail(entry, circleX, circleY, selected)
     else
         -- Neu-Eintrag: leerer Kreis mit +
         gfx.setColor(gfx.kColorBlack)
@@ -194,9 +207,14 @@ function SelectionRoom:drawCell(section, row, column, selected, x, y, width, hei
     end
 end
 
--- Zeichnet das Thumbnail für ein Bild
-function SelectionRoom:drawImageThumbnail(entry, circleX, circleY)
-    local thumbImg = SelectionRoom:getThumbnail(entry.id)
+-- Zeichnet das Thumbnail für ein Bild. Der SELEKTIERTE Eintrag bekommt den
+-- leicht schwenkenden Ausschnitt (Spec 006 US6, revidiert), alle anderen den
+-- gecachten, zentrierten Ausschnitt wie bisher.
+function SelectionRoom:drawImageThumbnail(entry, circleX, circleY, isSelected)
+    local thumbImg = isSelected and SelectionRoom:getPanningThumbnail(entry.id)
+    if not thumbImg then
+        thumbImg = SelectionRoom:getThumbnail(entry.id)
+    end
     if thumbImg then
         -- Zeichne das Thumbnail zentriert in den Kreis.
         -- SDK: image:getSize() liefert Breite UND Höhe (getWidth/getHeight
@@ -212,9 +230,25 @@ function SelectionRoom:drawImageThumbnail(entry, circleX, circleY)
     end
 end
 
--- Hole oder erstelle Thumbnail aus Cache.
+-- Liest das rohe (unmaskierte) 400x240-Preview von der Platte und cached es.
 -- false ist der Negativ-Cache ("Preview fehlt"): ohne ihn würde jeder Redraw
--- erneut von der Platte lesen — bei offenem Keyboard wäre das jeder Frame.
+-- erneut von der Platte lesen — beim Schwenk-Effekt waere das jeder Frame.
+function SelectionRoom:getRawPreview(id)
+    if not id then return nil end
+
+    local cached = previewCache[id]
+    if cached ~= nil then
+        return cached or nil  -- false -> nil (Platzhalter zeichnen)
+    end
+
+    -- Preview von der Platte lesen (SDK: playdate.datastore.readImage via ImageStore)
+    local preview = ImageStore.getPreviewImage(id)
+    previewCache[id] = preview or false
+    return preview
+end
+
+-- Hole oder erstelle das gecachte, zentrierte Thumbnail (für nicht
+-- selektierte Einträge — bleibt exakt wie vor Spec 006 US6).
 function SelectionRoom:getThumbnail(id)
     if not id then return nil end
 
@@ -223,45 +257,65 @@ function SelectionRoom:getThumbnail(id)
         return cached or nil  -- false -> nil (Platzhalter zeichnen)
     end
 
-    -- Preview von der Platte lesen (SDK: playdate.datastore.readImage via ImageStore)
-    local preview = ImageStore.getPreviewImage(id)
-
+    local preview = SelectionRoom:getRawPreview(id)
     if not preview then
         thumbCache[id] = false
         return nil
     end
 
-    -- Erstelle kreisförmig maskiertes Thumbnail
     local thumb = SelectionRoom:createCircularThumbnail(preview)
     thumbCache[id] = thumb
     return thumb
 end
 
--- Erstellt ein kreisförmig maskiertes Thumbnail aus einem Preview-Bild
-function SelectionRoom:createCircularThumbnail(preview)
-    -- Erstelle ein kreisförmiges Maskenbild
-    local mask = gfx.image.new(CIRCLE_DIAMETER, CIRCLE_DIAMETER, gfx.kColorClear)
-    gfx.pushContext(mask)
-        gfx.setColor(gfx.kColorWhite)
-        gfx.fillCircleAtPoint(CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2)
-    gfx.popContext()
-    
-    -- Extrahieren den zentralen Ausschnitt aus dem Preview (400x240 -> 72x72)
+-- Spec 006 US6 (revidiert): Thumbnail für den SELEKTIERTEN Eintrag, dessen
+-- Bildausschnitt ueber die Zeit leicht horizontal hin- und herschwenkt. Wird
+-- bewusst NICHT gecacht (der Ausschnitt aendert sich jeden Frame), nutzt aber
+-- das gecachte rohe Preview und die gecachte Maske, um pro Frame nur den
+-- guenstigen Teil (Crop + Maskierung) neu zu tun.
+function SelectionRoom:getPanningThumbnail(id)
+    local preview = SelectionRoom:getRawPreview(id)
+    if not preview then return nil end
+
     local previewWidth, previewHeight = preview:getSize()
-    local srcX = (previewWidth - CIRCLE_DIAMETER) / 2
     local srcY = (previewHeight - CIRCLE_DIAMETER) / 2
-    
+    local phase = (playdate.getCurrentTimeMilliseconds() % PAN_PERIOD_MS) / PAN_PERIOD_MS
+    local srcX = (previewWidth - CIRCLE_DIAMETER) / 2 + PAN_AMPLITUDE * math.sin(phase * 2 * math.pi)
+
+    return SelectionRoom:createCircularThumbnail(preview, srcX, srcY)
+end
+
+-- Erstellt ein kreisförmig maskiertes Thumbnail aus einem Preview-Bild. Ohne
+-- srcX/srcY wird der zentrale Ausschnitt genommen (400x240 -> 72x72),
+-- andernfalls der Ausschnitt an der gegebenen Position (Schwenk-Effekt).
+function SelectionRoom:createCircularThumbnail(preview, srcX, srcY)
+    local previewWidth, previewHeight = preview:getSize()
+    srcX = srcX or (previewWidth - CIRCLE_DIAMETER) / 2
+    srcY = srcY or (previewHeight - CIRCLE_DIAMETER) / 2
+
     -- Erstelle Thumbnail-Image
     local thumb = gfx.image.new(CIRCLE_DIAMETER, CIRCLE_DIAMETER, gfx.kColorClear)
     gfx.pushContext(thumb)
         -- Zeichne den Ausschnitt aus dem Preview (SDK: image:draw)
         preview:draw(-srcX, -srcY)
     gfx.popContext()
-    
-    -- Maskierung anwenden
-    thumb:setMaskImage(mask)
-    
+
+    -- Maskierung anwenden (Maske ist invariant, einmalig gebaut)
+    thumb:setMaskImage(SelectionRoom:getCircleMask())
+
     return thumb
+end
+
+-- Baut die kreisförmige Maske genau einmal (invariant über die App-Laufzeit).
+function SelectionRoom:getCircleMask()
+    if not circleMask then
+        circleMask = gfx.image.new(CIRCLE_DIAMETER, CIRCLE_DIAMETER, gfx.kColorClear)
+        gfx.pushContext(circleMask)
+            gfx.setColor(gfx.kColorWhite)
+            gfx.fillCircleAtPoint(CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2, CIRCLE_DIAMETER/2)
+        gfx.popContext()
+    end
+    return circleMask
 end
 
 -- Zeichnet den Bestätigungsdialog
@@ -378,7 +432,13 @@ function SelectionRoom:update()
         and not SyncService:isShowingQrOverlay()
         and not SyncService:hasUsedCrank()
 
-    if needsRedraw or SyncService:isBusy() or SyncService:isShowingQrOverlay() or showCrankHint then
+    -- Spec 006 US6 (revidiert): der Schwenk-Effekt des selektierten Eintrags
+    -- laeuft kontinuierlich mit der Zeit, nicht nur bei Input — daher jeden
+    -- Frame neu zeichnen, solange ein Bild (kein Neu-Eintrag) selektiert ist.
+    local selectedEntryIsImage = entries[selectedIndex] and entries[selectedIndex].kind == "image"
+
+    if needsRedraw or SyncService:isBusy() or SyncService:isShowingQrOverlay() or showCrankHint
+        or selectedEntryIsImage then
         gfx.setColor(gfx.kColorWhite)
         gfx.fillRect(0, 0, 400, 240)
 
@@ -606,7 +666,7 @@ function SelectionRoom:setSelectedIndex(newIndex)
         -- Scrollen wenn nötig
         gridview:scrollToCell(1, row, col)
     end
-    
+
     needsRedraw = true
 end
 
@@ -643,7 +703,8 @@ function SelectionRoom:confirmDelete()
         
         -- Thumbnail-Cache invalidieren
         thumbCache = {}
-        
+        previewCache = {}
+
         -- Bestätigungsdialog schließen
         confirmingDelete = nil
         needsRedraw = true
@@ -668,7 +729,8 @@ function SelectionRoom:handleCopyImage()
         
         -- Thumbnail-Cache invalidieren
         thumbCache = {}
-        
+        previewCache = {}
+
         -- Selektiere die Kopie
         for i, e in ipairs(entries) do
             if e.kind == "image" and e.id == newId then
@@ -746,7 +808,8 @@ function SelectionRoom:handleKeyboardCommit(text)
         
         -- Thumbnail-Cache invalidieren
         thumbCache = {}
-        
+        previewCache = {}
+
         -- Selektiere das neue Bild
         for i, e in ipairs(entries) do
             if e.kind == "image" and e.id == newId then
@@ -773,7 +836,8 @@ function SelectionRoom:handleKeyboardCommit(text)
                 SelectionRoom:reloadEntries()
                 SelectionRoom:buildGridview()
                 thumbCache = {}
-                
+                previewCache = {}
+
                 for i, e in ipairs(entries) do
                     if e.kind == "image" and e.id == retryId then
                         SelectionRoom:setSelectedIndex(i)

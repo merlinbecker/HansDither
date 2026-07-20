@@ -488,6 +488,7 @@ end
 --   { ok = false, reason = "not_paired"|"unauthorized"|"locked"|"uid_taken" } (Auth schlug fehl)
 --   { ok = false, reason = "token_expired" }                           (401 beim Upload)
 --   { ok = false, reason = "too_large" }                               (413)
+--   { ok = false, reason = "limit_reached" }                           (403, Spec 007)
 --   { ok = false, reason = "local_read_error" }                        (sheet/frames.json fehlt)
 --   { ok = false, reason = "network", detail = "..." }
 --   { ok = false, reason = "upload_failed", detail = "..." }
@@ -531,6 +532,9 @@ local function attemptUpload(imageId)
     elseif status == 413 then
         logSync("upload: too_large (413)")
         return { ok = false, reason = "too_large" }
+    elseif status == 403 then
+        logSync("upload: limit_reached (403)")
+        return { ok = false, reason = "limit_reached" }
     else
         logSync("upload: upload_failed (status=%s)", tostring(status))
         return { ok = false, reason = "upload_failed", detail = respBody }
@@ -687,6 +691,8 @@ local function startUpload(imageId)
             showStatus("Pairing failed - try again", 4000)
         elseif result.reason == "too_large" then
             showStatus("File too large to upload")
+        elseif result.reason == "limit_reached" then
+            showStatus("Upload limit reached (12 images)", 5000)
         elseif result.reason == "local_read_error" then
             showStatus("Could not read image data")
         elseif result.reason == "network" then

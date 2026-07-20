@@ -45,14 +45,20 @@ Ergebnis: Der Frame-Zustand ist visuell aktuell und liegt vollstaendig in imageD
 
 ## 6.3 Szenario: Animationsframes per Crank
 
-1. Crank vorwaerts (eine Rastung, getCrankTicks(4)) wechselt zum naechsten Frame; existiert keiner und sind < 12 vorhanden, entsteht er als flache Kopie des aktuellen.
-2. Crank rueckwaerts wechselt einen Frame zurueck; auf Frame 1 rotiert die Navigation zum letzten existierenden Frame (rueckwaerts entstehen nie Frames).
-3. Bei 12 Frames rotiert vorwaerts zu Frame 1.
-4. Mehrere Rastungen pro Update werden sequenziell abgearbeitet; jede Kopie basiert auf ihrem direkten Vorgaenger.
-5. Frame-Wechsel = tilemap:setTiles(frames[f], 25) + Redraw; die Bauchbinde zeigt "Frame n/m".
-6. "delete frame" im Systemmenue entfernt den aktiven Frame (Nachruecker wird aktiv); beim letzten verbliebenen Frame wirkungslos.
+**Aktualisiert in Spec 006** (R1): Frame-Wechsel erfordert seit Spec 006 eine
+volle 360°-Umdrehung ab der aktuellen Kurbelposition statt der fruehreren
+90°-Rasterung — verhindert ungewollte Wechsel durch Antippen/Einklappen.
 
-Ergebnis: Bis zu 12 Frames sind vollstaendig per Crank erstell-, durchlauf- und loeschbar (FR-006..FR-008a).
+1. Ohne gehaltene B-Taste liest handleCrank() pro update() playdate.getCrankChange() (Grad-Delta seit dem letzten Aufruf) und summiert es signiert in crankAccumDegrees; kein Reset auf 0 bei Richtungswechsel.
+2. Erreicht crankAccumDegrees >= 360, wechselt die Navigation vorwaerts zum naechsten Frame (Akkumulator um 360 korrigiert, nicht auf 0 zurueckgesetzt); existiert keiner und sind < 12 vorhanden, entsteht er als flache Kopie des aktuellen.
+3. Erreicht crankAccumDegrees <= -360, wechselt sie rueckwaerts einen Frame zurueck; auf Frame 1 rotiert die Navigation zum letzten existierenden Frame (rueckwaerts entstehen nie Frames).
+4. Teildrehungen (< 360° netto) und Richtungswechsel vor Erreichen der Schwelle aendern den angezeigten Frame NICHT — der Akkumulator bleibt bis zur naechsten Kurbelbewegung stehen (auch beim Einklappen mitten in der Drehung).
+5. Bei 12 Frames rotiert vorwaerts zu Frame 1.
+6. Frame-Wechsel = tilemap:setTiles(frames[f], 25) + Redraw; die Bauchbinde zeigt "Frame n/m" (sofern nicht wegen Inaktivitaet ausgeblendet, siehe 6.10).
+7. Mit gehaltener B-Taste bleibt der Pfad UNVERAENDERT: getCrankTicks(4) treibt weiterhin ausschliesslich die Zoomkette (siehe 6.4); pro update() wird GENAU EINE der beiden Crank-Lese-APIs aufgerufen, nie beide (Contract CR-01, Regressionsschutz).
+8. "reset frame" im Systemmenue (ersetzt seit Spec 006 "delete frame", AD-032) kopiert den Vorgaenger-Frame elementweise in den aktiven Frame; auf Frame 1 (kein Vorgaenger) wirkungslos.
+
+Ergebnis: Bis zu 12 Frames sind per Crank erstell- und durchlaufbar, ausschliesslich durch volle Umdrehungen ausgeloest (FR-004..FR-006), und per "reset frame" auf den Vorgaengerstand zuruecksetzbar (FR-014/FR-015).
 
 ## 6.4 Szenario: Zoomkette EditorRoom -> ZoomRoom -> PixelRoom
 
@@ -310,3 +316,145 @@ sequenceDiagram
 8. PNG wird an Nutzer ausgeliefert
 
 **Ergebnis:** Nutzer erhält PNG-Datei (generiert on-demand beim ersten Zugriff).
+
+## 6.9 Szenario: Upload-Limit erreicht (Spec 007, Ende-zu-Ende bis zur Geräte-Anzeige)
+
+Ergänzt 6.8.3 um den neuen, race-sicheren Zähl-Check (ADR-033) UND zeigt
+— anders als 6.8.3 — den vollständigen Pfad bis zur Playdate-Anzeige, da
+eine rein backend-interne Betrachtung FR-002/SC-005 nicht abdecken würde
+(research.md R6 der Spec 007-Planung: eine korrekte 403-Antwort allein
+genügt nicht, wenn der Client sie nicht unterscheidbar anzeigt).
+
+```mermaid
+sequenceDiagram
+    actor P as Playdate-Gerät (SyncService.lua)
+    participant B as Backend-Service
+    participant UH as Upload-Handler
+    participant D as Datenbank
+
+    P->>B: POST /upload.php (13. NEUES Bild derselben UID)
+    B->>UH: handleUpload(uid, pdi_file, json_file, client_image_id=null)
+    UH->>D: START TRANSACTION
+    UH->>D: SELECT uid FROM users WHERE uid = ? FOR UPDATE
+    D-->>UH: Row-Lock erteilt
+    UH->>D: SELECT COUNT(*) FROM images WHERE uid = ?
+    D-->>UH: count = 12
+    UH->>D: ROLLBACK
+    UH-->>B: {status: "error", http_code: 403, error: "Upload-Limit erreicht..."}
+    B->>P: 403 Forbidden
+    P->>P: attemptUpload(): status==403 -> reason="limit_reached"
+    P->>P: startUpload()-Callback: showStatus("Upload limit reached (12 images)")
+    Note over P: Anzeige unterscheidet sich sichtbar von "Upload failed" (Format-/Schema-Fehler) und "File too large to upload" (Größenfehler)
+```
+
+1. Gerät versucht ein 13. (neues, dem Backend unbekanntes) Bild hochzuladen
+2. `UploadHandler` öffnet eine Transaktion und sperrt den `users`-Datensatz
+   der UID (`FOR UPDATE`) — serialisiert gegen gleichzeitige Requests
+   derselben UID (FR-011)
+3. `COUNT(*) FROM images WHERE uid = ?` liefert 12 (Limit bereits erreicht)
+4. Transaktion wird zurückgerollt (kein Datei-Schreibvorgang, keine
+   DB-Änderung), Backend antwortet mit `403 Forbidden`
+5. `Source/SyncService.lua` bildet den `403`-Status auf einen eigenen
+   internen Grund (`reason = "limit_reached"`) ab — NICHT auf den
+   generischen `upload_failed`-Zweig
+6. Das Gerät zeigt eine eigene, von anderen Fehlermeldungen unterscheidbare
+   Meldung ("Upload limit reached (12 images)") statt "Upload failed"
+
+**Gegenprobe (Update-in-place, FR-003):** Ist `client_image_id` eines der
+12 bereits bekannten Bilder, liefert die `SELECT id FROM images WHERE uid
+= ? AND client_image_id = ?`-Abfrage (Schritt 4a in `handleUpload()`)
+einen Treffer — der Zähl-Check in Schritt 4b wird dann übersprungen, der
+Upload läuft trotz erreichtem Limit als Aktualisierung durch (`201`).
+
+**Ergebnis:** Das Limit ist race-sicher durchgesetzt UND der Grund der
+Ablehnung ist auf dem Gerät erkennbar, nicht nur im HTTP-Response-Body.
+
+## 6.10 Szenario: Bauchbinden-Inaktivitäts-Timer (Spec 006, US3)
+
+1. Jede tatsächliche Eingabe (D-Pad, A, B, Crank-Delta ≠ 0 — beide
+   Crank-Lesepfade aus 6.3) setzt `lastActivityMs =
+   playdate.getCurrentTimeMilliseconds()`.
+2. `EditorRoom:update()` vergleicht bei JEDEM Aufruf `(nowMs -
+   lastActivityMs) < 5000` gegen den zuletzt bekannten Sichtbarkeitszustand;
+   ändert sich dieser (sichtbar ↔ unsichtbar), wird `needsRedraw = true`
+   gesetzt — sonst würde die Bauchbinde bei reiner Inaktivität nie
+   tatsächlich verschwinden, da `draw()` nur bei `needsRedraw == true`
+   läuft (analog zum bestehenden `statusMessage`-Timeout-Muster).
+3. `draw()` zeichnet die Frame-Positions-Bauchbinde nur, wenn sichtbar, auf
+   der Bildschirmhälfte GEGENÜBER dem Cursor (`cursor.x <= 12` →
+   `"right"`, sonst `"left"`).
+4. Die separate Status-Bauchbinde (Fehlertexte, immer `"left"`) bleibt
+   unverändert und unabhängig von dieser Logik.
+
+**Ergebnis:** Die Bauchbinde blendet spätestens 5s nach der letzten
+Eingabe zuverlässig aus, erscheint bei jeder neuen Eingabe sofort wieder,
+und verdeckt nie den aktiven Arbeitsbereich (FR-001..FR-003).
+
+## 6.11 Szenario: Pause-Bild-Aufbau bei gameWillPause (Spec 006, US5, AD-031)
+
+```mermaid
+sequenceDiagram
+    actor N as Nutzer
+    participant OS as Playdate-OS
+    participant M as main.lua
+    participant E as EditorRoom
+
+    N->>OS: Menü-Taste (System-Pause)
+    OS->>M: playdate.gameWillPause()
+    alt currentRoom in {EditorRoom, ZoomRoom, PixelRoom}
+        M->>E: buildPauseMenuImage()
+        E->>E: Set unterschiedlicher Tile-Indizes ueber alle frames[*] (NICHT imagetable:getLength())
+        E->>E: bis zu 120 Vorschauen im 12x10-Raster zeichnen (x in [0,200))
+        E-->>M: 400x240-Bild
+        M->>OS: playdate.setMenuImage(image)
+    else sonst (z. B. SelectionRoom)
+        M->>OS: playdate.setMenuImage(nil)
+    end
+```
+
+1. Der Bildaufbau läuft AUSSCHLIESSLICH beim tatsächlichen Pausieren, nicht
+   pro Frame — kein Performance-Risiko trotz Iteration über alle
+   Frame-Daten.
+2. Die Gesamtzahl unterschiedlicher Tiles wird frisch durch Iteration über
+   `imageData.frames[*]` als Set berechnet, NICHT aus
+   `imagetable:getLength()` übernommen (könnte nicht mehr referenzierte
+   Alt-Einträge mitzählen).
+3. Übersteigt die Gesamtzahl 120, zeigt das Raster nur die ersten 120
+   (aufsteigender Tile-Index); die separat ausgewiesene Gesamtzahl bleibt
+   davon unberührt vollständig korrekt.
+4. Der gesamte informationstragende Inhalt liegt in `x ∈ [0, 200)`, da die
+   rechte Bildhälfte vom System-Menü überdeckt wird (SDK-Vorgabe).
+
+**Ergebnis:** Pausiert der Nutzer im Editor/einer Zoomstufe, zeigt das
+System-Pause-Menü zusätzlich zu Volume/Home/Screenshot eine Tile-Übersicht
+mit korrekter Gesamtzahl und Frame-Anzahl (FR-010..FR-013).
+
+## 6.12 Szenario: Titelscreen-Vollbild-Animation (Spec 006, US6, R6)
+
+1. Bei jedem Selektionswechsel im `SelectionRoom` prüft `setSelectedIndex()`,
+   ob die neue Auswahl von `fullImageForId` abweicht; falls ja, wird ein
+   laufender Ladevorgang für den VERLASSENEN Eintrag einfach nicht mehr
+   resumed (reiner Lesevorgang ohne Seiteneffekt, kein Cancel-Callback
+   nötig) und ein neuer `RoomOperation`-Ladevorgang über
+   `ImageStoreCodec.newLoadOperation(id)` für den neuen Eintrag gestartet
+   (stiller Overlay ohne sichtbare loadingBar).
+2. Solange `fullImageData == nil` bleibt das bestehende statische
+   Kreis-Thumbnail für diesen Eintrag sichtbar — kein Leerbild, kein
+   Sprung.
+3. Nach Abschluss baut `SelectionRoom` ein `gfx.tilemap` aus der vollen
+   Imagetable auf und zeichnet es VOR dem Gridview vollflächig (400×240);
+   `drawCell()` lässt die Zelle dieses Eintrags frei, damit der
+   Vollbild-Hintergrund nicht übermalt wird — alle anderen Zellen bleiben
+   exakt wie zuvor.
+4. Ein zeitlich wechselnder Muster-Overlay (`gfx.setPattern` mit
+   Phasenwechsel — KORRIGIERT gegenüber der ursprünglichen Annahme
+   `gfx.setDitherPattern`, das keinen Phasen-Offset besitzt, siehe
+   research.md R5) wird über dem Vollbild-Hintergrund gezeichnet; danach
+   wird `gfx.setColor()` zurückgesetzt, da `setPattern`/`setColor` laut
+   SDK-Doku exklusiv sind.
+5. Bei genau 1 Frame läuft kein Frame-Wechsel-Timer; `titleAnimFrame`
+   bleibt dauerhaft `1`, der Muster-Effekt bleibt trotzdem aktiv.
+
+**Ergebnis:** Der aktuell selektierte Eintrag zeigt seine Animation
+vollflächig mit Störeffekt, ohne den Editor zu öffnen; alle anderen
+Einträge bleiben unverändert als Kreise erkennbar (FR-016..FR-018).

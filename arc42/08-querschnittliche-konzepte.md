@@ -27,6 +27,7 @@ Nutzen: klare mentale Modelle ohne Moduswechsel — der fruehere EditMode-Automa
 - ZoomRoom zeichnet Zellinhalt plus Tilegrenzen; gestrichelte Zellgrenzen folgen dem showGrid-Status des Editors. PixelRoom rendert sein 16x16-Raster ueber gridview.
 - loadingBar und Bauchbinde nutzen die native Aufloesung fuer scharfe Text- und UI-Darstellung.
 - Timer-Updates (keyRepeat, Richtungshalten) laufen zentral im Update-Loop des jeweiligen Rooms.
+- Zeitbasierte Sichtbarkeits-Uebergaenge (z. B. statusMessage-Timeout, seit Spec 006 auch die Bauchbinden-Inaktivitaets-Anzeige) muessen ihren Uebergang selbst per Zeitvergleich in update() erkennen und dabei EXPLIZIT needsRedraw = true setzen, sonst zeichnet draw() (das nur bei needsRedraw == true laeuft) die Aenderung nie sichtbar nach — reiner Zeitablauf ohne eine andere, zustandsaendernde Eingabe loest sonst keinen Redraw aus. Beide bestehenden Faelle folgen demselben Muster: einen Zustandswert cachen, bei jedem update() gegen die aktuelle Zeit pruefen, nur bei tatsaechlichem Uebergang needsRedraw setzen (kein Redraw-Zwang bei jedem Frame).
 
 Nutzen: geringer Overhead auf limitierter Hardware, eine einzige Koordinatenebene (R-11/T-09 entfallen).
 

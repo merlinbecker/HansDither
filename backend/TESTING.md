@@ -171,13 +171,16 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST "$BASE/upload.php" \
   -H "X-Session-Token: $TOKEN" -F "uid=$UID_TEST" \
   -F "pdi=@sheet.pdi" -F "json=@broken.json"
 
-# Datei > 10MB → 413
-dd if=/dev/zero bs=1m count=11 2>/dev/null | \
+# Datei > 300KB → 413 (Spec 007 R2: Grenze von vorher 10MB auf 300KB gesenkt)
+dd if=/dev/zero bs=1k count=301 2>/dev/null | \
   { printf 'Playdate IMG'; cat; } > big.pdi
 curl -s -w "\nHTTP %{http_code}\n" -X POST "$BASE/upload.php" \
   -H "X-Session-Token: $TOKEN" -F "uid=$UID_TEST" \
   -F "pdi=@big.pdi" -F "json=@frames.json"
 ```
+
+Weitere Größen-/Format-/Schema-Grenzfälle (Spec 007): siehe
+`specs/007-backend-upload-hardening/quickstart.md`.
 
 ---
 

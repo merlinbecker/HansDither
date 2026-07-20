@@ -93,3 +93,15 @@ function playdate.gameWillTerminate()
         end
     end
 end
+
+-- Spec 006 R4/AD-031: SDK-Lifecycle-Hook, wird kurz vor dem Pausieren
+-- aufgerufen — genau der laut SDK-Doku vorgesehene Zeitpunkt, um das
+-- Menü-Bild zu aktualisieren. Läuft nur beim tatsächlichen Pausieren
+-- (nicht pro Frame), kein Performance-Risiko.
+function playdate.gameWillPause()
+    if currentRoom == EditorRoom or currentRoom == ZoomRoom or currentRoom == PixelRoom then
+        playdate.setMenuImage(EditorRoom:buildPauseMenuImage())
+    else
+        playdate.setMenuImage(nil)
+    end
+end

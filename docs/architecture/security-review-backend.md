@@ -19,11 +19,26 @@ Dieses Dokument bewertet die Sicherheitsmaßnahmen des Hans Dither Backend-Servi
 | S-01 | Alle Nutzer-Eingaben werden vor der Verarbeitung validiert | ✅ | Input-Validierung in validation.php |
 | S-02 | PIN wird NIE im Klartext gespeichert | ✅ | bcrypt-Hashing in auth.php |
 | S-03 | Datei-Uploads werden in UID-spezifischen Verzeichnissen gespeichert | ✅ | `/uploads/{UID}/` Struktur |
-| S-04 | Dateityp-Validierung erfolgt BEVOR Dateien gespeichert werden | ✅ | validation.php prüft vor move_uploaded_file() |
+| S-04 | Dateityp-Validierung erfolgt BEVOR Dateien gespeichert werden | ✅ | validation.php prüft vor move_uploaded_file() — verifiziert vollständig strukturell (Spec 007 R3): `PdiParser::hasValidMagic()` + `parseFile()` prüfen Magic-Bytes UND parsen den kompletten Zell-/zlib-Inhalt, keine reine Endungs-/Magic-Prüfung |
 | S-05 | SQL-Abfragen nutzen Prepared Statements | ✅ | MySQLi mit bind_param in database.php |
 | S-06 | HTML-Ausgaben werden escaped | ✅ | htmlspecialchars() in HTML-Templates |
 | S-07 | CORS-Header sind korrekt konfiguriert | ✅ | .htaccess mit CORS für Playdate-Simulator |
 | S-08 | HTTPS ist erzwungen | ✅ | .htaccess Redirect HTTP → HTTPS |
+
+### Sicherheitsziele aus Spec 007 (Upload-Härtung)
+
+Ergänzt die obige Tabelle um drei neue Ziele, die NICHT aus
+`contracts/backend-api.md` S-01..S-08 stammen, sondern direkt aus
+`specs/007-backend-upload-hardening/spec.md` (FR-001/FR-006/FR-008) — das
+im ursprünglichen Feature-Wunsch benannte Risiko "jemand mit Kenntnis der
+Architektur könnte unbegrenzt Daten hochladen" war von S-01..S-08 nicht
+abgedeckt.
+
+| ID | Anforderung | Status | Begründung |
+|---|---|---|---|
+| S-09 | Pro Gerät (UID) sind höchstens 12 unterschiedliche Bilder gespeichert, auch unter gleichzeitigen Requests | ✅ | Transaktion + `SELECT ... FOR UPDATE` auf `users` in `UploadHandler::handleUpload()` (ADR-033) |
+| S-10 | Hochgeladene PDI-/JSON-Dateien sind einzeln auf 300 KB begrenzt | ✅ | `Validation::$maxFileSize` in `validation.php` |
+| S-11 | Die JSON-Positionsdatei entspricht dem definierten Struktur-Schema (nicht nur syntaktisch gültiges JSON) | ✅ | `Validation::validateFramesJsonSchema()` (ADR-034) |
 
 ---
 

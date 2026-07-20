@@ -112,12 +112,25 @@ local drawContext = nil
 local currentColor = "white"
 local heldButtons = {}
 
+-- Spec 006: alle fillRect-Aufrufe direkt auf den "Bildschirm" (ausserhalb
+-- pushContext), von Tests lesbar/zuruecksetzbar (siehe fillRect-Mock unten)
+mockScreenFillCalls = {}
+
 local function newMockImage(w, h, bgcolor)
     return {
         width = w, height = h,
         pixels = {},
         fill = (bgcolor == "black") and "black" or "white",
         draw = noop,
+        drawFaded = noop,
+        -- Spec 006 US5: Tile-Vorschau-Zeichnungen in der Pause-Ansicht
+        -- beobachtbar (mockDrawScaledCalls), fuer die 120-Tile-Truncation
+        drawScaled = function(self, x, y, scale, yscale)
+            table.insert(mockDrawScaledCalls, { x = x, y = y, scale = scale })
+        end,
+        -- Spec 006 US6 (revidiert): SelectionRoom maskiert das Schwenk-
+        -- Thumbnail des selektierten Eintrags ueber setMaskImage()
+        setMaskImage = noop,
         getSize = function(self) return self.width, self.height end,
         sample = function(self, x, y)
             if self.pixels[x .. "," .. y] then return "black" end
@@ -132,6 +145,9 @@ playdate = {
     graphics = setmetatable({
         kColorBlack = "black", kColorWhite = "white", kColorClear = "clear",
         getTextSize = function() return 40, 16 end,
+        -- Spec 006: alle drawText-Aufrufe beobachtbar (mockDrawTextCalls),
+        -- fuer US5-Pause-Ansicht (Tiles/Frames-Text) und Bauchbinde-Assertions
+        drawText = function(text, x, y) table.insert(mockDrawTextCalls, { text = text, x = x, y = y }) end,
         setColor = function(c) currentColor = c end,
         pushContext = function(img) drawContext = img end,
         popContext = function() drawContext = nil end,
@@ -142,6 +158,9 @@ playdate = {
         end,
         fillRect = function(x, y, w, h)
             if drawContext then drawContext.fill = currentColor end
+            -- Spec 006 R2: direkte Bildschirm-Fills (ausserhalb pushContext,
+            -- z.B. ZoomRoom:drawGrid()) sind sonst nicht beobachtbar
+            table.insert(mockScreenFillCalls, { x = x, y = y, w = w, h = h, color = currentColor })
         end,
         image = { new = newMockImage },
         imagetable = {
@@ -152,6 +171,25 @@ playdate = {
                     getImage = function(self, i) return self._imgs[i] end,
                     getLength = function(self) return #self._imgs end,
                 }
+            end,
+        },
+        -- Spec 006: EditorRoom haelt sein Frame-Rendering ueber ein Tilemap-
+        -- Objekt; fuer Logik-Tests genuegen No-op-Methoden ohne echte Grafik
+        -- setTiles() zeichnet lastFrame in mockLastTilemap auf — der einzige
+        -- von aussen beobachtbare Hinweis darauf, welcher Frame gerade aktiv
+        -- ist (EditorRoom exponiert currentFrame sonst nicht öffentlich)
+        tilemap = {
+            new = function()
+                local tm = {
+                    lastFrame = nil,
+                    setImageTable = noop,
+                    setSize = noop,
+                    setTiles = function(self, frame, cols) self.lastFrame = frame end,
+                    setTileAtPosition = noop,
+                    draw = noop,
+                }
+                mockLastTilemap = tm
+                return tm
             end,
         },
         -- Spec 004: liefert asynchron ein Mock-Bild statt echter QR-Kodierung
@@ -191,25 +229,66 @@ playdate = {
     -- bewegbare Uhr — testbar über die Modulvariable mockTimeMs (siehe unten)
     getCurrentTimeMilliseconds = function() return mockTimeMs end,
     getSecondsSinceEpoch = function() return 1700000000 end,
-    timer = { updateTimers = noop },
+    timer = {
+        updateTimers = noop,
+        -- Spec 006: SDK feuert den Callback laut Doku SOFORT einmal, dann
+        -- verzoegert/wiederholend — fuer Tests genuegt der Sofort-Aufruf
+        keyRepeatTimerWithDelay = function(delayAfterInitial, delayAfterSecond, callback, ...)
+            if callback then callback(...) end
+            return { remove = noop }
+        end,
+    },
+    -- Spec 006: registrierte Menü-Labels + Callbacks beobachtbar
+    -- (mockMenuItemLabels/mockMenuItemCallbacks), damit T013 pruefen kann,
+    -- dass "reset frame" da ist, "delete frame" nicht mehr (AD-032), UND den
+    -- Menüpunkt wie eine echte Auswahl ausloesen kann
     getSystemMenu = function()
         return strictTable("systemMenu", {
-            removeAllMenuItems = noop,
-            addMenuItem = noop,
-            addCheckmarkMenuItem = noop,
+            removeAllMenuItems = function(self)
+                mockMenuItemLabels = {}
+                mockMenuItemCallbacks = {}
+            end,
+            -- self ist der erste Parameter (EditorRoom ruft ueber menu:addMenuItem(...) —
+            -- Doppelpunkt-Syntax reicht das Menu-Objekt implizit als erstes Argument durch)
+            addMenuItem = function(self, title, callback)
+                table.insert(mockMenuItemLabels, title)
+                mockMenuItemCallbacks[title] = callback
+                return { title = title, _callback = callback }
+            end,
+            addCheckmarkMenuItem = function(self, title, checked, callback)
+                table.insert(mockMenuItemLabels, title)
+                mockMenuItemCallbacks[title] = callback
+                return { title = title, _callback = callback }
+            end,
         })
     end,
+    -- Spec 006 R4: letztes an setMenuImage() uebergebenes Bild beobachtbar
+    -- (mockLastMenuImage), fuer US5-Tests
+    setMenuImage = function(image, xOffset) mockLastMenuImage = image end,
     -- Spec 004: Crank-Rotationsmessung — testbar über die Modulvariable
     -- crankChangeValue (siehe unten), wie im echten SDK zustandsbehaftet
     -- ("seit dem letzten Aufruf") aber hier einfach test-gesteuert
     getCrankChange = function() return crankChangeValue end,
     isCrankDocked = function() return crankDockedValue end,
+    -- Spec 006: absolute Tick-Grenzen fuer die UNVERAENDERTE B+Crank-Zoomkette
+    -- (CR-01) — separat von crankChangeValue, testbar ueber crankTicksValue
+    getCrankTicks = function(ticksPerRevolution) return crankTicksValue end,
 }
 
 -- Von Tests gesetzt, um Crank-Rotation/-Dock-Zustand zu simulieren
 -- (siehe playdate.getCrankChange/isCrankDocked oben)
 crankChangeValue = 0
 crankDockedValue = false
+crankTicksValue = 0
+
+-- Spec 006: von getSystemMenu()/setMenuImage() befuellt (siehe oben), von
+-- Tests gelesen
+mockMenuItemLabels = {}
+mockMenuItemCallbacks = {}
+mockLastMenuImage = nil
+mockLastTilemap = nil
+mockDrawTextCalls = {}
+mockDrawScaledCalls = {}
 
 -- Von Tests vorwärts bewegt, um Auto-Polling-Intervalle/Timeouts zu simulieren
 -- (siehe playdate.getCurrentTimeMilliseconds oben)
@@ -334,10 +413,14 @@ json = strictTable("json", {
 -- Backing Store als einfache Lua-Tabelle, indiziert nach Dateipfad —
 -- ausreichend, um sync/state-Persistenz-Roundtrips zu testen.
 local datastoreFiles = {}
+-- Spec 006: separates Backing Store fuer readImage() (ImageStoreCodec.newLoadOperation
+-- Phase 2), von Tests mit newMockImage(...)-Objekten befuellt
+local datastoreImages = {}
 playdate.datastore = strictTable("datastore", {
     write = function(tbl, filename) datastoreFiles[filename] = tbl end,
     read = function(filename) return datastoreFiles[filename] end,
     delete = function(filename) datastoreFiles[filename] = nil end,
+    readImage = function(filename) return datastoreImages[filename] end,
 })
 
 -- ── Spec 004: Datei-Mock (playdate.file) für rohes Bild-Lesen (T017) ─────────
@@ -395,6 +478,12 @@ dofile("Source/Bauchbinde.lua")     -- Namenszeile des SelectionRoom
 dofile("Source/RoomOperation.lua")  -- Coroutine-Antrieb für SyncService (Spec 004)
 dofile("Source/loadingBar.lua")     -- Fortschritts-Overlay für SyncService (Spec 004)
 dofile("Source/SyncService.lua")
+-- Spec 006 US6: SelectionRoom laedt bei jeder Selektion (auch der ERSTEN, aus
+-- entered()->setSelectedIndex(1)) per ImageStoreCodec.newLoadOperation() die
+-- vollen Bilddaten nach — muss daher VOR SelectionRoom.lua verfuegbar sein
+-- (dofile ist idempotent, die spaetere ImageStoreCodec-eigene Testsektion
+-- dofile't dieselbe Datei zusätzlich erneut, das ist unschädlich)
+dofile("Source/ImageStoreCodec.lua")
 dofile("Source/SelectionRoom.lua")
 
 -- EditorRoom-Mock + Raumwechsel-Protokoll
@@ -747,6 +836,22 @@ SyncService:tick()
 check(SyncService:getState().pendingUpload ~= nil, "Netzwerkfehler setzt pendingUpload (research.md R8)")
 check(SyncService:getState().pendingUpload.imageId == "bild2", "pendingUpload verweist auf das betroffene Bild")
 
+section("SyncService: Upload-Limit erreicht (403) zeigt eindeutige Meldung statt generischem Fehler (Spec 007, R6)")
+SyncService:dismissQrOverlay()
+SyncService:saveState({ uid = SyncService:getState().uid, pin = SyncService:getState().pin, paired = true })
+mockRawFiles["saves/bild3/sheet"] = "X"
+mockRawFiles["saves/bild3/frames.json"] = "{}"
+
+SyncService:startSync("bild3")
+SyncService:tick()  -- Login-Yield
+simulateHttpResponse(200, json.encode({ status = "success", session_token = "tok-d", expires_at = "2026-01-01T00:00:00Z" }))
+SyncService:tick()  -- Upload-POST-Yield
+simulateHttpResponse(403, "")
+SyncService:tick()  -- 403 erkannt -> kein Retry, sofortige Statusanzeige
+check(not SyncService:isBusy(), "403 beendet die Operation ohne Retry (anders als 401)")
+check(SyncService:getTransientStatusMessage() == "Upload limit reached (12 images)",
+    "403 zeigt eine von 'Upload failed' unterscheidbare Meldung, nicht den generischen else-Zweig")
+
 -- ── ImageStoreCodec: reine Helfer (kein gfx noetig) ──────────────────────────
 
 section("ImageStoreCodec: Sheet-Geometrie")
@@ -817,6 +922,302 @@ check(receivedTile ~= nil, "commit liefert ein Tile-Bild")
 -- gridState[row][col] -> drawPixel(col-1, row-1); Start-Selektion ist (9,9)
 check(receivedTile.pixels["8,8"] == true, "Pixel (9,9) ist schwarz gemalt")
 check(receivedTile.pixels["9,8"] == nil, "Pixel (10,9) wurde vom 2. Strich radiert")
+
+-- ── ZoomRoom: Subpixel-Rendering unbearbeiteter Zellen (Spec 006 US1, R2) ────
+
+section("ZoomRoom: unbearbeitete Zelle zeigt vier echte Subpixel-Werte")
+dofile("Source/PencilCursor.lua")
+dofile("Source/ZoomRoom.lua")
+
+ZoomRoom:init(noop, {}, { applyTileEdits = noop })
+
+-- Gemischtes 2x2-Quellmuster an der Cursor-Zelle (12,12 -> Slot (2,2),
+-- lokale Zelle (4,4) -> Pixel (6,6)): schwarz/weiss diagonal
+local mixedTile = newMockImage(16, 16, "white")
+mixedTile.pixels["6,6"] = true
+mixedTile.pixels["7,7"] = true
+
+local ctxSlots = {}
+for sr = 1, 3 do
+    ctxSlots[sr] = {}
+    for sc = 1, 3 do
+        if sr == 2 and sc == 2 then
+            ctxSlots[sr][sc] = { oob = false, originalImage = mixedTile }
+        else
+            ctxSlots[sr][sc] = { oob = true }
+        end
+    end
+end
+local ctxGridState = {}
+for r = 1, 24 do
+    ctxGridState[r] = {}
+    for c = 1, 24 do
+        ctxGridState[r][c] = false
+    end
+end
+
+ZoomRoom:setFromEditorContext({ slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} })
+
+local function fillColorAt(x, y, w, h)
+    local color = nil
+    for _, f in ipairs(mockScreenFillCalls) do
+        if f.x == x and f.y == y and f.w == w and f.h == h then color = f.color end
+    end
+    return color
+end
+
+mockScreenFillCalls = {}
+ZoomRoom:update()  -- needsRedraw ist nach setFromEditorContext true -> drawGrid()
+
+-- Bildschirmzelle (12,12): x = OFFSET_X(80) + 11*CELL_SIZE(10) = 190, y = 110
+check(fillColorAt(190, 110, 5, 5) == "black", "Subpixel oben-links (Quellpixel 6,6) ist schwarz")
+check(fillColorAt(195, 110, 5, 5) == "white", "Subpixel oben-rechts (Quellpixel 7,6) ist weiss")
+check(fillColorAt(190, 115, 5, 5) == "white", "Subpixel unten-links (Quellpixel 6,7) ist weiss")
+check(fillColorAt(195, 115, 5, 5) == "black", "Subpixel unten-rechts (Quellpixel 7,7) ist schwarz")
+
+-- Nach einem simulierten Malstrich auf derselben Zelle wird sie einfarbig
+-- (kein Rueckfall in die Quadranten-Darstellung, FR-008)
+local zoomHandler = ZoomRoom:inputHandler()
+zoomHandler.AButtonDown()
+zoomHandler.AButtonUp()
+
+mockScreenFillCalls = {}
+ZoomRoom:update()
+
+check(fillColorAt(190, 110, 5, 5) == nil, "Nach Bearbeitung: keine 5x5-Subpixel-Fills mehr an der Zelle")
+check(fillColorAt(190, 110, 10, 10) ~= nil, "Nach Bearbeitung: Zelle ist ein einzelner 10x10-Block")
+
+-- ── EditorRoom: Setup-Helfer (Spec 006 US2-US5) ──────────────────────────────
+
+dofile("Source/EditorRoom.lua")
+
+local editorSwitchedTo = nil
+EditorRoom:init(function(room) editorSwitchedTo = room end, ZoomRoom, {})
+
+section("EditorRoom: buildPauseMenuImage() liefert nil ohne geladenes Bild")
+check(EditorRoom:buildPauseMenuImage() == nil, "Kein imageData geladen -> nil (Contract Abschnitt 4)")
+
+local function makeFrame(fillIndex)
+    local frame = {}
+    for i = 1, 375 do frame[i] = fillIndex end
+    return frame
+end
+
+-- Treibt setImage()+entered()+update()-Kette bis zum fertigen Laden synchron
+-- durch: ImageStoreCodec.newLoadOperation hat 4 Yields + finalen Return, also
+-- GENAU 5 RoomOperation:resume()-Aufrufe (= 5 EditorRoom:update()). Bewusst
+-- KEIN "getImageData() ~= nil"-Abbruch: bei einem zweiten/dritten Laden in
+-- derselben Testsuite ist imageData vom VORHERIGEN Bild bereits nicht-nil,
+-- bevor der neue Ladevorgang ueberhaupt gestartet wurde — das wuerde die
+-- Schleife sofort verlassen, ohne den neuen Ladevorgang je zu resumen.
+local function loadEditorImageForTest(id, framesArray, tileCount, name)
+    datastoreFiles["saves/" .. id .. "/frames"] = { frames = framesArray, tileCount = tileCount, name = name }
+    datastoreImages["saves/" .. id .. "/sheet"] = newMockImage(16, 16, "white")
+    EditorRoom:setImage(id)
+    EditorRoom:entered()
+    for _ = 1, 5 do
+        EditorRoom:update()
+    end
+end
+
+-- ── US2: Crank-Volldrehung (T005, research.md R1, Contract CR-01) ───────────
+
+section("EditorRoom: Frame-Wechsel erst bei 360 Grad Netto-Kurbeldrehung (Spec 006 US2, R1)")
+loadEditorImageForTest("crankTest", { makeFrame(1), makeFrame(2), makeFrame(3) }, 3, "crank-test")
+check(EditorRoom:getImageData() ~= nil, "Vorbedingung: Bild mit 3 Frames geladen")
+check(mockLastTilemap.lastFrame[1] == 1, "Vorbedingung: Frame 1 aktiv")
+
+crankChangeValue = 270
+EditorRoom:update()
+check(mockLastTilemap.lastFrame[1] == 1, "AS1: 270 Grad -> Frame 1 bleibt aktiv (kein Wechsel)")
+
+crankChangeValue = 90
+EditorRoom:update()
+check(mockLastTilemap.lastFrame[1] == 2, "AS2/AS3: weitere 90 Grad (360 gesamt) -> genau ein Wechsel zu Frame 2")
+
+crankChangeValue = 270
+EditorRoom:update()
+crankChangeValue = -90
+EditorRoom:update()
+check(mockLastTilemap.lastFrame[1] == 2, "Edge Case: 270+(-90)=180 Grad netto -> kein Wechsel (bleibt Frame 2)")
+
+crankChangeValue = 180
+EditorRoom:update()
+check(mockLastTilemap.lastFrame[1] == 3, "Restwert bleibt erhalten: weitere 180 Grad (360 seit letztem Wechsel) -> Frame 3")
+crankChangeValue = 0
+
+-- Regressionsschutz (CR-01): B+Crank-Zoomkette bleibt unveraendert
+heldButtons[playdate.kButtonB] = true
+crankTicksValue = 4  -- ZOOM_TICK_THRESHOLD
+editorSwitchedTo = nil
+EditorRoom:update()
+check(editorSwitchedTo == ZoomRoom, "B+Crank (4 Ticks): Zoomkette weiterhin ausgeloest (CR-01 Regressionsschutz)")
+heldButtons[playdate.kButtonB] = false
+crankTicksValue = 0
+
+-- ── US3: Bauchbinde-Sichtbarkeit/-Seite (T009, research.md R3, CR-02/CR-03) ──
+
+section("EditorRoom: Bauchbinde blendet nach 5s Inaktivitaet aus und weicht dem Cursor aus (Spec 006 US3, R3)")
+mockTimeMs = 1000
+
+local function bandFillEntry()
+    for _, f in ipairs(mockScreenFillCalls) do
+        if f.h == 22 then return f end
+    end
+    return nil
+end
+
+-- Reset VOR dem Laden: der letzte der 5 Lade-Updates zeichnet bereits die
+-- (sichtbare) Bauchbinde, ein weiterer update()-Aufruf ohne Zustandsaenderung
+-- wuerde wegen needsRedraw==false gar nicht mehr neu zeichnen.
+mockScreenFillCalls = {}
+loadEditorImageForTest("bauchbindeTest", { makeFrame(1) }, 2, "bb-test")
+check(bandFillEntry() ~= nil, "Direkt nach dem Laden: Bauchbinde sichtbar")
+check(bandFillEntry().x == 348, "Cursor links (Start x=1): Bauchbinde rechts (CR-03)")
+
+mockTimeMs = mockTimeMs + 5001
+mockScreenFillCalls = {}
+EditorRoom:update()
+check(bandFillEntry() == nil, "Nach 5s Inaktivitaet ohne jede Eingabe: Bauchbinde ausgeblendet (FR-001)")
+
+local editorHandler = EditorRoom:inputHandler()
+editorHandler.AButtonDown()
+editorHandler.AButtonUp()
+mockScreenFillCalls = {}
+EditorRoom:update()
+check(bandFillEntry() ~= nil, "Nach Eingabe (A-Druck): Bauchbinde sofort wieder sichtbar (FR-002)")
+
+for _ = 1, 24 do
+    editorHandler.rightButtonDown()
+end
+mockScreenFillCalls = {}
+EditorRoom:update()
+check(bandFillEntry().x == 4, "Cursor rechts (x=25): Bauchbinde links (CR-03, invers zur Cursorposition)")
+
+-- Regressionstest (T029-Architektur-Review, CR-02): B-Druck ALLEIN (ohne
+-- Crank-Bewegung, ohne Release) muss ebenfalls als Aktivitaet zaehlen —
+-- sonst wuerde langes B-Halten ohne Kurbelbewegung die Bauchbinde faelschlich
+-- ausblenden lassen, obwohl pipette() (B-Release) noch gar nicht gelaufen ist
+mockTimeMs = mockTimeMs + 5001
+mockScreenFillCalls = {}
+EditorRoom:update()
+check(bandFillEntry() == nil, "Vorbedingung: erneut 5s ohne Eingabe -> Bauchbinde wieder ausgeblendet")
+
+editorHandler.BButtonDown()
+mockScreenFillCalls = {}
+EditorRoom:update()
+check(bandFillEntry() ~= nil, "B-Druck ALLEIN (kein Release, keine Kurbel) zaehlt bereits als Aktivitaet (CR-02)")
+editorHandler.BButtonUp()
+
+-- ── US4: "Reset Frame" (T013, research.md R7, AD-032, CR-08) ────────────────
+
+section("EditorRoom: 'Reset Frame' kopiert Vorgaenger-Frame; Menue zeigt 'reset frame' statt 'delete frame' (Spec 006 US4)")
+loadEditorImageForTest("resetTest", { makeFrame(1), makeFrame(2) }, 2, "reset-test")
+
+local hasReset, hasDelete = false, false
+for _, label in ipairs(mockMenuItemLabels) do
+    if label == "reset frame" then hasReset = true end
+    if label == "delete frame" then hasDelete = true end
+end
+check(hasReset, "Systemmenue enthaelt 'reset frame' (CR-08)")
+check(not hasDelete, "Systemmenue enthaelt NICHT mehr 'delete frame' (AD-032)")
+
+-- Zu Frame 2 wechseln (Vorbedingung: current != previous, damit der Reset
+-- sichtbar etwas aendert)
+crankChangeValue = 360
+EditorRoom:update()
+crankChangeValue = 0
+check(mockLastTilemap.lastFrame[1] == 2, "Vorbedingung: Frame 2 aktiv, unterscheidet sich von Frame 1")
+
+mockMenuItemCallbacks["reset frame"]()
+check(mockLastTilemap.lastFrame[1] == 1, "'reset frame' kopiert Frame 1 (Vorgaenger) elementweise nach Frame 2 (FR-014)")
+
+-- No-op auf Frame 1 (kein Vorgaenger, FR-015)
+crankChangeValue = -360
+EditorRoom:update()
+crankChangeValue = 0
+check(mockLastTilemap.lastFrame[1] == 1, "Vorbedingung: zurueck auf Frame 1")
+mockMenuItemCallbacks["reset frame"]()
+check(mockLastTilemap.lastFrame[1] == 1, "'reset frame' auf Frame 1 ist wirkungslos (FR-015, kein Vorgaenger)")
+
+-- ── US5: Kontext-/Pause-Ansicht (T017, research.md R4, CR-06/CR-07) ─────────
+
+section("EditorRoom: Pause-Ansicht zaehlt tatsaechlich referenzierte Tiles, nicht imagetable:getLength() (Spec 006 US5)")
+
+local mixedFrame = {}
+for i = 1, 375 do mixedFrame[i] = (i % 5) + 1 end  -- referenziert Tile-Indizes 1..5
+-- tileCount=10 -> imagetable haette 10 Slots; tatsaechlich referenziert werden nur 5 (CR-06)
+loadEditorImageForTest("pauseSmall", { makeFrame(1), mixedFrame }, 10, "pause-small")
+
+local function drawTextContains(expected)
+    for _, c in ipairs(mockDrawTextCalls) do
+        if c.text == expected then return true end
+    end
+    return false
+end
+
+mockDrawTextCalls = {}
+mockDrawScaledCalls = {}
+local pauseImg = EditorRoom:buildPauseMenuImage()
+check(pauseImg ~= nil, "buildPauseMenuImage() liefert ein Bild bei geladenem imageData")
+check(drawTextContains("Tiles: 5"), "Gesamtzahl basiert auf tatsaechlich referenzierten Indizes (5), nicht imagetable:getLength() (10, CR-06)")
+check(drawTextContains("Frames: 2"), "Frame-Anzahl als Metainformation (FR-012)")
+check(#mockDrawScaledCalls == 5, "5 Tile-Vorschauen gezeichnet (<=120, keine Truncation noetig)")
+
+-- >120 unterschiedliche Tiles: Raster zeigt nur 120, Gesamtzahl bleibt korrekt
+local bigFrame = {}
+for i = 1, 375 do bigFrame[i] = ((i - 1) % 150) + 1 end  -- referenziert 1..150
+loadEditorImageForTest("pauseBig", { bigFrame }, 150, "pause-big")
+
+mockDrawTextCalls = {}
+mockDrawScaledCalls = {}
+EditorRoom:buildPauseMenuImage()
+check(drawTextContains("Tiles: 150"), "Gesamtzahl bleibt trotz Truncation vollstaendig korrekt (FR-013)")
+check(#mockDrawScaledCalls == 120, "Raster zeigt nur die ersten 120 Vorschauen (CR-07)")
+
+-- ── SelectionRoom: Kreis-Schwenk des selektierten Eintrags (Spec 006 US6, ───
+-- revidiert) ──────────────────────────────────────────────────────────────
+
+section("SelectionRoom: selektierter Eintrag bleibt kreisförmig maskiert und schwenkt den Bildausschnitt über die Zeit, nicht selektierte Einträge bleiben unverändert zentriert")
+
+table.insert(storedImages, { id = "panimg", name = "panimg", frameCount = 1, lastEdited = 2 })
+
+local panPreview = newMockImage(400, 240, "white")
+local previewsById = { panimg = panPreview, bild1 = newMockImage(400, 240, "white") }
+ImageStore.getPreviewImage = function(id) return previewsById[id] end
+
+SelectionRoom:entered()  -- baut Eintraege neu (inkl. panimg)
+
+local function indexOfEntryId(targetId)
+    for i, img in ipairs(storedImages) do
+        if img.id == targetId then return i end
+    end
+    return nil
+end
+
+local idxPanImg = indexOfEntryId("panimg")
+SelectionRoom:setSelectedIndex(idxPanImg)
+
+mockTimeMs = 0
+SelectionRoom:update()
+
+-- Der Schwenk-Ausschnitt aendert sich mit der Zeit: getPanningThumbnail()
+-- liefert an zwei verschiedenen Zeitpunkten unterschiedliche, aber jeweils
+-- gueltige (72x72, maskierte) Thumbnails.
+local thumbA = SelectionRoom:getPanningThumbnail("panimg")
+mockTimeMs = 1000  -- Viertelperiode von PAN_PERIOD_MS=4000 -> anderer Ausschnitt
+local thumbB = SelectionRoom:getPanningThumbnail("panimg")
+check(thumbA ~= nil and thumbB ~= nil, "Schwenk-Thumbnail wird zu beiden Zeitpunkten erzeugt")
+local thumbAWidth = thumbA:getSize()
+check(thumbAWidth == 72, "Schwenk-Thumbnail bleibt auf Kreisdurchmesser (72px) begrenzt, unabhaengig vom Ausschnitt")
+
+-- Nicht selektierte Einträge bleiben unverändert: bild1 ist NICHT selektiert,
+-- getThumbnail() liefert weiterhin den gecachten, zentrierten Ausschnitt.
+local nonSelectedThumb1 = SelectionRoom:getThumbnail("bild1")
+local nonSelectedThumb2 = SelectionRoom:getThumbnail("bild1")
+check(nonSelectedThumb1 == nonSelectedThumb2, "Thumbnail nicht selektierter Einträge bleibt gecacht (kein Schwenk)")
+
+check(true, "update() mit selektiertem Bild-Eintrag laeuft ohne Fehler durch")
 
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 

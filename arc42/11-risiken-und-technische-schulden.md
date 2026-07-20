@@ -11,6 +11,8 @@
 | R-08 | Restblockierung bei finalem Datastore read/write | Kurzzeitige Hiccups trotz inkrementeller Vorbereitung | Finale Phase sichtbar markieren, Datenmengen beobachten |
 | R-13 | Unbegrenzte Bildanzahl + bis zu 12 Frames pro Bild; Imagetable waechst beim Malen ohne Kompaktierung | Wachsende PDI-/JSON-Groessen, laengere Ladezeiten im Auswahlscreen | Vorschaubilder separat persistieren, Bilder lazy laden, Fortschrittsanzeige beibehalten; Imagetable-Wachstum bei intensivem Detail-Malen messen (quickstart Szenario 5), ggf. spaetere Kompaktierung |
 | R-14 | Verlust der Pulp-Interoperabilitaet durch Formatwechsel | Alte Saves und Importer-Tool sind mit v0.3.0 nicht nutzbar | Bewusst akzeptiert (Nicht-Ziel Migration); alte Dateien werden ignoriert, nicht geloescht; Importer-Anpassung als spaeteres Vorhaben |
+| R-21 | Titelscreen-Lazy-Load-Ueberlappung bei schnellem Selektionswechsel (Spec 006, US6): mehrere aufeinanderfolgende RoomOperation-Ladevorgaenge fuer verschiedene Eintraege koennten sich theoretisch ueberschneiden | Falscher/veralteter Vollbild-Hintergrund koennte kurzzeitig sichtbar werden | Mitigiert: `SelectionRoom:setSelectedIndex()` verwirft einen laufenden Ladevorgang fuer den VERLASSENEN Eintrag durch reines Ueberschreiben der Referenz (nie wieder resumed, kein Seiteneffekt); headless-testverifiziert (T022 — Selektionswechsel vor Abschluss laedt nachweislich nur den neuen Eintrag) |
+| R-22 | Crank-Dual-Path-Regression (Spec 006, US2): `getCrankChange()`-Akkumulator (Frame-Navigation) und `getCrankTicks(4)`-Zoomkette duerfen sich pro `update()` nicht gegenseitig den Kurbel-Zustand "wegkonsumieren" | Wuerden beide APIs im selben Frame gelesen, gingen Grad-/Tick-Anteile verloren — Frame-Navigation ODER Zoomkette koennten unzuverlaessig werden | Mitigiert: `handleCrank()` verzweigt exklusiv zwischen beiden Lesepfaden (Contract CR-01, nie beide im selben Aufruf); Regressionstest fuer die B+Crank-Zoomkette im selben Testlauf wie der neue Akkumulator (T005) |
 
 ## 11.2 Technische Schulden
 
@@ -38,6 +40,7 @@ Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die P
 - Kurzfristig: R-05 (Validierungsszenarien v0.3.0 ausstehend), R-06, R-13 (Messung), T-07
 - Mittelfristig: R-03, R-08, T-02
 - Langfristig: T-03, T-01, T-06, R-14
+- Mitigiert (Spec 006): R-21 (Titelscreen-Lazy-Load-Ueberlappung, verwirft alte Ladevorgaenge), R-22 (Crank-Dual-Path-Regression, exklusive API-Verzweigung) — beide headless-testverifiziert, keine offenen Massnahmen
 
 ---
 
@@ -46,10 +49,12 @@ Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die P
 | ID | Risiko | Auswirkung | Gegenmassnahme | Status |
 |---|---|---|---|---|
 | R-14 | Brute-Force-Angriff auf 4-stellige PIN | 10.000 Kombinationen können theoretisch durchprobiert werden | Rate-Limiting (3 Versuche → 5 Min Sperre), HTTPS erzwingen, keine detaillierten Fehlermeldungen | **Umgesetzt** |
-| R-15 | Speicherwachstum durch viele PDI-Dateien | all-inkl.com Hosting hat Speicherlimits | Max. Dateigröße (10MB), abgelaufene Sessions bereinigen, Nutzer können Images löschen | **Umgesetzt** |
+| R-15 | Speicherwachstum durch viele PDI-Dateien | all-inkl.com Hosting hat Speicherlimits | Max. Dateigröße 300 KB je Datei (Spec 007, vorher 10MB), Obergrenze von 12 Bildern pro Gerät (Spec 007, R-19), abgelaufene Sessions bereinigen | **Umgesetzt** |
 | R-16 | all-inkl.com Performance-Limits | Shared Hosting kann bei vielen Requests langsam werden | Einfache Architektur (kein Framework), PNG on-demand (nicht sofort), Caching von PNGs | **Umgesetzt** |
 | R-17 | GD-Bibliothek nicht verfügbar | PNG-Rendering funktioniert nicht | Prüfen bei Deployment, Fallback-Meldung in UI | **Offen** |
 | R-18 | MySQL-Verbindungmäßig überlastet | Datenbank-Requests blockieren | Prepared Statements, Indexe auf Tabellen, Connection Pooling (Singleton) | **Umgesetzt** |
+| R-19 | Multi-Geräte-/Sybil-Umgehung des Pro-Gerät-Limits: eine Person mit mehreren UIDs (z. B. mehreren Playdate-Geräten oder manuell erzeugten UIDs) kann das 12-Bilder-Limit pro UID beliebig oft umgehen | Das Limit begrenzt nur pro Gerät, nicht pro Person — kein echter Schutz gegen einen gezielt entschlossenen Angreifer | Bewusst akzeptiert und NICHT Teil des Scopes von Spec 007 (spec.md Assumptions); Re-Evaluierung falls künftig eine serverseitige Lösch-Funktion entsteht oder Missbrauch beobachtet wird | **Akzeptiert (Open)** |
+| R-20 | Verlängerte Row-Lock-Dauer bei mehreren GLEICHZEITIGEN Uploads DERSELBEN UID: die neue Transaktion (Spec 007, ADR-033) hält den `users`-Datensatz der UID während `move_uploaded_file()` + DB-Schreibvorgang gesperrt | Kurze Wartezeiten bei parallelen Uploads derselben UID (untypischer Fall — ein Gerät lädt normalerweise sequenziell hoch) | Unkritisch bei erwarteter Nutzungsfrequenz (ein Playdate lädt je Crank-Geste sequenziell hoch); Beobachtungspunkt, keine Gegenmaßnahme nötig, solange kein Bottleneck beobachtet wird | **Akzeptiert (Beobachtung)** |
 
 ## 11.6 Backend-Technische Schulden
 
@@ -64,4 +69,4 @@ Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die P
 
 - **Umgesetzt:** R-14, R-15, R-16, R-18
 - **Offen (kann später):** R-17, T-04, T-05, T-06, T-07
-- **Akzeptiert:** 4-stellige PIN ist für den Anwendungsfall ausreichend (10.000 Kombinationen + Rate-Limiting)
+- **Akzeptiert:** 4-stellige PIN ist für den Anwendungsfall ausreichend (10.000 Kombinationen + Rate-Limiting); R-19 (Multi-Geräte-/Sybil-Umgehung, bewusst außerhalb des Scopes von Spec 007); R-20 (Row-Lock-Dauer bei paralleler Nutzung derselben UID, unkritisch bei erwarteter Nutzungsfrequenz)
