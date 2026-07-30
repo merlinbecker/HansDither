@@ -56,9 +56,9 @@ volle 360°-Umdrehung ab der aktuellen Kurbelposition statt der fruehreren
 5. Bei 12 Frames rotiert vorwaerts zu Frame 1.
 6. Frame-Wechsel = tilemap:setTiles(frames[f], 25) + Redraw; die Bauchbinde zeigt "Frame n/m" (sofern nicht wegen Inaktivitaet ausgeblendet, siehe 6.10).
 7. Mit gehaltener B-Taste bleibt der Pfad UNVERAENDERT: getCrankTicks(4) treibt weiterhin ausschliesslich die Zoomkette (siehe 6.4); pro update() wird GENAU EINE der beiden Crank-Lese-APIs aufgerufen, nie beide (Contract CR-01, Regressionsschutz).
-8. "reset frame" im Systemmenue (ersetzt seit Spec 006 "delete frame", AD-032) kopiert den Vorgaenger-Frame elementweise in den aktiven Frame; auf Frame 1 (kein Vorgaenger) wirkungslos.
+8. "clear screen" im Systemmenue (Spec 008, AD-037, ersetzt seit Spec 008 "reset frame"/AD-032 vollstaendig) setzt alle 375 Tile-Indizes des aktiven Frames auf den Voll-Weiss-Basisindex 1; andere Frames bleiben unberuehrt (siehe 6.15).
 
-Ergebnis: Bis zu 12 Frames sind per Crank erstell- und durchlaufbar, ausschliesslich durch volle Umdrehungen ausgeloest (FR-004..FR-006), und per "reset frame" auf den Vorgaengerstand zuruecksetzbar (FR-014/FR-015).
+Ergebnis: Bis zu 12 Frames sind per Crank erstell- und durchlaufbar, ausschliesslich durch volle Umdrehungen ausgeloest (FR-004..FR-006), und per "clear screen" vollstaendig leerbar (Spec 008, FR-011..FR-015).
 
 ## 6.4 Szenario: Zoomkette EditorRoom -> ZoomRoom -> PixelRoom
 
@@ -458,3 +458,77 @@ mit korrekter Gesamtzahl und Frame-Anzahl (FR-010..FR-013).
 **Ergebnis:** Der aktuell selektierte Eintrag zeigt seine Animation
 vollflächig mit Störeffekt, ohne den Editor zu öffnen; alle anderen
 Einträge bleiben unverändert als Kreise erkennbar (FR-016..FR-018).
+
+## 6.13 Szenario: Zoom-Room-Redraw über Hintergrund-Cache (Spec 008, US1, AD-035)
+
+1. Beim Betreten des Zoom Room bzw. nach `setFromEditorContext()`/
+   `setNewTile()`/`updateExistingTile()` wird `backgroundDirty = true`
+   gesetzt (`showGridLines` selbst wird ausschließlich innerhalb von
+   `setFromEditorContext()` gesetzt, es gibt keinen separaten Live-Toggle
+   innerhalb einer laufenden Zoom-Room-Sitzung — **korrigiert gegenüber der
+   ursprünglichen Planung**, siehe data-model.md).
+2. Vor dem nächsten Redraw baut `ZoomRoom` — falls `backgroundDirty` oder
+   `cachedBackground == nil` — den kompletten statischen Hintergrund
+   (Checkerboard-Seiten, alle 576 Zellen im unbearbeiteten Subpixel-
+   Zustand, gestrichelte Zell- und durchgezogene Tile-Grenzen) EINMALIG in
+   `cachedBackground` (`gfx.pushContext`/`gfx.popContext`); danach
+   `changedCells = {}`, `backgroundDirty = false`.
+3. Cursorbewegung oder ein Malstrich lösen `needsRedraw = true` aus wie
+   bisher; `paintCurrentCell()` trägt die betroffene Zelle zusätzlich in
+   `changedCells` ein.
+4. Der eigentliche Redraw blittet `cachedBackground` (ein Aufruf statt
+   Hunderter Einzel-Draws), übermalt nur die Zellen aus `changedCells`
+   flächig gemäß `gridState`, und zeichnet zuletzt den Cursor.
+5. Editier-/Commit-Logik (`beginStroke`, `collectEdits`, Dedup-Pfad) bleibt
+   vollständig unverändert — nur der Zeichenweg wurde ersetzt.
+
+**Ergebnis:** Cursorbewegung und Malen im Zoom Room reagieren ohne
+wahrnehmbare Verzögerung, auch bei durchgehend gehaltener Richtungstaste
+über mehrere Sekunden (FR-001..FR-004, SC-001/SC-002); objektiv
+nachgewiesen über `playdate.getStats()`/Sampler vor/nach dem Fix
+(quickstart.md Szenario 1).
+
+## 6.14 Szenario: Pixel-Rotation per Crank-Volldrehung (Spec 008, US2, AD-036)
+
+1. Ohne gehaltene B-Taste liest `PixelRoom:update()` pro Aufruf
+   `playdate.getCrankChange()` und summiert es signiert in
+   `rotationAccumDegrees` — analog zu `crankAccumDegrees` in `EditorRoom`
+   (6.3), aber als eigenständiger Zustand innerhalb von `PixelRoom`.
+2. Erreicht `rotationAccumDegrees >= 360`, wird `gridState` per exaktem
+   Index-Remap (`new[r][c] = old[17-c][r]`, 1-indiziert, 16×16) um 90°
+   im Uhrzeigersinn rotiert; der Akkumulator wird um 360 korrigiert (FR-005).
+3. Erreicht `rotationAccumDegrees <= -360`, rotiert die inverse Formel
+   (`new[r][c] = old[c][17-r]`) um 90° gegen den Uhrzeigersinn (FR-006).
+4. Teildrehungen (< 360° netto) und Richtungswechsel vor Erreichen der
+   Schwelle verändern `gridState` NICHT — identisch zum bereits
+   etablierten Verhalten der Frame-Navigation (FR-007).
+5. Mit gehaltener B-Taste bleibt der Pfad UNVERÄNDERT: `getCrankTicks(4)`
+   treibt weiterhin ausschließlich die Zoom-Out-Geste (6.4); pro
+   `update()` wird GENAU EINE der beiden Crank-Lese-APIs aufgerufen, nie
+   beide (analog Contract CR-01, hier PR-01).
+6. Die Rotation wirkt ausschließlich auf das offene `gridState`; erst
+   beim Verlassen des Pixel Room fließt das Ergebnis über den
+   bestehenden `buildTileImage()`/Dedup-Commit-Pfad zurück (FR-008,
+   unverändert gegenüber 6.4).
+
+**Ergebnis:** Eine volle Kurbelumdrehung im Pixel Room dreht das aktuelle
+Tile exakt um 90° ohne Auflösungsverlust; vier Umdrehungen ergeben wieder
+das Ausgangsbild (FR-005..FR-008, SC-003/SC-004).
+
+## 6.15 Szenario: Aktiven Frame per "Clear Screen" leeren (Spec 008, US3, AD-037)
+
+1. Der Nutzer wählt im Systemmenü des Editors den dritten Slot
+   `"clear screen"` (ersetzt vollständig den bisherigen Eintrag
+   `"reset frame"`, AD-032/Spec 006).
+2. `clearCurrentFrame()` setzt jeden der 375 Tile-Indizes des AKTIVEN
+   Frames auf den Basis-Index 1 (Voll-Weiß, `ImageStoreCodec`-Invariante);
+   andere Frames in `imageData.frames` bleiben unverändert.
+3. `updateTilemapFrame()` + `needsRedraw = true` wie bei jeder anderen
+   Frame-Änderung.
+4. `resetCurrentFrameToPrevious()` existiert im Code NICHT mehr (FR-011)
+   — im Unterschied zu `deleteCurrentFrame()` (seit AD-032 bewusst als
+   toter Code belassen) wird diese Funktion vollständig entfernt.
+
+**Ergebnis:** Der aktive Frame ist nach einer einzigen Menü-Auswahl
+vollständig weiß; Frame-Anzahl, -Reihenfolge und alle anderen Frames
+bleiben unangetastet (FR-011..FR-015, SC-006/SC-007).

@@ -153,3 +153,24 @@
 - Entscheidung: Der dritte Systemmenue-Slot wechselt von "delete frame" auf "reset frame" (kopiert den Vorgaenger-Frame elementweise in den aktiven Frame); "show grid" bleibt unveraendert. `deleteCurrentFrame()` bleibt im Code, verliert aber ihren Menue-Aufrufer.
 - Begruendung: Kein freier vierter Menue-Slot, kein kollisionsfreier D-Pad/A/B/Crank-Chord identifiziert (research.md R7); "reset frame" adressiert denselben Fehlerkorrektur-Anwendungsfall wie "delete frame", ohne Frame-Anzahl/-Position zu veraendern.
 - Konsequenz: "delete frame" ist ab Spec 006 nicht mehr ueber das Menue erreichbar; ein Folge-Zugriffsweg waere bei Bedarf separat zu klaeren. Details in [ADR-032](adr/ADR-032-Reset-Frame-statt-Delete-Frame-im-Menue.md).
+
+## 9.23 AD-035: Statischer Hintergrund-Cache statt Vollbild-Neuzeichnung im Zoom Room
+
+- Status: umgesetzt (Spec 008, US1)
+- Entscheidung: `ZoomRoom:drawGrid()` baut den statischen Anteil (Checkerboard, unbearbeitete Zellen im Subpixel-Zustand, Gitterlinien) einmalig in `cachedBackground` (`gfx.pushContext`/`gfx.popContext`) statt bei jeder Interaktion alle 576 Zellen plus ~2400 Gitterlinien neu zu berechnen; Redraw blittet den Cache und uebermalt nur `changedCells`.
+- Begruendung: Code-Review + SDK-Doku (`inside_playdate/Inside Playdate.md`, Profiling-Abschnitt) zeigen, dass die CPU-Zeit fuer die Vielzahl an `sample()`/`drawLine()`-Aufrufen pro Interaktion die Ursache des gemeldeten Ruckelns ist, nicht die Playdate-eigene zeilenweise Display-Diffing (die erst NACH dem Lua-seitigen Zeichnen greift). Der Cache-Ansatz ist im Projekt bereits ueber `buildWorkingImage()` etabliert (Constitution IV/I).
+- Konsequenz: Editier-/Commit-Logik unveraendert; Cache muss bei Kontextwechsel/Grid-Toggle explizit invalidiert werden (`backgroundDirty`). Details in [ADR-035](adr/ADR-035-Zoom-Room-Redraw-Cache.md).
+
+## 9.24 AD-036: Pixel-Rotation via Crank-Volldrehung und exaktem Index-Remap
+
+- Status: umgesetzt (Spec 008, US2)
+- Entscheidung: Crank OHNE gehaltene B-Taste im Pixel Room (bislang wirkungslos) akkumuliert `getCrankChange()` in `rotationAccumDegrees` (analog `crankAccumDegrees`, Spec 006); bei ±360° netto wird `gridState` per direktem 16x16-Tabellen-Remap um 90 Grad rotiert, NICHT ueber `image:rotatedImage()`/`drawRotated()`.
+- Begruendung: Die SDK-Doku warnt explizit vor Performance-Kosten und Dimensions-/Resampling-Eigenheiten der Bildtransformationsfunktionen; da der Editier-Zustand bereits als reine Bool-Tabelle vorliegt, ist ein exakter Index-Remap schneller, verlustfrei und ohne SDK-Aufruf umsetzbar (Constitution I/IV).
+- Konsequenz: Pro `update()` weiterhin genau eine Crank-Lese-API (B+Crank-Zoomkette bleibt bei `getCrankTicks(4)` unangetastet). Details in [ADR-036](adr/ADR-036-Pixel-Rotation-Index-Remap.md).
+
+## 9.25 AD-037: "Clear Screen" ersetzt "Reset Frame" vollstaendig im Systemmenue
+
+- Status: umgesetzt (Spec 008, US3, Projektinhaber-Vorgabe)
+- Entscheidung: Der dritte Systemmenue-Slot wechselt von "reset frame" (AD-032) auf "clear screen" (`clearCurrentFrame()`, setzt alle 375 Tile-Indizes des aktiven Frames auf den Voll-Weiss-Basisindex 1); "save + exit" und "show grid" bleiben unveraendert. Im Unterschied zu AD-032 wird `resetCurrentFrameToPrevious()` VOLLSTAENDIG aus dem Code entfernt statt als toter Code zu verbleiben.
+- Begruendung: Projektinhaber-Vorgabe — die urspruengliche Schutzidee fuer versehentlich bemalte Frames wird bewusst fallengelassen (kein Reset-auf-Vorgaenger mehr); FR-011 fordert explizit vollstaendige Entfernung, nicht nur Entzug des Menue-Zugriffs (Constitution IV — keine Ansammlung toten Codes ohne Grund).
+- Konsequenz: "reset frame" ist an keiner Stelle der Oberflaeche mehr erreichbar; `deleteCurrentFrame()` (seit AD-032 bereits ohne Aufrufer) bleibt unveraendert und ausserhalb des Scopes. Details in [ADR-037](adr/ADR-037-Clear-Screen-ersetzt-Reset-Frame.md).

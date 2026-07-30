@@ -66,6 +66,14 @@ local lastEditedSlotCol = nil
 
 local needsRedraw = true
 
+-- Spec 008 (AD-035): statischer Hintergrund-Cache statt Vollbild-Neuzeichnung
+-- pro Interaktion. cachedBackground enthaelt Checkerboard-Seiten, alle Zellen
+-- im unbearbeiteten Subpixel-Zustand und die Gitterlinien; changedCells
+-- sammelt die seit dem letzten Cache-Aufbau tatsaechlich geaenderten Zellen.
+local cachedBackground = nil
+local changedCells = {}
+local backgroundDirty = true
+
 -- Crank-Akkumulator (analog zu EditorRoom/PixelRoom)
 local ticks = 0
 
@@ -163,72 +171,111 @@ local function drawDashedHLine(x1, x2, y)
     end
 end
 
-local function drawGrid()
+-- Zeichnet genau eine Zelle an ihrer Bildschirmposition: unbearbeitete Zellen
+-- zeigen die echten 2x2-Quellpixel als vier 5x5-Subpixel-Quadranten (R2,
+-- FR-007/009); bearbeitete Zellen bleiben ein flaechiger 10x10-Block (FR-008
+-- - Editier-Ergebnis ist real einheitlich, keine Subpixel-Illusion vortaeuschen).
+-- Wird sowohl beim einmaligen Cache-Aufbau (alle Zellen) als auch beim
+-- Overlay-Redraw (nur changedCells) verwendet (Spec 008, AD-035).
+local function drawCell(r, c)
+    local x = OFFSET_X + (c - 1) * CELL_SIZE
+    local y = OFFSET_Y + (r - 1) * CELL_SIZE
+    local sr, sc = getSlotForCell(r, c)
+    local slot = slots[sr][sc]
+    local base = (slot and not slot.oob) and (slot.editedImage or slot.originalImage) or nil
+
+    if base and gridState[r][c] == baselineGrid[r][c] then
+        local baseRow = (sr - 1) * CELLS_PER_TILE
+        local baseCol = (sc - 1) * CELLS_PER_TILE
+        local px = (c - baseCol - 1) * PX_PER_CELL
+        local py = (r - baseRow - 1) * PX_PER_CELL
+        local quadrants = {
+            { base:sample(px, py), x, y },
+            { base:sample(px + 1, py), x + SUBPIXEL_SIZE, y },
+            { base:sample(px, py + 1), x, y + SUBPIXEL_SIZE },
+            { base:sample(px + 1, py + 1), x + SUBPIXEL_SIZE, y + SUBPIXEL_SIZE }
+        }
+        for _, q in ipairs(quadrants) do
+            gfx.setColor(q[1] == gfx.kColorBlack and gfx.kColorBlack or gfx.kColorWhite)
+            gfx.fillRect(q[2], q[3], SUBPIXEL_SIZE, SUBPIXEL_SIZE)
+        end
+    else
+        gfx.setColor(gridState[r][c] and gfx.kColorBlack or gfx.kColorWhite)
+        gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
+    end
+end
+
+-- Baut den statischen Hintergrund (Checkerboard-Seiten, alle 576 Zellen im
+-- jeweils aktuellen Zustand, Gitterlinien) einmalig in cachedBackground
+-- (Spec 008, AD-035, research.md R1) statt ihn bei jeder Interaktion neu zu
+-- berechnen. Wird nur bei backgroundDirty (Kontextwechsel, neues Tile,
+-- Grid-Toggle) aufgerufen, nicht bei reiner Cursorbewegung/Malstrich.
+local function buildBackgroundCache()
     local totalW = GRID_COLS * CELL_SIZE
     local totalH = GRID_ROWS * CELL_SIZE
+    local canvasW = OFFSET_X + totalW + OFFSET_X
 
-    -- Seitenflächen: Checkerboard wie PixelRoom
-    gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
-    gfx.fillRect(0, 0, OFFSET_X, totalH)
-    gfx.fillRect(OFFSET_X + totalW, 0, OFFSET_X, totalH)
-    gfx.setColor(gfx.kColorBlack)
-
-    -- Zellen zeichnen: unbearbeitete Zellen zeigen die echten 2x2-Quellpixel
-    -- als vier 5x5-Subpixel-Quadranten (R2, FR-007/009); bearbeitete Zellen
-    -- bleiben ein flaechiger 10x10-Block (FR-008 - Editier-Ergebnis ist real
-    -- einheitlich, keine Subpixel-Illusion vortaeuschen).
-    for r = 1, GRID_ROWS do
-        for c = 1, GRID_COLS do
-            local x = OFFSET_X + (c - 1) * CELL_SIZE
-            local y = OFFSET_Y + (r - 1) * CELL_SIZE
-            local sr, sc = getSlotForCell(r, c)
-            local slot = slots[sr][sc]
-            local base = (slot and not slot.oob) and (slot.editedImage or slot.originalImage) or nil
-
-            if base and gridState[r][c] == baselineGrid[r][c] then
-                local baseRow = (sr - 1) * CELLS_PER_TILE
-                local baseCol = (sc - 1) * CELLS_PER_TILE
-                local px = (c - baseCol - 1) * PX_PER_CELL
-                local py = (r - baseRow - 1) * PX_PER_CELL
-                local quadrants = {
-                    { base:sample(px, py), x, y },
-                    { base:sample(px + 1, py), x + SUBPIXEL_SIZE, y },
-                    { base:sample(px, py + 1), x, y + SUBPIXEL_SIZE },
-                    { base:sample(px + 1, py + 1), x + SUBPIXEL_SIZE, y + SUBPIXEL_SIZE }
-                }
-                for _, q in ipairs(quadrants) do
-                    gfx.setColor(q[1] == gfx.kColorBlack and gfx.kColorBlack or gfx.kColorWhite)
-                    gfx.fillRect(q[2], q[3], SUBPIXEL_SIZE, SUBPIXEL_SIZE)
-                end
-            else
-                gfx.setColor(gridState[r][c] and gfx.kColorBlack or gfx.kColorWhite)
-                gfx.fillRect(x, y, CELL_SIZE, CELL_SIZE)
-            end
-        end
+    if not cachedBackground then
+        cachedBackground = gfx.image.new(canvasW, totalH)
     end
 
-    -- Zellgrenzen innerhalb der Tiles: gestrichelt (nur wenn showGridLines)
-    if showGridLines then
+    gfx.pushContext(cachedBackground)
+        gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
+        gfx.fillRect(0, 0, OFFSET_X, totalH)
+        gfx.fillRect(OFFSET_X + totalW, 0, OFFSET_X, totalH)
         gfx.setColor(gfx.kColorBlack)
-        for c = 1, GRID_COLS - 1 do
-            if c % CELLS_PER_TILE ~= 0 then
-                drawDashedVLine(OFFSET_X + c * CELL_SIZE, OFFSET_Y, OFFSET_Y + totalH)
+
+        for r = 1, GRID_ROWS do
+            for c = 1, GRID_COLS do
+                drawCell(r, c)
             end
         end
-        for r = 1, GRID_ROWS - 1 do
-            if r % CELLS_PER_TILE ~= 0 then
-                drawDashedHLine(OFFSET_X, OFFSET_X + totalW, OFFSET_Y + r * CELL_SIZE)
+
+        if showGridLines then
+            gfx.setColor(gfx.kColorBlack)
+            for c = 1, GRID_COLS - 1 do
+                if c % CELLS_PER_TILE ~= 0 then
+                    drawDashedVLine(OFFSET_X + c * CELL_SIZE, OFFSET_Y, OFFSET_Y + totalH)
+                end
+            end
+            for r = 1, GRID_ROWS - 1 do
+                if r % CELLS_PER_TILE ~= 0 then
+                    drawDashedHLine(OFFSET_X, OFFSET_X + totalW, OFFSET_Y + r * CELL_SIZE)
+                end
             end
         end
+
+        gfx.setColor(gfx.kColorBlack)
+        for s = 0, SLOTS do
+            local x = OFFSET_X + s * CELLS_PER_TILE * CELL_SIZE
+            gfx.drawLine(x, OFFSET_Y, x, OFFSET_Y + totalH - 1)
+            local y = OFFSET_Y + s * CELLS_PER_TILE * CELL_SIZE
+            gfx.drawLine(OFFSET_X, y, OFFSET_X + totalW - 1, y)
+        end
+    gfx.popContext()
+
+    changedCells = {}
+    backgroundDirty = false
+end
+
+-- Redraw (Spec 008, AD-035, Contract ZR-01): blittet den Cache (ein Aufruf)
+-- und uebermalt nur tatsaechlich geaenderte Zellen statt das gesamte Raster
+-- neu zu berechnen. Editier-/Commit-Logik bleibt unveraendert (Contract ZR-03).
+local function drawGrid()
+    if backgroundDirty or not cachedBackground then
+        buildBackgroundCache()
     end
 
-    -- Tile-Grenzen: durchgezogen (alle 8 Zellen + Außenrahmen)
-    gfx.setColor(gfx.kColorBlack)
-    for s = 0, SLOTS do
-        local x = OFFSET_X + s * CELLS_PER_TILE * CELL_SIZE
-        gfx.drawLine(x, OFFSET_Y, x, OFFSET_Y + totalH - 1)
-        local y = OFFSET_Y + s * CELLS_PER_TILE * CELL_SIZE
-        gfx.drawLine(OFFSET_X, y, OFFSET_X + totalW - 1, y)
+    cachedBackground:draw(0, 0)
+
+    -- WICHTIG: changedCells NICHT hier leeren - der Cache selbst kennt diese
+    -- Aenderungen nicht (nur ein voller Rebuild in buildBackgroundCache()
+    -- uebernimmt sie dauerhaft). Wuerde die Liste hier geleert, wuerde die
+    -- Zelle beim naechsten Redraw wieder auf den (veralteten) Cache-Stand
+    -- zurueckfallen - genau der zuvor beobachtete Bug (Malstrich verschwindet
+    -- bei der naechsten Cursorbewegung).
+    for _, cell in ipairs(changedCells) do
+        drawCell(cell.row, cell.col)
     end
 
     -- Cursor
@@ -287,8 +334,20 @@ end
 -- Bewegungen mit gehaltenem A malen denselben Wert weiter.
 local strokeValue = nil  -- true/false = Malwert des laufenden Strichs, nil = kein Strich
 
+-- Traegt eine Zelle in changedCells ein, falls noch nicht enthalten (Spec 008,
+-- data-model.md Abschnitt 1) - Grundlage fuer den Overlay-Redraw in drawGrid().
+local function markCellChanged(row, col)
+    for _, cell in ipairs(changedCells) do
+        if cell.row == row and cell.col == col then
+            return
+        end
+    end
+    table.insert(changedCells, { row = row, col = col })
+end
+
 local function paintCurrentCell(value)
     gridState[cursorRow][cursorCol] = value
+    markCellChanged(cursorRow, cursorCol)
     needsRedraw = true
 end
 
@@ -431,6 +490,7 @@ function ZoomRoom:setFromEditorContext(ctx)
     lastEditedSlotCol = nil
     ticks = 0
     needsRedraw = true
+    backgroundDirty = true -- Spec 008 (AD-035): neuer Kontext invalidiert den Cache
 end
 
 -- Empfängt ein bearbeitetes Tile von PixelRoom (Standardpfad: Dedup beim Commit).
@@ -440,6 +500,7 @@ function ZoomRoom:setNewTile(tile)
         decodeImageIntoGrids(tile, lastEditedSlotRow, lastEditedSlotCol)
     end
     needsRedraw = true
+    backgroundDirty = true -- Spec 008 (AD-035): Quellbild des Slots hat sich geaendert
 end
 
 -- "All Similar" (FR-015, FR-013-Ausnahme): überschreibt das Tile in-place in der
@@ -473,6 +534,7 @@ function ZoomRoom:updateExistingTile(tile, tileIndex)
         end
     end
     needsRedraw = true
+    backgroundDirty = true -- Spec 008 (AD-035): ein oder mehrere Slot-Quellbilder haben sich geaendert
 end
 
 -- Terminate-Hook (Contract E-03): ausstehende Änderungen ohne Room-Wechsel committen.
@@ -490,6 +552,7 @@ function ZoomRoom:entered()
     endStroke()
     ticks = 0
     needsRedraw = true
+    backgroundDirty = true -- Spec 008 (AD-035): defensiv, setFromEditorContext() setzt es bereits
     playdate.getSystemMenu():removeAllMenuItems()
 end
 

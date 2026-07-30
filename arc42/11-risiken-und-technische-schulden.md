@@ -13,6 +13,8 @@
 | R-14 | Verlust der Pulp-Interoperabilitaet durch Formatwechsel | Alte Saves und Importer-Tool sind mit v0.3.0 nicht nutzbar | Bewusst akzeptiert (Nicht-Ziel Migration); alte Dateien werden ignoriert, nicht geloescht; Importer-Anpassung als spaeteres Vorhaben |
 | R-21 | Titelscreen-Lazy-Load-Ueberlappung bei schnellem Selektionswechsel (Spec 006, US6): mehrere aufeinanderfolgende RoomOperation-Ladevorgaenge fuer verschiedene Eintraege koennten sich theoretisch ueberschneiden | Falscher/veralteter Vollbild-Hintergrund koennte kurzzeitig sichtbar werden | Mitigiert: `SelectionRoom:setSelectedIndex()` verwirft einen laufenden Ladevorgang fuer den VERLASSENEN Eintrag durch reines Ueberschreiben der Referenz (nie wieder resumed, kein Seiteneffekt); headless-testverifiziert (T022 — Selektionswechsel vor Abschluss laedt nachweislich nur den neuen Eintrag) |
 | R-22 | Crank-Dual-Path-Regression (Spec 006, US2): `getCrankChange()`-Akkumulator (Frame-Navigation) und `getCrankTicks(4)`-Zoomkette duerfen sich pro `update()` nicht gegenseitig den Kurbel-Zustand "wegkonsumieren" | Wuerden beide APIs im selben Frame gelesen, gingen Grad-/Tick-Anteile verloren — Frame-Navigation ODER Zoomkette koennten unzuverlaessig werden | Mitigiert: `handleCrank()` verzweigt exklusiv zwischen beiden Lesepfaden (Contract CR-01, nie beide im selben Aufruf); Regressionstest fuer die B+Crank-Zoomkette im selben Testlauf wie der neue Akkumulator (T005) |
+| R-23 | Zoom-Room-Ursachenbefund unbestaetigt (Spec 008, AD-035): Code-Review stuft die Vollbild-Neuberechnung als wahrscheinliche Ursache sowohl des Ruckelns als auch der vermuteten "tieferliegenden" Navigationsblockade ein, ohne einen isolierten separaten Bug gefunden zu haben | Sollte nach dem Redraw-Cache-Fix weiterhin eine Blockade auftreten, waere die eigentliche Ursache noch offen | Objektiver Hardware-Nachweis vor Abschluss (`playdate.getStats()`/Sampler, quickstart.md Szenario 1); verbleibende Blockade nach dem Fix waere ein Follow-up ausserhalb dieser Spec |
+| R-24 | Wegfall der Frame-Schutzfunktion (Spec 008, AD-037): "Reset Frame" wird ersatzlos durch "Clear Screen" ersetzt, ohne Schutz vor versehentlichem Bemalen eines Frames | Versehentlich bemalte Frames koennen nicht mehr auf den Vorgaengerstand zurueckgesetzt werden | Bewusst akzeptierte Projektinhaber-Entscheidung (spec.md Assumptions); keine Gegenmassnahme vorgesehen |
 
 ## 11.2 Technische Schulden
 
@@ -32,6 +34,7 @@
 - R-01 (Tile-Remapping bei Kompaktierung), T-04 (Grid-Harmonisierung GameRoom/LoadRoom), T-05 (Kompatibilitaetstests fuer Pulp-Dokumente), T-08 (Importer-Regressionstests): gegenstandslos, da Kompaktierung, LoadRoom/GameRoom und der Pulp-Speicherpfad entfernt wurden; der Importer ist eingefroren.
 - T-10 (unverdrahtetes GameRoom.lua): erledigt — Datei im v0.3.0-Umsetzungsschnitt entfernt (Konvergenz-Task T039).
 - R-12 (JSON-Positionsablage zu gross/langsam): geklaert in Spec 001 — frames.json mit 375 Indizes je Frame ist umgesetzt; Groessen-/Ladezeitbeobachtung laeuft unter R-13 weiter.
+- Toter Code `resetCurrentFrameToPrevious()` (Spec 008, AD-037): vollstaendig entfernt statt — wie `deleteCurrentFrame()` seit AD-032 — als unbenutzte Funktion im Code zu verbleiben; FR-011 forderte explizit vollstaendige Entfernung (Constitution IV).
 
 Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die Playdate-Hardware ist 400x240, "420x240" war ein Versprecher (siehe AD-016).
 
@@ -41,6 +44,7 @@ Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die P
 - Mittelfristig: R-03, R-08, T-02
 - Langfristig: T-03, T-01, T-06, R-14
 - Mitigiert (Spec 006): R-21 (Titelscreen-Lazy-Load-Ueberlappung, verwirft alte Ladevorgaenge), R-22 (Crank-Dual-Path-Regression, exklusive API-Verzweigung) — beide headless-testverifiziert, keine offenen Massnahmen
+- **Offen (Spec 008)**: R-23 (Zoom-Room-Ursachenbefund) — Implementierung (Redraw-Cache, AD-035) und Headless-Tests sind abgeschlossen und gruen, der ABSCHLIESSENDE objektive Hardware-Nachweis (`playdate.getStats()`/Sampler, quickstart.md Szenario 1) steht noch aus (erfordert echtes Playdate-Geraet, ausserhalb der Moeglichkeiten dieses Implementierungslaufs); Owner: Entwickler, Re-Evaluierungs-Trigger: Abschluss von T005/T019. — Akzeptiert (Spec 008): R-24 (Wegfall der Frame-Schutzfunktion, bewusste Projektinhaber-Entscheidung)
 
 ---
 

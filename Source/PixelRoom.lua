@@ -38,6 +38,11 @@ local directionHold = {
 
 local ticks = 0
 
+-- Spec 008 (AD-036): signierter Grad-Akkumulator fuer die Pixel-Rotation,
+-- analog zu crankAccumDegrees in EditorRoom.lua (Spec 006). Crank ohne
+-- gehaltene B-Taste war hier bislang wirkungslos - freier Eingabekanal.
+local rotationAccumDegrees = 0
+
 -- Das 16×16-Malraster ist ein SDK-Gridview; Selektion = Malcursor
 -- (SDK: playdate.ui.gridview aus CoreLibs/ui)
 local gridView = playdate.ui.gridview.new(CELL_SIZE, CELL_SIZE)
@@ -72,6 +77,7 @@ end
 
 function PixelRoom:setCurrentTile(tile, tileIndex)
     currentTileIndex = tileIndex
+    rotationAccumDegrees = 0 -- Spec 008: kein Uebertrag zwischen Bearbeitungssitzungen
     for y = 1, GRID_ROWS do
         gridState[y] = {}
         for x = 1, GRID_COLS do
@@ -79,6 +85,35 @@ function PixelRoom:setCurrentTile(tile, tileIndex)
             gridState[y][x] = color == gfx.kColorBlack
         end
     end
+end
+
+-- Spec 008 (AD-036, FR-005/FR-006): exakter Index-Remap auf dem 16x16-
+-- Bool-Raster - kein SDK-Bildtransform (image:rotatedImage()/drawRotated()
+-- sind laut SDK-Doku "quite slow" und potenziell dimensions-/resampling-
+-- behaftet, research.md R3). Neue Tabelle aufbauen statt In-Place-Remap, da
+-- sich Lese- und Schreibposition sonst ueberlappen wuerden.
+local function rotateGridClockwise()
+    local newGrid = {}
+    for r = 1, GRID_ROWS do
+        newGrid[r] = {}
+        for c = 1, GRID_COLS do
+            newGrid[r][c] = gridState[GRID_ROWS + 1 - c][r]
+        end
+    end
+    gridState = newGrid
+    needsRedraw = true
+end
+
+local function rotateGridCounterClockwise()
+    local newGrid = {}
+    for r = 1, GRID_ROWS do
+        newGrid[r] = {}
+        for c = 1, GRID_COLS do
+            newGrid[r][c] = gridState[c][GRID_ROWS + 1 - r]
+        end
+    end
+    gridState = newGrid
+    needsRedraw = true
 end
 
 -- Pencil-Strich: Der A-Druck bestimmt den Malwert des ganzen Strichs —
@@ -222,11 +257,16 @@ end
 function PixelRoom:update()
     processDirectionHold()
 
-    -- Ticks in jedem Update lesen (stateful), ohne B verwerfen —
-    -- sonst entlaedt sich aufgestauter Zaehler beim ersten B-Frame.
-    local crankTicks = playdate.getCrankTicks(4) or 0
+    -- Spec 008 (AD-036, Contract PR-01): pro update() wird GENAU EINE
+    -- Crank-Lese-API verwendet - analog zu EditorRoom:handleCrank() (Spec
+    -- 006 CR-01). Bei gehaltener B-Taste bleibt getCrankTicks(4) fuer die
+    -- Zoom-Out-Geste zustaendig (unveraendert); ohne B treibt getCrankChange()
+    -- den neuen Rotations-Akkumulator - beide Lesepfade duerfen nie im
+    -- selben Frame gemeinsam aufgerufen werden, sonst gehen Grad-/Tick-
+    -- Anteile verloren (research.md R2 Detailhinweis).
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
     if bHeld then
+        local crankTicks = playdate.getCrankTicks(4) or 0
         -- Standard-Lua statt pdc-Kurzform "+=" (haelt die Datei headless testbar)
         ticks = ticks + crankTicks
         if ticks <= -4 then
@@ -241,6 +281,15 @@ function PixelRoom:update()
         end
     else
         ticks = 0
+        local change = playdate.getCrankChange() or 0
+        rotationAccumDegrees = rotationAccumDegrees + change
+        if rotationAccumDegrees >= 360 then
+            rotationAccumDegrees = rotationAccumDegrees - 360
+            rotateGridClockwise()
+        elseif rotationAccumDegrees <= -360 then
+            rotationAccumDegrees = rotationAccumDegrees + 360
+            rotateGridCounterClockwise()
+        end
     end
 
     if needsRedraw then
@@ -259,6 +308,7 @@ function PixelRoom:entered()
     clearDirectionHold()
     endStroke()
     ticks = 0
+    rotationAccumDegrees = 0 -- Spec 008: defensiv, setCurrentTile() setzt es bereits zurueck
     needsRedraw = true
     -- System-Menü: Checkbox "All Similar" + "Invert"
     local menu = playdate.getSystemMenu()

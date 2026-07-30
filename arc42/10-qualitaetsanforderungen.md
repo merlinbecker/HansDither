@@ -122,3 +122,17 @@
 - **Stimulus:** GET /download/* mit Token von Nutzer A, aber Image-ID von Nutzer B
 - **Reaktion:** Zugriff wird verweigert mit HTTP 401
 - **Metrik:** 100% der berechtigungslosen Zugriffe werden abgelehnt (SC-005)
+
+## 10.4 Ergaenzende Qualitaetsszenarien (Spec 008)
+
+### QS-19 Zoom-Room-Reaktionsfaehigkeit
+- Kontext: Zoom Room mit aktiver Cursorbewegung (auch gehaltene Richtungstaste) und Malstrichen.
+- Stimulus: kontinuierliche D-Pad-/A-Eingaben ueber mehrere Sekunden.
+- Reaktion: Redraw beschraenkt sich auf Hintergrund-Blit + geaenderte Zellen statt Vollbild-Neuberechnung (AD-035); keine wahrnehmbare Verzoegerung, kein Haengenbleiben.
+- Metrik: Verhalten auf echter Hardware gleichwertig zum Tile-Editor (SC-001/SC-002); objektiv nachgewiesener Rueckgang der Game-CPU-Zeit via `playdate.getStats()`/Sampler gegenueber dem Vorher-Zustand.
+
+### QS-20 Pixel-Rotations-Exaktheit
+- Kontext: Pixel Room mit gezeichnetem Muster.
+- Stimulus: volle Kurbelumdrehung (vorwaerts oder rueckwaerts, ohne B).
+- Reaktion: `gridState` wird per exaktem Index-Remap um 90 Grad rotiert (AD-036); keine Zwischen-Rotation bei Teildrehungen.
+- Metrik: Vier aufeinanderfolgende volle Vorwaertsdrehungen ergeben wieder exakt das Ausgangsbild, 0 Pixelverlust (SC-003/SC-004).

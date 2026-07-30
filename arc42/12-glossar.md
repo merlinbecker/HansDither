@@ -24,8 +24,10 @@
 | GridView | UI-Komponente fuer Rasternavigation und Zellrendering (SelectionRoom, PixelRoom). |
 | RoomOperation | Coroutine-Orchestrierung fuer room-lokale Langlaeufer inkl. loadingBar-Lifecycle. |
 | save + exit | Systemmenue-Aktion des Editors: automatisches Speichern und Rueckkehr zum SelectionRoom (Verlassen ohne Speichern existiert nicht). |
-| reset frame | Systemmenue-Aktion des Editors (Spec 006, AD-032, ersetzt "delete frame"): kopiert den Inhalt des unmittelbar vorhergehenden Frames elementweise in den aktiven Frame; auf Frame 1 (kein Vorgaenger) wirkungslos. |
+| clear screen | Systemmenue-Aktion des Editors (Spec 008, AD-037, ersetzt "reset frame" vollstaendig): setzt alle 375 Tile-Indizes des aktiven Frames auf den Voll-Weiss-Basisindex; andere Frames bleiben unveraendert. |
 | Kontext-/Pause-Ansicht | Erweiterung des nativen System-Pause-Menues (Spec 006, AD-031): ein via `playdate.setMenuImage()`/`gameWillPause()` erzeugtes Bild zeigt zusaetzlich zu Volume/Home/Screenshot eine Tile-Uebersicht (bis zu 120 Vorschauen im 12x10-Raster) sowie Gesamt-Tile-Anzahl und Frame-Anzahl des aktuell geoeffneten Bildes. |
+| Zoom-Room-Hintergrund-Cache | Einmalig aufgebautes Offscreen-Bild (Spec 008, AD-035) mit dem statischen Anteil des Zoom-Room-Rasters (Checkerboard, unbearbeitete Zellen, Gitterlinien); ersetzt die vorherige Vollbild-Neuzeichnung pro Interaktion durch einen Blit plus wenige geaenderte Zellen. |
+| Pixel-Rotation | Funktion des Pixel Room (Spec 008, AD-036): eine volle Kurbelumdrehung ohne gehaltene B-Taste dreht das aktuelle 16x16-Tile per exaktem Index-Remap um 90 Grad (vorwaerts im Uhrzeigersinn, rueckwaerts gegen den Uhrzeigersinn). |
 | Preview | Gespeichertes Vorschaubild eines Bildes (preview.pdi), gerendert aus Frame 1. |
 
 ## Historische Begriffe (Pulp-Aera, bis v0.2)

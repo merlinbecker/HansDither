@@ -191,8 +191,8 @@ local function tickBackward()
 end
 
 -- FR-008a: aktiven Frame löschen, Nachrücker aktiv; letzter Frame gesperrt.
--- Bleibt im Code (Spec 006 AD-032), verliert aber ihren Menü-Aufrufer an
--- resetCurrentFrameToPrevious() unten.
+-- Bleibt im Code (Spec 006 AD-032), hat aber seit AD-032 keinen Menü-
+-- Aufrufer mehr (ersetzt durch clearCurrentFrame() unten, Spec 008/AD-037).
 local function deleteCurrentFrame()
     if inputBlocked() then return end
     local frames = imageData.frames
@@ -205,15 +205,17 @@ local function deleteCurrentFrame()
     needsRedraw = true
 end
 
--- Spec 006 FR-014/FR-015, R7: kopiert den Vorgänger-Frame elementweise in den
--- aktuellen Frame; no-op auf Frame 1 (kein Vorgänger, FR-015).
-local function resetCurrentFrameToPrevious()
+-- Spec 008 (AD-037, FR-011/012/013/015): ersetzt "reset frame" (Spec 006/
+-- AD-032) VOLLSTAENDIG - setzt jeden der 375 Tile-Indizes des aktiven
+-- Frames auf den Basis-Index 1 (Voll-Weiss, ImageStoreCodec-Invariante);
+-- andere Frames bleiben unberuehrt. Im Unterschied zu deleteCurrentFrame()
+-- oben (AD-032) bleibt resetCurrentFrameToPrevious() NICHT als toter Code
+-- erhalten - FR-011 fordert die vollstaendige Entfernung der Funktion.
+local function clearCurrentFrame()
     if inputBlocked() then return end
-    if currentFrame == 1 then return end
-    local previous = imageData.frames[currentFrame - 1]
     local current = imageData.frames[currentFrame]
-    for i = 1, #previous do
-        current[i] = previous[i]
+    for i = 1, #current do
+        current[i] = 1
     end
     updateTilemapFrame()
     needsRedraw = true
@@ -353,16 +355,16 @@ end
 
 -- ── Systemmenü (research.md R6: genau 3 Slots) ────────────────────────────────
 
--- Spec 006 AD-032/CR-08: "delete frame" durch "reset frame" ersetzt (kein
--- freier vierter Slot, siehe research.md R7) — "show grid" unveraendert.
+-- Spec 008 AD-037/EM-01: "reset frame" durch "clear screen" ersetzt (kein
+-- freier vierter Slot, wie schon bei AD-032) — "show grid" unveraendert.
 local function buildSystemMenu()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
     menu:addMenuItem("save + exit", function()
         handleSaveAndExit()
     end)
-    menu:addMenuItem("reset frame", function()
-        resetCurrentFrameToPrevious()
+    menu:addMenuItem("clear screen", function()
+        clearCurrentFrame()
     end)
     menu:addCheckmarkMenuItem("show grid", showGrid, function(checked)
         showGrid = checked

@@ -238,10 +238,10 @@ playdate = {
             return { remove = noop }
         end,
     },
-    -- Spec 006: registrierte Menü-Labels + Callbacks beobachtbar
-    -- (mockMenuItemLabels/mockMenuItemCallbacks), damit T013 pruefen kann,
-    -- dass "reset frame" da ist, "delete frame" nicht mehr (AD-032), UND den
-    -- Menüpunkt wie eine echte Auswahl ausloesen kann
+    -- Spec 006/008: registrierte Menü-Labels + Callbacks beobachtbar
+    -- (mockMenuItemLabels/mockMenuItemCallbacks), damit Tests pruefen koennen,
+    -- welche Menüpunkte vorhanden/entfernt sind (z.B. "clear screen" statt
+    -- "reset frame", AD-037) UND den Menüpunkt wie eine echte Auswahl ausloesen
     getSystemMenu = function()
         return strictTable("systemMenu", {
             removeAllMenuItems = function(self)
@@ -923,6 +923,75 @@ check(receivedTile ~= nil, "commit liefert ein Tile-Bild")
 check(receivedTile.pixels["8,8"] == true, "Pixel (9,9) ist schwarz gemalt")
 check(receivedTile.pixels["9,8"] == nil, "Pixel (10,9) wurde vom 2. Strich radiert")
 
+-- ── PixelRoom: Rotation per Crank-Volldrehung (Spec 008 US2, AD-036) ────────
+
+section("PixelRoom: volle Kurbelumdrehung rotiert das Tile exakt um 90 Grad")
+
+local rotatedReceivedTile = nil
+local zoomMock2 = {
+    setNewTile = function(self, t) rotatedReceivedTile = t end,
+    updateExistingTile = function(self, t) rotatedReceivedTile = t end,
+}
+PixelRoom:init(noop, zoomMock2)
+
+-- Asymmetrisches Testmuster: genau ein schwarzes Pixel oben links (0,0)
+local cornerTile = newMockImage(16, 16, "white")
+cornerTile.pixels["0,0"] = true
+PixelRoom:setCurrentTile(cornerTile, 1)
+PixelRoom:entered()
+
+heldButtons[playdate.kButtonB] = false
+crankChangeValue = 0
+crankTicksValue = 0
+
+-- Teildrehung (270 Grad) darf noch keine Rotation ausloesen (FR-007)
+crankChangeValue = 270
+PixelRoom:update()
+crankChangeValue = 0
+PixelRoom:commitForTerminate()
+check(rotatedReceivedTile.pixels["0,0"] == true, "270 Grad (Teildrehung): Bild unveraendert (FR-007)")
+
+-- Weitere 90 Grad (360 gesamt) -> genau eine 90-Grad-Drehung im Uhrzeigersinn
+crankChangeValue = 90
+PixelRoom:update()
+crankChangeValue = 0
+PixelRoom:commitForTerminate()
+check(rotatedReceivedTile.pixels["15,0"] == true, "Volle Umdrehung vorwaerts: oben-links wandert nach oben-rechts (FR-005)")
+check(rotatedReceivedTile.pixels["0,0"] == nil, "Urspruengliche Position ist nicht mehr schwarz")
+
+-- Drei weitere volle Umdrehungen vorwaerts (insgesamt 4 seit Start) ergeben
+-- wieder exakt das Ausgangsbild (Rundlauf ueber 360 Grad, SC-004)
+for i = 1, 3 do
+    crankChangeValue = 360
+    PixelRoom:update()
+    crankChangeValue = 0
+end
+PixelRoom:commitForTerminate()
+check(rotatedReceivedTile.pixels["0,0"] == true, "Vier volle Umdrehungen vorwaerts: wieder exakt das Ausgangsbild (SC-004)")
+
+-- Volle Rueckwaertsdrehung rotiert symmetrisch gegen den Uhrzeigersinn (FR-006)
+crankChangeValue = -360
+PixelRoom:update()
+crankChangeValue = 0
+PixelRoom:commitForTerminate()
+check(rotatedReceivedTile.pixels["0,15"] == true, "Volle Rueckwaertsdrehung: oben-links wandert nach unten-links (FR-006)")
+
+crankChangeValue = 0
+crankTicksValue = 0
+
+-- Regressionsschutz: B+Crank-Zoomkette bleibt unveraendert funktionsfaehig
+-- (Contract PR-01 - pro update() genau eine Crank-Lese-API)
+local switchedTo = nil
+PixelRoom:init(function(room) switchedTo = room end, zoomMock2)
+PixelRoom:setCurrentTile(cornerTile, 1)
+PixelRoom:entered()
+heldButtons[playdate.kButtonB] = true
+crankTicksValue = -4
+PixelRoom:update()
+check(switchedTo == zoomMock2, "B+Crank (-4 Ticks): Zoom-Out weiterhin ausgeloest (Contract PR-01 Regressionsschutz)")
+crankTicksValue = 0
+heldButtons[playdate.kButtonB] = false
+
 -- ── ZoomRoom: Subpixel-Rendering unbearbeiteter Zellen (Spec 006 US1, R2) ────
 
 section("ZoomRoom: unbearbeitete Zelle zeigt vier echte Subpixel-Werte")
@@ -986,6 +1055,55 @@ ZoomRoom:update()
 
 check(fillColorAt(190, 110, 5, 5) == nil, "Nach Bearbeitung: keine 5x5-Subpixel-Fills mehr an der Zelle")
 check(fillColorAt(190, 110, 10, 10) ~= nil, "Nach Bearbeitung: Zelle ist ein einzelner 10x10-Block")
+
+-- ── ZoomRoom: Hintergrund-Cache statt Vollbild-Neuzeichnung (Spec 008 US1, AD-035) ──
+
+section("ZoomRoom: Redraw-Cache invalidiert sich nur bei Kontextwechsel, nicht bei Cursorbewegung")
+
+local zoomHandler2 = ZoomRoom:inputHandler()
+
+-- Sauberer Ausgangszustand: frischer Kontextwechsel setzt gridState komplett
+-- zurueck (kein Uebertrag der Bearbeitung aus der vorherigen Testsektion)
+-- und erzwingt einen vollen Cache-Rebuild.
+ZoomRoom:setFromEditorContext({ slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} })
+mockScreenFillCalls = {}
+ZoomRoom:update()
+
+-- Reine Cursorbewegung ohne Malen darf KEINE einzige Zell-Neuzeichnung
+-- ausloesen - der Cache wurde gerade eben frisch gebaut, nichts ist editiert.
+mockScreenFillCalls = {}
+zoomHandler2.rightButtonDown()
+zoomHandler2.rightButtonUp()
+ZoomRoom:update()
+check(#mockScreenFillCalls == 0, "Reine Cursorbewegung ohne jede Bearbeitung loest keine einzige Zell-Neuzeichnung aus (FR-002/003)")
+
+-- Ein Malstrich redrawt genau die eine betroffene Zelle (changedCells-Overlay,
+-- FR-002) statt das gesamte 24x24-Raster neu zu berechnen.
+mockScreenFillCalls = {}
+zoomHandler2.AButtonDown()
+zoomHandler2.AButtonUp()
+ZoomRoom:update()
+check(#mockScreenFillCalls == 1, "Malstrich loest genau EINEN Fill-Aufruf aus - nur die geaenderte Zelle, nicht das gesamte Raster (AD-035)")
+
+-- Regressionstest fuer den gemeldeten Bug: ein WEITERER Redraw OHNE neues
+-- Malen (z.B. reine Cursorbewegung) darf die bereits gemalte Zelle NICHT
+-- wieder auf den (veralteten) Cache-Stand zurueckfallen lassen. Vorher wurde
+-- changedCells faelschlich nach JEDEM Redraw geleert, obwohl der Cache selbst
+-- die Aenderung nie erfahren hat - die Zelle verschwand beim naechsten
+-- Redraw wieder, bis man den Zoom Room verliess und neu betrat.
+mockScreenFillCalls = {}
+zoomHandler2.leftButtonDown()
+zoomHandler2.leftButtonUp()
+ZoomRoom:update()
+check(fillColorAt(200, 110, 10, 10) ~= nil, "Bereits gemalte Zelle bleibt auch bei einem SPAETEREN Redraw ohne neues Malen sichtbar (Bugfix Redraw-Cache)")
+check(fillColorAt(200, 110, 5, 5) == nil, "...und faellt dabei nicht zurueck in die unbearbeitete Subpixel-Darstellung")
+
+-- setNewTile() (Rueckkehr aus dem PixelRoom) MUSS den Cache invalidieren -
+-- der naechste Redraw baut wieder das volle Raster (>100 statt 1 Fill-Aufruf).
+mockScreenFillCalls = {}
+ZoomRoom:setNewTile(newMockImage(16, 16, "white"))
+ZoomRoom:update()
+check(#mockScreenFillCalls > 100, "setNewTile() invalidiert den Hintergrund-Cache und erzwingt einen vollstaendigen Neuaufbau (Contract ZR-02)")
 
 -- ── EditorRoom: Setup-Helfer (Spec 006 US2-US5) ──────────────────────────────
 
@@ -1109,36 +1227,47 @@ EditorRoom:update()
 check(bandFillEntry() ~= nil, "B-Druck ALLEIN (kein Release, keine Kurbel) zaehlt bereits als Aktivitaet (CR-02)")
 editorHandler.BButtonUp()
 
--- ── US4: "Reset Frame" (T013, research.md R7, AD-032, CR-08) ────────────────
+-- ── US3 (Spec 008): "Clear Screen" ersetzt "Reset Frame" (T014, AD-037, EM-01..03) ──
 
-section("EditorRoom: 'Reset Frame' kopiert Vorgaenger-Frame; Menue zeigt 'reset frame' statt 'delete frame' (Spec 006 US4)")
-loadEditorImageForTest("resetTest", { makeFrame(1), makeFrame(2) }, 2, "reset-test")
+section("EditorRoom: 'Clear Screen' leert den aktiven Frame vollstaendig; Menue zeigt 'clear screen' statt 'reset frame'")
+loadEditorImageForTest("clearTest", { makeFrame(5), makeFrame(9) }, 10, "clear-test")
 
-local hasReset, hasDelete = false, false
+local hasClear, hasReset = false, false
 for _, label in ipairs(mockMenuItemLabels) do
+    if label == "clear screen" then hasClear = true end
     if label == "reset frame" then hasReset = true end
-    if label == "delete frame" then hasDelete = true end
 end
-check(hasReset, "Systemmenue enthaelt 'reset frame' (CR-08)")
-check(not hasDelete, "Systemmenue enthaelt NICHT mehr 'delete frame' (AD-032)")
+check(hasClear, "Systemmenue enthaelt 'clear screen' (EM-01)")
+check(not hasReset, "Systemmenue enthaelt NICHT mehr 'reset frame' (AD-037, FR-011)")
 
--- Zu Frame 2 wechseln (Vorbedingung: current != previous, damit der Reset
--- sichtbar etwas aendert)
+-- Zu Frame 2 wechseln (Vorbedingung: gefuellt mit Tile-Index 9, nicht 1)
 crankChangeValue = 360
 EditorRoom:update()
 crankChangeValue = 0
-check(mockLastTilemap.lastFrame[1] == 2, "Vorbedingung: Frame 2 aktiv, unterscheidet sich von Frame 1")
+check(mockLastTilemap.lastFrame[1] == 9, "Vorbedingung: Frame 2 aktiv, gefuellt mit Tile-Index 9")
 
-mockMenuItemCallbacks["reset frame"]()
-check(mockLastTilemap.lastFrame[1] == 1, "'reset frame' kopiert Frame 1 (Vorgaenger) elementweise nach Frame 2 (FR-014)")
+mockMenuItemCallbacks["clear screen"]()
+local frames = EditorRoom:getImageData().frames
+local frame2AllWhite = true
+for i = 1, #frames[2] do
+    if frames[2][i] ~= 1 then frame2AllWhite = false end
+end
+check(frame2AllWhite, "'clear screen' setzt alle 375 Indizes des aktiven Frames auf Basis-Index 1 (Voll-Weiss, FR-012)")
+check(mockLastTilemap.lastFrame[1] == 1, "Tilemap zeigt den geleerten Frame sofort an")
 
--- No-op auf Frame 1 (kein Vorgaenger, FR-015)
-crankChangeValue = -360
-EditorRoom:update()
-crankChangeValue = 0
-check(mockLastTilemap.lastFrame[1] == 1, "Vorbedingung: zurueck auf Frame 1")
-mockMenuItemCallbacks["reset frame"]()
-check(mockLastTilemap.lastFrame[1] == 1, "'reset frame' auf Frame 1 ist wirkungslos (FR-015, kein Vorgaenger)")
+local frame1Untouched = true
+for i = 1, #frames[1] do
+    if frames[1][i] ~= 5 then frame1Untouched = false end
+end
+check(frame1Untouched, "Anderer Frame (Frame 1) bleibt unveraendert (FR-013)")
+
+-- Idempotenz: erneutes 'clear screen' auf bereits leerem Frame aendert nichts
+mockMenuItemCallbacks["clear screen"]()
+local stillAllWhite = true
+for i = 1, #frames[2] do
+    if frames[2][i] ~= 1 then stillAllWhite = false end
+end
+check(stillAllWhite, "'clear screen' auf bereits leerem Frame ist idempotent (kein Fehler, keine Aenderung)")
 
 -- ── US5: Kontext-/Pause-Ansicht (T017, research.md R4, CR-06/CR-07) ─────────
 
