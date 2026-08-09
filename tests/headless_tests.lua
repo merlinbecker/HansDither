@@ -421,6 +421,9 @@ playdate.datastore = strictTable("datastore", {
     read = function(filename) return datastoreFiles[filename] end,
     delete = function(filename) datastoreFiles[filename] = nil end,
     readImage = function(filename) return datastoreImages[filename] end,
+    -- Spec 009: Gegenstueck zu readImage, noetig um newSaveOperation() bis
+    -- zum Ende durchzutreiben (Phase "Bilddaten" schreibt sheet.pdi)
+    writeImage = function(img, filename) datastoreImages[filename] = img end,
 })
 
 -- ── Spec 004: Datei-Mock (playdate.file) für rohes Bild-Lesen (T017) ─────────
@@ -450,6 +453,11 @@ playdate.file = strictTable("file", {
             close = noop,
         })
     end,
+    -- Spec 009: ImageStoreCodec.newSaveOperation() legt den saves/<id>-Ordner
+    -- an, bevor frames.json geschrieben wird — reicht als No-op, da die
+    -- Mock-Backing-Stores (datastoreFiles/datastoreImages) keine echte
+    -- Verzeichnisstruktur kennen
+    mkdir = noop,
 })
 
 -- ── ImageStore-Mock: steuerbarer Bild-Bestand ────────────────────────────────
@@ -472,6 +480,11 @@ ImageStore = strictTable("ImageStore", {
     end,
     isIdTaken = function() return false end,
     sanitizeName = function(name) return string.lower(name or "") end,
+    -- Spec 009: ImageStoreCodec.updateIndexAfterSave() (letzte Phase von
+    -- newSaveOperation()) braucht beide Methoden, um den vollstaendigen
+    -- Save-Coroutine-Durchlauf zu ermoeglichen
+    getIndex = function() return { images = {} } end,
+    writeIndex = noop,
 })
 
 dofile("Source/Bauchbinde.lua")     -- Namenszeile des SelectionRoom
@@ -885,6 +898,106 @@ local it2 = ImageStoreCodec.sliceSheetToImagetable(tinySheet, 5)
 check(it2:getImage(2) ~= nil and it2:getImage(2):sample(0, 0) == "black",
     "Basistile Schwarz auch bei zu kleinem Sheet")
 check(it2:getImage(5) ~= nil, "Luecken werden mit Weiss-Tiles gefuellt")
+
+section("ImageStoreCodec: Tile-Bereinigung beim Speichern (Spec 009, FR-001..004)")
+
+-- Baut eine Mock-Imagetable mit n unterscheidbaren Tiles — jedes Tile
+-- traegt einen eigenen "Fingerabdruck" (tag), damit sich nach dem Remap
+-- pruefen laesst, ob wirklich derselbe Inhalt an der neuen Position liegt
+-- (image:draw() ist in diesem Mock ein No-op, echte Pixelkopien sind daher
+-- nicht beobachtbar — tag ist das mock-taugliche Aequivalent)
+local function buildTaggedImagetable(n)
+    local it = playdate.graphics.imagetable.new(n)
+    for i = 1, n do
+        local img = newMockImage(16, 16, "white")
+        img.tag = i
+        it:setImage(i, img)
+    end
+    return it
+end
+
+-- Fall 1: Ein in keinem Frame mehr referenziertes Tile (Index 4) wird
+-- entfernt; verbleibende Positionen zeigen nach dem Remap weiterhin auf
+-- denselben Inhalt (data-model.md Abschnitt 1, Beispieltabelle)
+do
+    local it = buildTaggedImagetable(5) -- 1=Weiss,2=Schwarz,3,4,5
+    local frames = { { 1, 3, 5, 1 } } -- Tile 4 wird nirgends referenziert
+    local newIt, newFrames, newCount = ImageStoreCodec.pruneUnusedTiles(it, frames, 5)
+    check(newCount == 4, "Ungenutztes Tile entfernt -> 4 statt 5 verbleibende Tiles")
+    check(newIt:getImage(1).tag == 1, "Index 1 (Weiss) bleibt an Position 1")
+    check(newIt:getImage(2).tag == 2, "Index 2 (Schwarz) bleibt an Position 2")
+    check(newIt:getImage(3).tag == 3, "Tile 3 bleibt an Position 3")
+    check(newIt:getImage(4).tag == 5, "Tile 5 rueckt auf Position 4 (Index 4 entfaellt)")
+    check(newFrames[1][2] == 3, "Frame-Position zeigt weiterhin auf Tile 3 (unveraenderter Index)")
+    check(newFrames[1][3] == 4, "Frame-Position auf vormals Tile 5 zeigt jetzt auf den neuen Index 4")
+end
+
+-- Fall 2: Ein Bild, das ausschliesslich Weiss/Schwarz nutzt, behaelt
+-- trotzdem genau 2 Tiles (Basistiles werden nie entfernt)
+do
+    local it = buildTaggedImagetable(2)
+    local frames = { { 1, 1, 1, 2 } }
+    local _, _, newCount = ImageStoreCodec.pruneUnusedTiles(it, frames, 2)
+    check(newCount == 2, "Nur Basistiles genutzt -> bleibt bei 2 Tiles")
+end
+
+-- Fall 2b: Selbst wenn KEIN Frame jemals Schwarz referenziert, bleibt das
+-- Schwarz-Basistile (Index 2) erhalten
+do
+    local it = buildTaggedImagetable(2)
+    local frames = { { 1, 1, 1, 1 } }
+    local newIt, _, newCount = ImageStoreCodec.pruneUnusedTiles(it, frames, 2)
+    check(newCount == 2, "Basistile Schwarz bleibt erhalten, auch wenn nirgends referenziert")
+    check(newIt:getImage(2) ~= nil, "Schwarz-Basistile (Index 2) weiterhin vorhanden")
+end
+
+-- Fall 3: Regressionstest gegen ImageStore.createImage()s Neubild-Muster
+-- (1 Frame, alle 375 Positionen = Index 1, tileCount = 2) — die Invariante
+-- tileCount >= 2 darf NICHT auf 1 kollabieren (research.md R2)
+do
+    local it = buildTaggedImagetable(2)
+    local frameData = {}
+    for i = 1, 375 do frameData[i] = 1 end
+    local _, _, newCount = ImageStoreCodec.pruneUnusedTiles(it, { frameData }, 2)
+    check(newCount == 2, "Neubild-Muster (nur Index 1 referenziert) liefert tileCount=2, nicht 1")
+end
+
+-- Fall 4: Integrations-Round-Trip ueber die echte newSaveOperation()-
+-- Coroutine (nicht nur die reine Funktion) — verifiziert, dass Phase 1
+-- ("Dedup") tatsaechlich in den nachfolgenden Phasen ankommt: die
+-- geschriebene frames.json traegt den bereinigten tileCount und die
+-- remappten Indizes. Echte Pixel-Rekonstruktion ueber Sheet-Compose ->
+-- PDI-Schreiben -> Slicing ist mit diesem Mock nicht sinnvoll pruefbar
+-- (image:draw() ist ueberall in dieser Datei ein No-op) — das betrifft
+-- alle Tests dieser Datei, nicht nur diesen, daher wird hier bewusst auf
+-- Metadaten-Ebene (tileCount + Frame-Indizes) geprueft.
+do
+    local it = buildTaggedImagetable(5)
+    local frameData = {}
+    for i = 1, 375 do frameData[i] = 1 end
+    frameData[1] = 3 -- referenziert Tile 3
+    frameData[2] = 5 -- referenziert Tile 5 (Tile 4 bleibt ungenutzt)
+    local imageData = {
+        id = "prune-roundtrip-test",
+        name = "prune-roundtrip-test",
+        imagetable = it,
+        frames = { frameData },
+        hashIndex = {},
+    }
+
+    local co = ImageStoreCodec.newSaveOperation(imageData)
+    while coroutine.status(co) ~= "dead" do
+        local ok, err = coroutine.resume(co)
+        check(ok, "newSaveOperation() laeuft ohne Fehler durch: " .. tostring(err))
+    end
+
+    local saved = datastoreFiles["saves/prune-roundtrip-test/frames"]
+    check(saved ~= nil, "frames.json wurde geschrieben")
+    check(saved and saved.tileCount == 4, "gespeicherter tileCount spiegelt die Bereinigung wider (4 statt 5)")
+    check(saved and saved.frames[1][1] == 3, "Position 1 zeigt weiterhin auf Tile 3 (unveraenderter Index)")
+    check(saved and saved.frames[1][2] == 4, "Position 2 zeigt jetzt auf den neuen Index 4 (vormals Tile 5)")
+    check(datastoreImages["saves/prune-roundtrip-test/sheet"] ~= nil, "sheet.pdi wurde geschrieben (Bilddaten-Phase erreicht)")
+end
 
 -- ── PixelRoom: Pencil-Strich (A toggelt Malen/Radieren) ─────────────────────
 

@@ -209,13 +209,13 @@ Header set Access-Control-Allow-Methods "GET, POST, OPTIONS"
 Header set Access-Control-Allow-Headers "Content-Type, X-Session-Token, X-UID, X-PIN"
 
 # ===========================================
-# Routing (contracts E-01..E-08): Front-Controller
+# Routing (contracts E-01..E-08, E-08b seit Spec 009): Front-Controller
 # ===========================================
 RewriteRule ^$ public/index.php [L]
 RewriteRule ^index\.php$ public/index.php [L]
 RewriteRule ^(pair|login|images|logout)$ public/index.php [L]
 RewriteRule ^upload(\.php)?$ public/upload.php [L]
-RewriteRule ^download/(pdi|json|png|gif)/[A-Za-z0-9-]+$ public/download.php [L]
+RewriteRule ^download/(pdi|json|png|tilemap|gif)/[A-Za-z0-9-]+$ public/download.php [L]
 
 # ===========================================
 # Sicherheit / Fehlerbehandlung
@@ -265,6 +265,15 @@ if [ "$PREPARE_ONLY" = false ]; then
         echo -e "${BLUE}🚀 Schritt 4: Upload via rsync/SSH ($SSH_TARGET)...${NC}"
         echo "   Ziel: $REMOTE_TARGET"
         $SSH_CMD "$SSH_TARGET" "mkdir -p '$REMOTE_TARGET'"
+        # KRITISCH: uploads/ MUSS von --delete ausgenommen werden — sonst
+        # spiegelt rsync das lokale (bewusst .gitignore'te, praktisch leere)
+        # uploads/-Verzeichnis auf den Server und LÖSCHT alle echten
+        # Nutzer-Uploads bei jedem Deploy. storage/ bleibt bewusst NICHT
+        # ausgeschlossen: storage/.htaccess wird lokal bei jedem Lauf frisch
+        # erzeugt (Schritt 2) und muss auf einem frischen Server ankommen;
+        # der einzige sonstige Inhalt (php_error.log) ist ein regenerierbares
+        # Log, kein Nutzerdatenverlust. (Gefunden + korrigiert: Spec 009,
+        # nachdem genau das bei einem Test-Deploy die uploads/ geleert hat.)
         rsync -az --delete \
         --exclude='.deploy.env*' \
         --exclude='deploy.sh' \
@@ -272,6 +281,7 @@ if [ "$PREPARE_ONLY" = false ]; then
         --exclude='.git*' \
         --exclude='.DS_Store' \
         --exclude='hansdither_schema.sql' \
+        --exclude='uploads/' \
         -e "ssh -p $SSH_PORT -o BatchMode=yes" \
         ./ "$SSH_TARGET:$REMOTE_TARGET/"
         echo -e "${GREEN}✅ Dateien hochgeladen (rsync)!${NC}"
@@ -333,7 +343,7 @@ set ftp:ssl-protect-data true
 set ssl:verify-certificate yes
 cd $REMOTE_ROOT
 
-mirror --reverse --delete --use-cache --parallel=1 --exclude-glob .deploy.env* --exclude-glob deploy.sh --exclude-glob *.md --exclude-glob .git* --exclude-glob .DS_Store --exclude-glob hansdither_schema.sql . .
+mirror --reverse --delete --use-cache --parallel=1 --exclude-glob .deploy.env* --exclude-glob deploy.sh --exclude-glob *.md --exclude-glob .git* --exclude-glob .DS_Store --exclude-glob hansdither_schema.sql --exclude-glob uploads/ . .
 
 bye
 EOF

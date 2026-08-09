@@ -30,10 +30,22 @@
 
 ## 9.5 AD-005: Tile-Kompaktierung vor Save
 
-- Status: umgesetzt
+- Status: umgesetzt (v0.2.x, Pulp-Aera); seit dem PDI-Umstieg (AD-017,
+  v0.3.0) als wirkungsloser Platzhalter im Code stehengeblieben (Kommentar
+  "Phase 1: Dedup (T014 - wird spaeter in US2 implementiert...)" in
+  ImageStoreCodec.lua); mit Spec 009 erneut umgesetzt, jetzt fuer das
+  PDI-Format in ImageStoreCodec.pruneUnusedTiles()
 - Entscheidung: Ungenutzte Tiles werden entfernt, Referenzen remapped, Basistiles immer behalten.
 - Begruendung: Spart Speicher, verhindert schleichende Datenaufblaehung.
-- Konsequenz: Remap-Fehler sind ein Risiko und muessen abgesichert werden.
+- Konsequenz: Remap-Fehler sind ein Risiko und muessen abgesichert werden
+  (Spec 009: dedizierte Headless-Tests inkl. Round-Trip-Verifikation,
+  siehe tests/headless_tests.lua). Invariante: die Bereinigung liefert
+  immer mindestens 2 Tiles (Basistiles Weiss/Schwarz), unabhaengig davon,
+  ob sie in Frames referenziert werden — verhindert einen Kollaps auf
+  tileCount=1 beim ImageStore.createImage()-Neubild-Muster. Reine
+  Transformation ohne Live-State-Mutation des Editors: der Editor
+  verlaesst nach "save + exit" immer den Raum, ein Sync des aktiven
+  Editierzustands ist dadurch nicht noetig (research.md R2, Spec 009).
 
 ## 9.6 AD-006: Evolutionaere Feature-Entwicklung
 
@@ -174,3 +186,10 @@
 - Entscheidung: Der dritte Systemmenue-Slot wechselt von "reset frame" (AD-032) auf "clear screen" (`clearCurrentFrame()`, setzt alle 375 Tile-Indizes des aktiven Frames auf den Voll-Weiss-Basisindex 1); "save + exit" und "show grid" bleiben unveraendert. Im Unterschied zu AD-032 wird `resetCurrentFrameToPrevious()` VOLLSTAENDIG aus dem Code entfernt statt als toter Code zu verbleiben.
 - Begruendung: Projektinhaber-Vorgabe — die urspruengliche Schutzidee fuer versehentlich bemalte Frames wird bewusst fallengelassen (kein Reset-auf-Vorgaenger mehr); FR-011 fordert explizit vollstaendige Entfernung, nicht nur Entzug des Menue-Zugriffs (Constitution IV — keine Ansammlung toten Codes ohne Grund).
 - Konsequenz: "reset frame" ist an keiner Stelle der Oberflaeche mehr erreichbar; `deleteCurrentFrame()` (seit AD-032 bereits ohne Aufrufer) bleibt unveraendert und ausserhalb des Scopes. Details in [ADR-037](adr/ADR-037-Clear-Screen-ersetzt-Reset-Frame.md).
+
+## 9.26 AD-038: Backend-Dateinamen aus `client_image_id` statt separatem Namensfeld
+
+- Status: umgesetzt (Spec 009)
+- Entscheidung: Backend-Dateien (PDI intern, JSON, Frame-PNGs, Tilemap-PNG, GIF) werden nach `client_image_id ?? image_id` benannt statt nach der internen Zufalls-UUID allein. `client_image_id` ist der bereits seit Spec 004 bei jedem Sync uebermittelte, auf dem Geraet aus dem Projektnamen abgeleitete und sanitisierte Bezeichner (`ImageStore.sanitizeName()`) — kein neues, separat aus `frames.json` zu parsendes Namensfeld wird eingefuehrt. Die interne `image_id` (DB-Primaerschluessel) bleibt unveraendert die Grundlage fuer `/download/{typ}/{id}`-URLs und die Berechtigungspruefung.
+- Begruendung: `client_image_id` ist bereits serverseitig gegen `^[a-z0-9\-]{1,64}$` validiert und bereits `UNIQUE (uid, client_image_id)` — ein zusaetzliches, aus `frames.json` geparstes `name`-Feld waere eine zweite, redundante Wahrheitsquelle fuer dieselbe Information (Constitution IV, research.md R3 zu Spec 009).
+- Konsequenz: Update-in-place-Uploads mussten um eine Korrektur ergaenzt werden (die UPDATE-Anweisung aktualisierte bisher nur `png_path`/`gif_path`, nicht `pdi_path`/`json_path` — ohne Korrektur haette die DB nach der ersten Umbenennung eines Bestandsprojekts auf nicht mehr existierende Dateien gezeigt, research.md R4). Zusaetzlich werden bei jedem Re-Sync abgeleitete Render-Artefakte ohne eigene DB-Cache-Spalte (Frame-PNGs ab Index 1, Tilemap-PNG) aktiv geloescht, da sie sonst nach einem Re-Sync mit geaendertem Inhalt unbegrenzt veraltet weiter ausgeliefert wuerden. Details in [ADR-038](adr/ADR-038-Backend-Dateibenennung-client-image-id.md).

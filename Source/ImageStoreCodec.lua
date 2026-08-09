@@ -23,16 +23,22 @@ function ImageStoreCodec.newSaveOperation(imageData)
         local frames = imageData.frames or {}
         local hashIndex = imageData.hashIndex or {}
         
-        -- Phase 1: Dedup (T014 - wird später in US2 implementiert, hier zunächst ohne Dedup)
-        -- Für MVP: alle Tiles werden als einzigartig behandelt
+        -- Phase 1: Tile-Bereinigung (Spec 009 FR-001..003) — entfernt über
+        -- alle Frames hinweg ungenutzte Tiles (ausser den Basistiles) und
+        -- nummeriert die verbleibenden lückenlos neu. Reine Transformation:
+        -- imageData bleibt unverändert (research.md R2 zu Spec 009 — der
+        -- Editor verlässt nach "save + exit" immer den Raum, ein
+        -- Live-State-Sync ist dadurch nicht nötig).
         coroutine.yield("Dedup")
-        
+
         -- Zähle tatsächliche Anzahl der Tiles
         local tileCount = imagetable and imagetable:getLength() or 0
         if tileCount < 2 then
             -- Stelle sicher, dass mindestens die Basistiles (Weiß/Schwarz) vorhanden sind
             tileCount = 2
         end
+
+        imagetable, frames, tileCount = ImageStoreCodec.pruneUnusedTiles(imagetable, frames, tileCount)
         
         -- Phase 2: Sheet komponieren
         coroutine.yield("Sheet")
@@ -84,6 +90,81 @@ function ImageStoreCodec.newSaveOperation(imageData)
         -- Aktualisiere Index
         ImageStoreCodec.updateIndexAfterSave(id, name, #frames, preview)
     end)
+end
+
+-- Ermittelt die über alle Frames hinweg tatsächlich referenzierten Tiles,
+-- entfernt alle anderen (ausser den beiden Basistiles) aus der Tile-
+-- Sammlung und nummeriert die verbleibenden lückenlos neu durch
+-- (data-model.md Abschnitt 1, Spec 009 FR-001..003).
+--
+-- Reine Funktion ohne Seiteneffekt: liest imagetable/frames nur lesend,
+-- verändert weder das übergebene imagetable-Objekt noch imageData
+-- (research.md R2 zu Spec 009).
+--
+-- Invariante: liefert IMMER mindestens 2 Tiles (Basistiles Weiss/Schwarz,
+-- Index 1/2) zurück — unabhängig davon, ob sie in frames referenziert
+-- werden (EditorRoom.lua-Toggle-Invariante: Malen ohne Pipetten-Auswahl
+-- wechselt zwischen genau diesen beiden Indizes).
+function ImageStoreCodec.pruneUnusedTiles(imagetable, frames, tileCount)
+    local count = tonumber(tileCount) or 0
+
+    -- Basistiles sind immer "genutzt", unabhängig von ihrer tatsächlichen
+    -- Verwendung in frames
+    local used = { [1] = true, [2] = true }
+
+    for _, frame in ipairs(frames or {}) do
+        for _, tileIndex in ipairs(frame) do
+            local idx = tonumber(tileIndex)
+            if idx then
+                used[idx] = true
+            end
+        end
+    end
+
+    -- keepList: aufsteigend sortierte, gültige (1 <= idx <= count) Indizes
+    local keepList = {}
+    for idx in pairs(used) do
+        if idx >= 1 and idx <= count then
+            table.insert(keepList, idx)
+        end
+    end
+    table.sort(keepList)
+
+    -- Sicherheitsnetz: ohne gültige Tiles (z. B. count == 0) bleiben
+    -- mindestens die Basistiles erhalten
+    if #keepList == 0 then
+        keepList = { 1, 2 }
+    end
+
+    -- remap[alterIndex] = neuerIndex (1-basiert, lückenlos)
+    local remap = {}
+    for newIdx, oldIdx in ipairs(keepList) do
+        remap[oldIdx] = newIdx
+    end
+
+    -- Neue Imagetable mit den verbleibenden Tiles befüllen
+    local newImagetable = gfx.imagetable.new(#keepList)
+    if imagetable then
+        for newIdx, oldIdx in ipairs(keepList) do
+            newImagetable:setImage(newIdx, imagetable:getImage(oldIdx))
+        end
+    end
+
+    -- Frame-Positionsdaten auf die neuen Indizes ummappen; ungültige oder
+    -- durch die Bereinigung entfallene Alt-Indizes fallen auf das
+    -- Weiss-Basistile zurück (kann bei referenzierten Tiles nicht
+    -- vorkommen, dient als Sicherheitsnetz)
+    local newFrames = {}
+    for f, frame in ipairs(frames or {}) do
+        local newFrame = {}
+        for i, tileIndex in ipairs(frame) do
+            local oldIdx = tonumber(tileIndex)
+            newFrame[i] = (oldIdx and remap[oldIdx]) or remap[1]
+        end
+        newFrames[f] = newFrame
+    end
+
+    return newImagetable, newFrames, #keepList
 end
 
 -- Hilfsfunktion: Erstellt ein Preview-Image aus einem Frame

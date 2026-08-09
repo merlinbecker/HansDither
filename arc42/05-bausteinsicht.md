@@ -28,7 +28,7 @@ Die Navigation ist bewusst gerichtet: Der TitleRoom ist eine Einbahnstrasse (nur
 | ZoomRoom | Mittlere Zoomstufe: 3x3-Tile-Kontext als 24x24-Malraster, eine Zelle = 2x2 native Pixel; Commit geaenderter Slots an EditorRoom:applyTileEdits; "All Similar" schreibt in-place in die Imagetable. Seit Spec 006: unbearbeitete Zellen zeigen die vier echten Quellpixel als Subpixel-Quadranten statt einer einfarbigen Stichprobe. Seit Spec 008: drawGrid() blittet einen einmalig aufgebauten Hintergrund-Cache statt bei jeder Interaktion alle 576 Zellen neu zu berechnen (AD-035). |
 | PixelRoom | Innerste Zoomstufe: ein Tile mit echten 16x16 Pixeln; Menueaktionen All Similar und Invert; Rueckgabe an ZoomRoom. Seit Spec 008: volle Kurbelumdrehung ohne B rotiert das Tile per exaktem Index-Remap um 90 Grad (AD-036). |
 | ImageStore | Bildverwaltung: Index (saves/index), Anlage/Kopie/Loeschen, Preview-Zugriff. |
-| ImageStoreCodec | Coroutine-basierte Save-/Load-Operationen: PDI-Sheet (deduplizierte Tiles) + frames.json (Positionen je Frame), FNV-1a-hashTile, Slicing zur Laufzeit-Imagetable inkl. hashIndex. |
+| ImageStoreCodec | Coroutine-basierte Save-/Load-Operationen: PDI-Sheet (deduplizierte Tiles) + frames.json (Positionen je Frame), FNV-1a-hashTile, Slicing zur Laufzeit-Imagetable inkl. hashIndex. Seit Spec 009: `pruneUnusedTiles()` entfernt beim Speichern zusaetzlich alle ueber keinen Frame mehr referenzierten Tiles (ausser den Basistiles) und nummeriert die verbleibenden neu (AD-005). |
 | loadingBar | Einheitliches Overlay fuer Lade-/Speicherfortschritt (Titel, Phasen-Detail, Fehlerstatus). |
 | RoomOperation | Gemeinsame Coroutine-Orchestrierung fuer room-lokale Langlaeufer; reicht Phasen-Yields ans Overlay und das Coroutine-Ergebnis an onComplete durch. |
 | Bauchbinde | Wiederverwendbare UI-Komponente fuer Hinweisbaender (Frame-Anzeige "Frame n/m", Fehlerstatus). |
@@ -138,8 +138,9 @@ Verantwortung:
 - ImageStoreCodec: phasenweises Speichern (Dedup, Sheet, Frames, Bilddaten, Preview, Index) und Laden (Frames lesen, Sheet lesen, Slicing, Validierung) als Coroutinen.
 
 Interne Logik:
-- Ablage je Bild unter saves/<id>/: sheet.pdi (deduplizierte 16x16-Tiles), frames.json (375 Indizes je Frame), preview.pdi.
+- Ablage je Bild unter saves/<id>/: sheet.pdi (deduplizierte, seit Spec 009 zusaetzlich um ungenutzte Tiles bereinigte 16x16-Tiles), frames.json (375 Indizes je Frame), preview.pdi.
 - FNV-1a-hashTile als gemeinsame Dedup-Grundlage von Codec und Editor-Commit-Pfad.
+- Spec 009: Die "Dedup"-Phase von newSaveOperation() ruft `pruneUnusedTiles(imagetable, frames, tileCount)` auf — eine reine Funktion, die ueber alle Frames hinweg ermittelt, welche Tiles noch referenziert werden, alle anderen (ausser den beiden Basistiles) entfernt und die verbleibenden Frame-Positionen auf die neu durchnummerierten Indizes remapped. Die Folgephasen (Sheet, Frames, Bilddaten, Preview) verarbeiten ab dann die bereinigten Werte. Kein Zugriff auf imageData — der Editor verlaesst nach "save + exit" ohnehin immer den Raum, ein Sync des Live-Editierzustands ist daher nicht noetig.
 - Laden baut die Laufzeit-Imagetable samt hashIndex auf; Frame-Daten werden defensiv validiert (Fallback auf Weiss-Tile).
 
 ### 5.2.7 Whitebox Tools/Importer (historisch)
@@ -178,13 +179,13 @@ Interne Logik:
 |---|---|---|
 | `public/index.php` | Einstiegspunkt: UID-Eingabe, Pairing, Login, Images-Liste | PHP 8.x |
 | `public/upload.php` | Upload-Handler für PDI + JSON-Dateien | PHP 8.x |
-| `public/download.php` | Download-Handler für PDI/JSON/PNG-Dateien | PHP 8.x |
+| `public/download.php` | Download-Handler für JSON/PNG (Frame-Auswahl seit Spec 009)/Tilemap-PNG (neu, Spec 009)/GIF-Dateien; PDI-Route seit Spec 009 entfernt (liefert `410 Gone`, `deliverPdi()` gelöscht, kein toter Code, AD-038) | PHP 8.x |
 | `includes/config.php` | Konfiguration: DB-Zugang, Pfade, Konstanten | PHP 8.x |
 | `includes/database.php` | MySQL-Datenbankverbindung mit Prepared Statements; seit Spec 007 auch Transaktions-Wrapper (`beginTransaction()`/`commit()`/`rollback()`) für den race-sicheren Upload-Zähl-Check (ADR-033) | MySQLi |
 | `includes/auth.php` | PIN-Authentifizierung, bcrypt-Hashing, Rate-Limiting, Session-Management | PHP 8.x |
 | `includes/validation.php` | Dateivalidierung: PDI (Magic Bytes + vollständiges Parsing via `pdi_parser.php`), JSON (Syntax + seit Spec 007 Struktur-Schema via `validateFramesJsonSchema()`, ADR-034); Dateigrößen-Limit seit Spec 007 auf 300 KB gesenkt | PHP 8.x |
-| `includes/upload_handler.php` | Datei-Speicherung, UUID-Generierung, DB-Einträge; seit Spec 007 zusätzlich pro-UID-Obergrenze von 12 Bildern via Transaktion + Row-Lock (ADR-033) | PHP 8.x |
-| `includes/renderer.php` | PNG-Rendering aus PDI + JSON via GD-Bibliothek | PHP GD |
+| `includes/upload_handler.php` | Datei-Speicherung, UUID-Generierung, DB-Einträge; seit Spec 007 zusätzlich pro-UID-Obergrenze von 12 Bildern via Transaktion + Row-Lock (ADR-033); seit Spec 009 Dateibenennung nach `client_image_id` (sanitisierter Projektname) statt der internen UUID, inkl. Aufräumen alter/veralteter Dateien bei Umbenennung bzw. Re-Sync (AD-038); zusätzlich `getFrameCount()` (Frame-Anzahl aus frames.json, kein neues DB-Feld) | PHP 8.x |
+| `includes/renderer.php` | PNG-Rendering aus PDI + JSON via GD-Bibliothek; seit Spec 009 `renderFrameToPng()` (beliebiger 0-basierter Frame-Index statt nur Frame 0) und `renderTilemapToPng()` (Tile-Sammlung als PNG in Playdate-SDK-Namenskonvention `<name>-table-16-16`, AD-038) | PHP GD |
 | `MySQL-Datenbank` | Speicherung von UID→PIN-Hash, Images-Metadaten, Sessions | MySQL 8.x |
 | `Dateisystem` | Speicherung von PDI/JSON/PNG-Dateien unter `/uploads/{UID}/` | all-inkl.com Hosting |
 
@@ -205,7 +206,7 @@ graph TD
 **Interne Logik:**
 - **Authentifizierungsfluss:** UID-Eingabe → (UID existiert?) → Login oder Pairing → Session-Token (UUID, 30 Min Gültigkeit)
 - **Upload-Fluss:** Token-Prüfung → Dateivalidierung (PDI: Magic Bytes + vollständiges Parsing, JSON: json_decode + Struktur-Schema seit Spec 007) → Dateigröße ≤ 300 KB (Spec 007) → Transaktion mit Row-Lock auf `users` + Zähl-Check ≤ 12 Bilder/UID bei Neuanlage (Spec 007, ADR-033) → UUID-Generierung → Datei-Speicherung → DB-Eintrag → Commit. Ein am Limit abgelehnter Upload (403) wird auf dem Playdate-Gerät (`Source/SyncService.lua`) als eigene, von anderen Fehlern unterscheidbare Meldung angezeigt (Spec 007, research.md R6) statt im generischen Fehlerpfad zu verschwinden.
-- **Download-Fluss:** Token-Prüfung → Berechtigung (Image.uid == Session.uid) → Datei-Auslieferung (PNG on-demand generieren)
+- **Download-Fluss:** Token-Prüfung → Berechtigung (Image.uid == Session.uid) → Datei-Auslieferung (Frame-PNG mit 0-basiertem `frame`-Parameter, Tilemap-PNG oder GIF jeweils on-demand generieren; PDI-Route liefert seit Spec 009 `410 Gone` statt der Datei — die interne PDI-Nutzung fürs Rendering bleibt unberührt)
 - **Rate-Limiting:** 3 Fehlversuche → 5 Min Sperre (locked_until Timestamp in DB)
 
 ### 5.4.3 Ebene 3: Datenbank-Schema

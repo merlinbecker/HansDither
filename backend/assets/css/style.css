@@ -171,6 +171,27 @@ a:hover {
     background: #fff;
 }
 
+/* Spec 009: Galerie mit einem Vorschau-/Downloadlink je Frame */
+.frame-gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.frame-gallery a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.25rem;
+    background: none;
+}
+
+.frame-gallery .frame-label {
+    font-size: 0.75rem;
+    color: #7f8c8d;
+}
+
 /* Fehler und Erfolgsmeldungen */
 .error {
     background-color: #f8d7da;

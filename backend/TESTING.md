@@ -2,7 +2,8 @@
 
 Kompletter End-to-End-Durchlauf gegen das deployte Backend mit `curl`.
 Reihenfolge entspricht dem echten Sync-Workflow: Pairing → Login → Upload →
-Liste → Downloads (PDI/JSON/PNG/GIF) → Logout.
+Liste → Downloads (JSON/PNG/Tilemap/GIF — PDI-Download seit Spec 009
+entfernt, siehe Abschnitt 8) → Logout.
 
 > Diese Datei wird nicht deployt (`*.md` ist im deploy.sh-Upload ausgeschlossen).
 
@@ -182,6 +183,17 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST "$BASE/upload.php" \
 Weitere Größen-/Format-/Schema-Grenzfälle (Spec 007): siehe
 `specs/007-backend-upload-hardening/quickstart.md`.
 
+**Spec 009 — Upload mit `image_id` (Projektname-Bezeichner):**
+
+```bash
+# Wie beim echten Playdate-Sync: image_id ist der sanitisierte Projektname
+# (ImageStore.sanitizeName()); Dateien werden danach benannt statt nach der
+# internen UUID (siehe Abschnitt 8)
+curl -s -X POST "$BASE/upload.php" \
+  -H "X-Session-Token: $TOKEN" -F "uid=$UID_TEST" -F "image_id=meinbild" \
+  -F "pdi=@sheet.pdi" -F "json=@frames.json"
+```
+
 ---
 
 ## 5. Images-Liste (US3, E-05)
@@ -195,7 +207,8 @@ curl -s -H "Accept: application/json" -H "X-Session-Token: $TOKEN" \
 echo "$BASE/images?uid=$UID_TEST&token=$TOKEN"
 ```
 
-**Erwartung:** `images`-Array mit `id`, `pdi_url`, `json_url`, `png_url`, `gif_url`.
+**Erwartung:** `images`-Array mit `id`, `frame_count`, `json_url`, `png_url`,
+`tilemap_url`, `gif_url` (Spec 009: `pdi_url` entfällt, siehe Abschnitt 8).
 
 ```bash
 # Ohne/mit falschem Token → 401
@@ -205,32 +218,32 @@ curl -s -o /dev/null -w "%{http_code}\n" "$BASE/images?uid=$UID_TEST&token=00000
 
 ---
 
-## 6. Downloads: PDI, JSON, PNG, GIF (E-06 … E-09)
+## 6. Downloads: JSON, PNG (Frame 0), GIF (E-07 … E-09)
 
 ```bash
-curl -s -o out.pdi  "$BASE/download/pdi/$IMAGE_ID?token=$TOKEN"
 curl -s -o out.json "$BASE/download/json/$IMAGE_ID?token=$TOKEN"
 curl -s -o out.png  "$BASE/download/png/$IMAGE_ID?token=$TOKEN"
 curl -s -o out.gif  "$BASE/download/gif/$IMAGE_ID?token=$TOKEN"
 
-file out.pdi out.json out.png out.gif
-cmp sheet.pdi out.pdi && echo "PDI: identisch mit Upload ✓"
+file out.json out.png out.gif
 ```
 
 **Erwartung:**
-- `out.pdi` identisch zur hochgeladenen Datei
-- `out.png`: `PNG image data, 400 x 240` — zeigt Frame 1 (oben links ein
+- `out.png`: `PNG image data, 400 x 240` — zeigt Frame 0 (oben links ein
   schwarzes und ein Schachbrett-Tile, Rest weiß)
-- `out.gif`: `GIF image data ... 400 x 240` — animiert: Frame 1 wie PNG,
-  Frame 2 komplett schwarz, Endlos-Loop (im Browser/Vorschau öffnen)
+- `out.gif`: `GIF image data ... 400 x 240` — animiert: Frame 0 wie PNG,
+  Frame 1 komplett schwarz, Endlos-Loop (im Browser/Vorschau öffnen)
+
+Der rohe PDI-Download (`/download/pdi/{id}`) ist seit Spec 009 entfernt —
+siehe Abschnitt 8.
 
 ```bash
 # Berechtigungen: fremde/unbekannte Image-ID → 404
 curl -s -o /dev/null -w "%{http_code}\n" \
-  "$BASE/download/pdi/00000000-0000-4000-8000-000000000000?token=$TOKEN"
+  "$BASE/download/png/00000000-0000-4000-8000-000000000000?token=$TOKEN"
 
 # Ungültiges ID-Format → 400
-curl -s -o /dev/null -w "%{http_code}\n" "$BASE/download/pdi/../etc/passwd?token=$TOKEN"
+curl -s -o /dev/null -w "%{http_code}\n" "$BASE/download/png/../etc/passwd?token=$TOKEN"
 ```
 
 ---
@@ -246,7 +259,54 @@ curl -s -o /dev/null -w "%{http_code}\n" "$BASE/images?uid=$UID_TEST&token=$TOKE
 
 ---
 
-## 8. Aufräumen (optional)
+## 8. Spec 009: Projektbasierte Dateibenennung, Frame-/Tilemap-PNG, PDI-Download entfällt
+
+Erweitert Abschnitt 4/6 um die Spec-009-Szenarien (vollständige Details:
+`specs/009-tile-cleanup-png-export/quickstart.md` B1-B6).
+
+```bash
+# B1: Upload mit image_id -> Dateien tragen den Projektnamen statt der UUID
+UPLOAD=$(curl -s -X POST "$BASE/upload.php" \
+  -H "X-Session-Token: $TOKEN" -F "uid=$UID_TEST" -F "image_id=meinbild" \
+  -F "pdi=@sheet.pdi" -F "json=@frames.json")
+IMAGE_ID=$(echo "$UPLOAD" | python3 -c "import sys,json; print(json.load(sys.stdin)['image_id'])")
+# Auf Serverseite (SSH): uploads/$UID_TEST/meinbild.pdi + .json, NICHT $IMAGE_ID.pdi
+
+# B2: Re-Sync ueberschreibt dieselben Dateien (kein Duplikat)
+curl -s -X POST "$BASE/upload.php" \
+  -H "X-Session-Token: $TOKEN" -F "uid=$UID_TEST" -F "image_id=meinbild" \
+  -F "pdi=@sheet.pdi" -F "json=@frames.json"
+curl -s -H "Accept: application/json" -H "X-Session-Token: $TOKEN" \
+  "$BASE/images?uid=$UID_TEST" | python3 -m json.tool   # weiterhin genau EIN Eintrag
+
+# B3: Frame-PNGs einzeln abrufbar (0-basiert; die Testdaten haben 2 Frames: 0 und 1)
+curl -s -o frame0.png "$BASE/download/png/$IMAGE_ID?token=$TOKEN"
+curl -s -o frame1.png "$BASE/download/png/$IMAGE_ID?token=$TOKEN&frame=1"
+curl -s -o /dev/null -w "%{http_code}\n" \
+  "$BASE/download/png/$IMAGE_ID?token=$TOKEN&frame=99"   # -> 400 "Ungültiger Frame-Index"
+
+# B4: Tilemap-PNG in SDK-Namenskonvention (<name>-table-16-16)
+curl -s -D - -o tilemap.png "$BASE/download/tilemap/$IMAGE_ID?token=$TOKEN" | grep -i content-disposition
+
+# B5: PDI-Route entfernt -> 410, kein pdi_url mehr in /images
+curl -s -o /dev/null -w "%{http_code}\n" "$BASE/download/pdi/$IMAGE_ID?token=$TOKEN"   # -> 410
+curl -s -H "Accept: application/json" -H "X-Session-Token: $TOKEN" \
+  "$BASE/images?uid=$UID_TEST" | grep -c pdi_url   # -> 0
+
+# B6: Upload OHNE image_id faellt weiterhin auf die interne UUID zurueck
+curl -s -X POST "$BASE/upload.php" \
+  -H "X-Session-Token: $TOKEN" -F "uid=$UID_TEST" \
+  -F "pdi=@sheet.pdi" -F "json=@frames.json"   # -> 201, nicht abgelehnt
+```
+
+**Erwartung:** B1 Dateinamen tragen `meinbild`; B2 kein Duplikat; B3 beide
+Frames unterscheidbar, `frame=99` -> 400; B4 `Content-Disposition` nennt
+`meinbild-table-16-16.png`; B5 `410` + kein `pdi_url` mehr; B6 Upload ohne
+`image_id` weiterhin erfolgreich.
+
+---
+
+## 9. Aufräumen (optional)
 
 > **SSH-Hinweis (all-inkl.com):** Der Login landet im Account-**Home**, nicht im
 > Webroot. Erst in den Domain-Ordner wechseln: `cd hans-dither.de` — dort liegen
@@ -277,11 +337,16 @@ rm -rf uploads/test-device-001 uploads/ratelimit-test
 | 3 | Rate-Limit nach 3 Fehlversuchen | 429 | ☐ |
 | 4 | Upload happy path | 201 + `image_id` | ☐ |
 | 4 | Upload-Validierung | 401 / 400 / 413 | ☐ |
-| 5 | Images-Liste (JSON + HTML) | 200, alle 4 URLs | ☐ |
-| 6 | PDI-Roundtrip | Datei identisch | ☐ |
-| 6 | PNG 400×240 (Frame 1) | korrekt gerendert | ☐ |
+| 5 | Images-Liste (JSON + HTML) | 200, `frame_count`+4 URLs (kein `pdi_url`) | ☐ |
+| 6 | PNG 400×240 (Frame 0) | korrekt gerendert | ☐ |
 | 6 | GIF animiert (2 Frames, Loop) | korrekt gerendert | ☐ |
 | 7 | Logout invalidiert Token | 302, danach 401 | ☐ |
+| 8 | Upload mit `image_id` → Dateien tragen Projektnamen (B1) | Dateiname `meinbild.*` | ☐ |
+| 8 | Re-Sync überschreibt, kein Duplikat (B2) | genau 1 Eintrag | ☐ |
+| 8 | Frame-PNGs einzeln abrufbar (B3) | Frame 0/1 unterschiedlich, `frame=99` → 400 | ☐ |
+| 8 | Tilemap-PNG in SDK-Namenskonvention (B4) | Dateiname `*-table-16-16.png` | ☐ |
+| 8 | PDI-Route entfernt (B5) | 410, kein `pdi_url` mehr | ☐ |
+| 8 | Upload ohne `image_id` (B6) | 201, Fallback auf UUID | ☐ |
 
 Wenn alle Haken gesetzt sind, ist das Backend bereit für die Playdate-Anbindung
 (Spec 004: Upload-Flow vom Gerät).

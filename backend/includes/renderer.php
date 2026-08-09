@@ -31,20 +31,38 @@ class Renderer {
     private static $tilesPerRow = 25;
 
     /**
-     * Rendert Frame 1 eines Images zu PNG (on-demand)
+     * Rendert einen einzelnen Frame eines Images zu PNG (on-demand)
+     *
+     * Spec 009 FR-010: nicht mehr auf Frame 0 beschränkt. Frame-Index ist
+     * 0-basiert (spec.md Clarifications). Dateiname folgt der in
+     * data-model.md Abschnitt 2 definierten Konvention: `{base}.png` für
+     * Frame 0 (unverändert, weiterhin über die png_path-Spalte gecacht),
+     * `{base}-frame-{N}.png` für Frame N >= 1 (rein dateisystembasiert,
+     * keine DB-Spalte — data-model.md Abschnitt 3, research.md R5).
      *
      * @param string $image_id Image-UUID
      * @param string $uid UID des Nutzers (für Berechtigungsprüfung)
+     * @param int $frameIndex 0-basierter Frame-Index
      * @return string|false Pfad zur generierten PNG oder false bei Fehler
      */
-    public static function renderToPng(string $image_id, string $uid) {
+    public static function renderFrameToPng(string $image_id, string $uid, int $frameIndex = 0) {
         $image = UploadHandler::getImage($image_id, $uid);
         if (!$image) {
             return false;
         }
 
-        if ($image['png_path'] && file_exists($image['png_path'])) {
-            return $image['png_path'];
+        $base = basename($image['pdi_path'], '.pdi');
+        $upload_dir = dirname($image['pdi_path']);
+        $png_path = $frameIndex === 0
+            ? $upload_dir . '/' . $base . '.png'
+            : $upload_dir . '/' . $base . '-frame-' . $frameIndex . '.png';
+
+        if ($frameIndex === 0) {
+            if ($image['png_path'] && file_exists($image['png_path'])) {
+                return $image['png_path'];
+            }
+        } elseif (file_exists($png_path)) {
+            return $png_path;
         }
 
         $assets = self::loadAssets($image);
@@ -52,18 +70,57 @@ class Renderer {
             return false;
         }
 
-        $rows = self::composeFrame($assets, 0);
+        $rows = self::composeFrame($assets, $frameIndex);
         if (!$rows) {
             return false;
         }
 
-        $png_path = $image['pdi_path'] . '.png';
         if (!self::writePng($rows, $png_path)) {
             return false;
         }
 
-        UploadHandler::savePngPath($image_id, $png_path);
+        if ($frameIndex === 0) {
+            UploadHandler::savePngPath($image_id, $png_path);
+        }
+
         return $png_path;
+    }
+
+    /**
+     * Rendert die Tile-Sammlung (Tilemap/Imagetable) eines Images zu PNG,
+     * in der Playdate-SDK-Namenskonvention für Matrix-Imagetables
+     * (Spec 009 FR-011, research.md R6). Schreibt die aus sheet.pdi
+     * geparsten Roh-Pixelzeilen 1:1 als PNG — kein Tile-Slicing nötig, die
+     * Tilemap-PNG hat exakt dieselben Abmessungen wie das Sheet.
+     *
+     * @param string $image_id Image-UUID
+     * @param string $uid UID des Nutzers (für Berechtigungsprüfung)
+     * @return string|false Pfad zur generierten PNG oder false bei Fehler
+     */
+    public static function renderTilemapToPng(string $image_id, string $uid) {
+        $image = UploadHandler::getImage($image_id, $uid);
+        if (!$image) {
+            return false;
+        }
+
+        $base = basename($image['pdi_path'], '.pdi');
+        $upload_dir = dirname($image['pdi_path']);
+        $tilemap_path = $upload_dir . '/' . $base . '-table-16-16.png';
+
+        if (file_exists($tilemap_path)) {
+            return $tilemap_path;
+        }
+
+        $sheet = PdiParser::parseFile($image['pdi_path']);
+        if (!$sheet) {
+            return false;
+        }
+
+        if (!self::writePng($sheet['rows'], $tilemap_path)) {
+            return false;
+        }
+
+        return $tilemap_path;
     }
 
     /**
@@ -99,7 +156,12 @@ class Renderer {
         }
 
         $delay_ms = defined('GIF_FRAME_DELAY_MS') ? GIF_FRAME_DELAY_MS : 200;
-        $gif_path = $image['pdi_path'] . '.gif';
+        // Spec 009 research.md R5: Bestandsfehler behoben — vorher wurde die
+        // Endung direkt an pdi_path angehängt ({basis}.pdi.gif), jetzt an die
+        // gemeinsame Basis ({basis}.gif, data-model.md Abschnitt 2).
+        $base = basename($image['pdi_path'], '.pdi');
+        $upload_dir = dirname($image['pdi_path']);
+        $gif_path = $upload_dir . '/' . $base . '.gif';
 
         if (!GifEncoder::encodeToFile($gif_path, self::$canvasWidth, self::$canvasHeight, $frames, $delay_ms)) {
             return false;
@@ -212,14 +274,22 @@ class Renderer {
 
     /**
      * Schreibt Pixel-Zeilen als PNG (via GD)
+     *
+     * Spec 009 research.md R6: Breite/Höhe werden aus den übergebenen
+     * $rows abgeleitet statt fest auf den 400×240-Canvas verdrahtet zu
+     * sein — Voraussetzung für die Tilemap-PNG (renderTilemapToPng()),
+     * deren Abmessungen von der Sheet-Größe abhängen, nicht vom Canvas.
      */
     private static function writePng(array $rows, string $output_path): bool {
         if (!function_exists('imagecreate')) {
             return false;
         }
+        if (empty($rows)) {
+            return false;
+        }
 
-        $width = self::$canvasWidth;
-        $height = self::$canvasHeight;
+        $height = count($rows);
+        $width = strlen($rows[0]);
 
         $image = imagecreate($width, $height);
         if (!$image) {

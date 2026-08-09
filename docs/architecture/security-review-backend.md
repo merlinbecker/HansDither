@@ -40,6 +40,28 @@ abgedeckt.
 | S-10 | Hochgeladene PDI-/JSON-Dateien sind einzeln auf 300 KB begrenzt | ✅ | `Validation::$maxFileSize` in `validation.php` |
 | S-11 | Die JSON-Positionsdatei entspricht dem definierten Struktur-Schema (nicht nur syntaktisch gültiges JSON) | ✅ | `Validation::validateFramesJsonSchema()` (ADR-034) |
 
+### Sicherheitsziel aus Spec 009 (Projektbasierte Dateibenennung)
+
+Ergänzt die obige Tabelle um ein neues Ziel, das NICHT aus
+`contracts/backend-api.md` S-01..S-08 oder Spec 007 stammt, sondern direkt
+aus `specs/009-tile-cleanup-png-export/spec.md` (FR-009) — Spec 009 macht
+`client_image_id` (ein geräteseitig gesetzter, bislang nur als DB-
+Lookup-Schlüssel genutzter Wert) erstmals zum Bestandteil eines
+Dateisystempfads, was ein neues Pfad-/Verzeichnistraversierungs-Risiko
+einführen KÖNNTE, wären nicht bereits bestehende Kontrollen vorhanden.
+
+| ID | Anforderung | Status | Begründung |
+|---|---|---|---|
+| S-12 | Aus `client_image_id` abgeleitete Backend-Dateinamen ermöglichen keinen Zugriff außerhalb des vorgesehenen `uploads/{uid}/`-Verzeichnisses | ✅ | `upload.php` validiert `client_image_id` bereits VOR der Übergabe an `UploadHandler::handleUpload()` gegen die Whitelist-Regex `^[a-z0-9\-]{1,64}$` (Zeilen 74-77) — der erlaubte Zeichenraum enthält weder `.` noch `/` noch Null-Bytes, ein Escape aus dem UID-Verzeichnis ist damit strukturell ausgeschlossen. `UploadHandler::handleUpload()` nutzt diesen bereits validierten Wert direkt als Dateibasis (`$base = $client_image_id ?? $image_id`), ohne ihn erneut zu parsen oder zu dekodieren (AD-038, Spec 009 research.md R3/FR-009) |
+
+Zusätzlich verifiziert (Spec 009 R7): S-04 (Dateityp-Validierung/PDI-Format-
+Prüfung) gilt weiterhin unverändert — die Entfernung der PDI-**Download**-
+Route (`GET /download/pdi/{id}` liefert seit Spec 009 `410 Gone`) betrifft
+ausschließlich die Auslieferung an Nutzer; die interne PDI-Verarbeitung
+beim Upload (Validierung) und beim Rendering (`PdiParser::parseFile()` in
+`Renderer::loadAssets()`/`renderTilemapToPng()`) bleibt vollständig
+bestehen und unverändert vor S-04 geprüft.
+
 ---
 
 ## 🔍 Detaillierte Sicherheitsanalyse

@@ -58,14 +58,27 @@ class UploadHandler {
         db()->query('SELECT uid FROM users WHERE uid = ? FOR UPDATE', $uid);
 
         // 4a. Update-in-place: existiert bereits ein Eintrag für (uid, client_image_id)?
+        // Spec 009 research.md R4: pdi_path/json_path/png_path/gif_path werden
+        // hier zusätzlich mitgelesen (nicht nur id) — sie werden als "alte"
+        // Pfade gebraucht, um nach einer Umbenennung (Schritt 6) verwaiste
+        // Dateien aufzuräumen (Schritt 8b); nach dem UPDATE in Schritt 7 wären
+        // sie nicht mehr abrufbar.
         $existing_image_id = null;
+        $old_pdi_path = null;
+        $old_json_path = null;
+        $old_png_path = null;
+        $old_gif_path = null;
         if ($client_image_id !== null && $client_image_id !== '') {
             $existing = db()->query(
-                'SELECT id FROM images WHERE uid = ? AND client_image_id = ?',
+                'SELECT id, pdi_path, json_path, png_path, gif_path FROM images WHERE uid = ? AND client_image_id = ?',
                 $uid, $client_image_id
             );
             if ($existing && !empty($existing)) {
                 $existing_image_id = $existing[0]['id'];
+                $old_pdi_path = $existing[0]['pdi_path'];
+                $old_json_path = $existing[0]['json_path'];
+                $old_png_path = $existing[0]['png_path'];
+                $old_gif_path = $existing[0]['gif_path'];
             }
         }
 
@@ -85,8 +98,17 @@ class UploadHandler {
         $image_id = $existing_image_id ?? self::generateUUID();
 
         // 6. Dateien speichern (überschreibt bei Update-in-place dieselben Pfade)
-        $pdi_path = $upload_dir . '/' . $image_id . '.pdi';
-        $json_path = $upload_dir . '/' . $image_id . '.json';
+        // Spec 009 FR-006/FR-007: Dateiname basiert auf dem vom Gerät
+        // übermittelten, aus dem Playdate-Projektnamen abgeleiteten Bezeichner
+        // (client_image_id) statt der internen Zufalls-ID; fehlt er, Fallback
+        // auf die bisherige ID (research.md R3). client_image_id ist bereits in
+        // upload.php gegen ^[a-z0-9\-]{1,64}$ validiert — kein Pfad-/
+        // Verzeichnistraversierungs-Risiko (FR-009). Die interne $image_id
+        // bleibt unverändert der DB-Primärschlüssel für Adressierung/
+        // Berechtigungsprüfung (FR-008).
+        $base = $client_image_id ?? $image_id;
+        $pdi_path = $upload_dir . '/' . $base . '.pdi';
+        $json_path = $upload_dir . '/' . $base . '.json';
 
         if (!move_uploaded_file($pdi_file['tmp_name'], $pdi_path)) {
             db()->rollback();
@@ -103,10 +125,16 @@ class UploadHandler {
 
         // 7. DB-Eintrag erstellen oder aktualisieren
         if ($existing_image_id !== null) {
-            // Update-in-place: PNG/GIF zurücksetzen -> Neu-Rendering beim nächsten Abruf
+            // Update-in-place: pdi_path/json_path MÜSSEN mit aktualisiert werden
+            // (Spec 009 research.md R4 — sonst zeigt die DB nach einer
+            // Umbenennung auf nicht mehr existierende Dateien, da Schritt 6 sie
+            // bereits neu berechnet hat). png_path/gif_path bleiben NULL — das
+            // ist die bestehende Cache-Invalidierung für den Standard-Frame
+            // (frame=0) und das GIF, auf die sich der Renderer weiterhin
+            // verlässt; NICHT versehentlich entfernen.
             $success = db()->execute(
-                'UPDATE images SET png_path = NULL, gif_path = NULL, uploaded_at = NOW() WHERE id = ?',
-                $image_id
+                'UPDATE images SET pdi_path = ?, json_path = ?, png_path = NULL, gif_path = NULL, uploaded_at = NOW() WHERE id = ?',
+                $pdi_path, $json_path, $image_id
             );
         } else {
             $success = db()->execute(
@@ -126,7 +154,37 @@ class UploadHandler {
 
         db()->commit();
 
-        // 8. PNG asynchron generieren (on-demand, nicht sofort)
+        // 8. Aufräumen NACH dem Commit (Spec 009, research.md R4) — bewusst
+        // ausserhalb der Transaktion: verlorene Render-Artefakte werden beim
+        // nächsten Abruf verlustfrei neu gerendert, ein Rollback träfe sonst
+        // auf bereits gelöschte, nicht zurücknehmbare Dateien.
+        if ($existing_image_id !== null) {
+            // Umbenennung (Basis hat sich seit dem letzten Sync geändert):
+            // alte pdi_path/json_path/png_path/gif_path best-effort löschen,
+            // sonst blieben verwaiste Alt-Dateien im UID-Verzeichnis liegen.
+            if ($old_pdi_path !== null && $old_pdi_path !== $pdi_path) {
+                foreach ([$old_pdi_path, $old_json_path, $old_png_path, $old_gif_path] as $stale_path) {
+                    if ($stale_path && file_exists($stale_path)) {
+                        @unlink($stale_path);
+                    }
+                }
+            }
+
+            // Bei JEDEM Re-Sync (nicht nur bei Umbenennung): vorhandene
+            // Frame-≥1-/Tilemap-PNGs für die AKTUELLE Basis löschen — sie
+            // besitzen keine DB-Spalte, die sie sonst als veraltet markieren
+            // könnte, und würden sonst nach einem Re-Sync mit geändertem
+            // Inhalt unbegrenzt weiter ausgeliefert.
+            foreach ((glob($upload_dir . '/' . $base . '-frame-*.png') ?: []) as $stale_frame) {
+                @unlink($stale_frame);
+            }
+            $stale_tilemap = $upload_dir . '/' . $base . '-table-16-16.png';
+            if (file_exists($stale_tilemap)) {
+                @unlink($stale_tilemap);
+            }
+        }
+
+        // 9. PNG asynchron generieren (on-demand, nicht sofort)
 
         return [
             'status' => 'success',
@@ -137,8 +195,33 @@ class UploadHandler {
     }
     
     /**
+     * Ermittelt die Anzahl der Animationsframes eines Images aus der
+     * bereits gespeicherten frames.json (Spec 009, data-model.md
+     * Abschnitt 4) — kein neues DB-Feld, rein abgeleitet. Genutzt für die
+     * Frame-Index-Validierung beim PNG-Download (download.php) und für
+     * die Galerie-Anzeige in der Bilder-Liste (index.php).
+     *
+     * @param array $image Image-Datensatz (json_path)
+     * @return int|null Frame-Anzahl oder null, falls nicht ermittelbar
+     */
+    public static function getFrameCount(array $image): ?int {
+        if (empty($image['json_path']) || !file_exists($image['json_path'])) {
+            return null;
+        }
+        $raw = file_get_contents($image['json_path']);
+        if ($raw === false) {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data['frames']) || !is_array($data['frames'])) {
+            return null;
+        }
+        return count($data['frames']);
+    }
+
+    /**
      * Generiert eine UUID v4
-     * 
+     *
      * @return string
      */
     public static function generateUUID(): string {

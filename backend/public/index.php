@@ -361,6 +361,8 @@ function handleImagesRequest(): void {
         // JSON-Response
         header('Content-Type: application/json');
         
+        // Spec 009 FR-012: pdi_url entfaellt; frame_count + tilemap_url neu
+        // (contracts/backend-api-amendment.md E-05, data-model.md Abschnitt 4)
         $image_list = [];
         foreach ($images as $image) {
             $image_list[] = [
@@ -368,9 +370,10 @@ function handleImagesRequest(): void {
                 'uploaded_at' => $image['uploaded_at'],
                 'has_png' => !empty($image['png_path']),
                 'has_gif' => !empty($image['gif_path']),
-                'pdi_url' => '/download/pdi/' . $image['id'] . '?token=' . $token,
+                'frame_count' => UploadHandler::getFrameCount($image) ?? 1,
                 'json_url' => '/download/json/' . $image['id'] . '?token=' . $token,
                 'png_url' => '/download/png/' . $image['id'] . '?token=' . $token,
+                'tilemap_url' => '/download/tilemap/' . $image['id'] . '?token=' . $token,
                 'gif_url' => '/download/gif/' . $image['id'] . '?token=' . $token
             ];
         }
@@ -435,33 +438,37 @@ function showImagesPage(string $uid, string $token, array $images): void {
                     <tr>
                         <th>ID</th>
                         <th>Datum</th>
-                        <th>Vorschau</th>
-                        <th>PDI</th>
+                        <th>Frames</th>
                         <th>JSON</th>
-                        <th>PNG</th>
+                        <th>Tilemap</th>
                         <th>GIF</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ($images as $image): ?>
+                        <?php $frameCount = UploadHandler::getFrameCount($image) ?? 1; ?>
                         <tr>
                             <td><?php echo htmlspecialchars(substr($image['id'], 0, 8)); ?>...</td>
                             <td><?php echo htmlspecialchars(date('d.m.Y H:i', strtotime($image['uploaded_at']))); ?></td>
                             <td>
-                                <img
-                                    src="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>&inline=1"
-                                    alt="Vorschau <?php echo htmlspecialchars(substr($image['id'], 0, 8)); ?>"
-                                    class="preview-image"
-                                >
-                            </td>
-                            <td>
-                                <a href="/download/pdi/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>PDI</a>
+                                <div class="frame-gallery">
+                                    <?php for ($f = 0; $f < $frameCount; $f++): ?>
+                                        <a href="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>&frame=<?php echo $f; ?>" download>
+                                            <img
+                                                src="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>&frame=<?php echo $f; ?>&inline=1"
+                                                alt="Frame <?php echo $f; ?> von <?php echo htmlspecialchars(substr($image['id'], 0, 8)); ?>"
+                                                class="preview-image"
+                                            >
+                                            <span class="frame-label">Frame <?php echo $f; ?></span>
+                                        </a>
+                                    <?php endfor; ?>
+                                </div>
                             </td>
                             <td>
                                 <a href="/download/json/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>JSON</a>
                             </td>
                             <td>
-                                <a href="/download/png/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>PNG</a>
+                                <a href="/download/tilemap/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>Tilemap</a>
                             </td>
                             <td>
                                 <a href="/download/gif/<?php echo htmlspecialchars($image['id']); ?>?token=<?php echo htmlspecialchars($token); ?>" download>GIF</a>

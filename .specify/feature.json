@@ -1,1 +1,3 @@
-{"feature_directory":"specs/008-zoom-rotation-clearscreen"}
+{
+  "feature_directory": "specs/009-tile-cleanup-png-export"
+}

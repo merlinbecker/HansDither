@@ -64,7 +64,13 @@ if (!$image) {
 // Datei ausliefern
 switch ($type) {
     case 'pdi':
-        deliverPdi($image);
+        // Spec 009 FR-012/013/014: PDI-Download entfällt vollständig aus
+        // der Nutzer-Oberfläche/API; deliverPdi() wurde entfernt (kein
+        // toter Code, research.md R7). 410 statt 404 — der Typ ist bewusst
+        // entfernt, nicht unbekannt. Läuft NACH der Auth-/Berechtigungs-
+        // prüfung oben, identisch zur Reihenfolge aller anderen Typen.
+        header('HTTP/1.1 410 Gone');
+        echo json_encode(['error' => 'PDI-Download nicht mehr verfügbar']);
         break;
 
     case 'json':
@@ -75,34 +81,18 @@ switch ($type) {
         deliverPng($image, $uid, $inline);
         break;
 
+    case 'tilemap':
+        deliverTilemap($image, $uid, $inline);
+        break;
+
     case 'gif':
         deliverGif($image, $uid, $inline);
         break;
-        
+
     default:
         header('HTTP/1.1 400 Bad Request');
         echo json_encode(['error' => 'Ungültiger Dateityp']);
         break;
-}
-
-/**
- * Liefert eine PDI-Datei aus
- */
-function deliverPdi(array $image): void {
-    if (!file_exists($image['pdi_path'])) {
-        header('HTTP/1.1 404 Not Found');
-        echo json_encode(['error' => 'PDI-Datei nicht gefunden']);
-        exit;
-    }
-    
-    header('Content-Type: application/octet-stream');
-    header('Content-Disposition: attachment; filename="' . basename($image['pdi_path']) . '"');
-    header('Content-Length: ' . filesize($image['pdi_path']));
-    header('Cache-Control: no-cache, must-revalidate');
-    header('Pragma: public');
-    
-    readfile($image['pdi_path']);
-    exit;
 }
 
 /**
@@ -126,30 +116,46 @@ function deliverJson(array $image): void {
 }
 
 /**
- * Liefert eine PNG-Datei aus (generiert on-demand wenn nötig)
+ * Liefert die PNG-Datei eines einzelnen Frames aus (generiert on-demand
+ * wenn nötig) — Spec 009 FR-010, contracts E-08.
+ *
+ * Frame-Index ist 0-basiert (spec.md Clarifications, ?frame=N, N=0 =
+ * bisherige Vorschau); fehlt der Parameter, gilt frame=0.
  */
 function deliverPng(array $image, string $uid, bool $inline = false): void {
-    $png_path = $image['png_path'];
-    
-    // PNG on-demand generieren falls nicht vorhanden
-    if (empty($png_path) || !file_exists($png_path)) {
-        $png_path = Renderer::renderToPng($image['id'], $uid);
-        if ($png_path === false) {
-            header('HTTP/1.1 500 Internal Server Error');
-            echo json_encode(['error' => 'PNG konnte nicht generiert werden']);
-            exit;
-        }
-        
-        // Pfad in DB speichern
-        UploadHandler::savePngPath($image['id'], $png_path);
+    $frame_count = UploadHandler::getFrameCount($image);
+    if ($frame_count === null) {
+        header('HTTP/1.1 500 Internal Server Error');
+        echo json_encode(['error' => 'Frame-Anzahl konnte nicht ermittelt werden']);
+        exit;
     }
-    
+
+    $frame_param = $_GET['frame'] ?? '0';
+    if (!ctype_digit((string)$frame_param)) {
+        header('HTTP/1.1 400 Bad Request');
+        echo json_encode(['error' => 'Ungültiger Frame-Index']);
+        exit;
+    }
+    $frame = (int)$frame_param;
+    if ($frame < 0 || $frame >= $frame_count) {
+        header('HTTP/1.1 400 Bad Request');
+        echo json_encode(['error' => 'Ungültiger Frame-Index']);
+        exit;
+    }
+
+    $png_path = Renderer::renderFrameToPng($image['id'], $uid, $frame);
+    if ($png_path === false) {
+        header('HTTP/1.1 500 Internal Server Error');
+        echo json_encode(['error' => 'PNG konnte nicht generiert werden']);
+        exit;
+    }
+
     if (!file_exists($png_path)) {
         header('HTTP/1.1 404 Not Found');
         echo json_encode(['error' => 'PNG-Datei nicht gefunden']);
         exit;
     }
-    
+
     $disposition = $inline ? 'inline' : 'attachment';
     header('Content-Type: image/png');
     header('Content-Disposition: ' . $disposition . '; filename="' . basename($png_path) . '"');
@@ -158,6 +164,35 @@ function deliverPng(array $image, string $uid, bool $inline = false): void {
     header('Pragma: public');
 
     readfile($png_path);
+    exit;
+}
+
+/**
+ * Liefert die Tilemap-PNG aus (SDK-Namenskonvention, generiert on-demand
+ * wenn nötig) — Spec 009 FR-011, contracts E-08b.
+ */
+function deliverTilemap(array $image, string $uid, bool $inline = false): void {
+    $tilemap_path = Renderer::renderTilemapToPng($image['id'], $uid);
+    if ($tilemap_path === false) {
+        header('HTTP/1.1 500 Internal Server Error');
+        echo json_encode(['error' => 'Tilemap-PNG konnte nicht generiert werden']);
+        exit;
+    }
+
+    if (!file_exists($tilemap_path)) {
+        header('HTTP/1.1 404 Not Found');
+        echo json_encode(['error' => 'Tilemap-PNG nicht gefunden']);
+        exit;
+    }
+
+    $disposition = $inline ? 'inline' : 'attachment';
+    header('Content-Type: image/png');
+    header('Content-Disposition: ' . $disposition . '; filename="' . basename($tilemap_path) . '"');
+    header('Content-Length: ' . filesize($tilemap_path));
+    header('Cache-Control: no-cache, must-revalidate');
+    header('Pragma: public');
+
+    readfile($tilemap_path);
     exit;
 }
 

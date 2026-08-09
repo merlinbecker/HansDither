@@ -107,7 +107,7 @@ sequenceDiagram
 
 1. Nutzer waehlt im Systemmenue des EditorRoom "save + exit".
 2. EditorRoom startet eine RoomOperation mit ImageStoreCodec.newSaveOperation; Eingaben (inkl. Menueaktionen) sind blockiert.
-3. Phasen: Dedup, Sheet, Frames, Bilddaten, Preview, Index (Index als letzte Phase, C-06); loadingBar zeigt Titel und Phase.
+3. Phasen: Dedup, Sheet, Frames, Bilddaten, Preview, Index (Index als letzte Phase, C-06); loadingBar zeigt Titel und Phase. Seit Spec 009 entfernt die Dedup-Phase zusaetzlich alle ueber keinen Frame mehr referenzierten Tiles (ausser den Basistiles) und nummeriert die verbleibenden neu (pruneUnusedTiles(), AD-005) — die Folgephasen verarbeiten bereits den bereinigten Stand.
 4. Nach Erfolg wechselt der EditorRoom zum SelectionRoom; dessen entered() laedt die Previews neu (aktualisiertes Thumbnail).
 5. Bei Fehlern bleibt der Editor bedienbar und zeigt einen Fehlerstatus; kein Datenverlust im Speicher.
 6. Zusaetzlich speichert playdate.gameWillTerminate() das offene Bild; aktive Zoomstufen committen zuvor ihren Slot-Zustand (PixelRoom -> ZoomRoom -> EditorRoom).
@@ -263,7 +263,7 @@ sequenceDiagram
 
 **Ergebnis:** PDI + JSON sind hochgeladen und in DB registriert.
 
-### 6.8.4 Szenario: PNG Download (on-demand Rendering)
+### 6.8.4 Szenario: Frame-/Tilemap-PNG Download (on-demand Rendering, Spec 009)
 
 ```mermaid
 sequenceDiagram
@@ -275,30 +275,36 @@ sequenceDiagram
     participant D as Datenbank
     participant F as Dateisystem
 
-    U->>B: GET /download/png/{image_id}?token=...
+    U->>B: GET /download/png/{image_id}?frame=N&token=...
     B->>A: validateToken(token)
     A-->>B: {uid: "..."}
     B->>UH: getImage(image_id, uid)
     UH->>D: SELECT * FROM images WHERE id = ? AND uid = ?
     D-->>UH: Image-Daten
     UH-->>B: Image-Daten
-    alt png_path existiert
+    B->>UH: getFrameCount(image)
+    UH->>F: json_decode(json_path)
+    UH-->>B: frame_count
+    alt frame ausserhalb 0..frame_count-1
+        B->>U: 400 Bad Request
+    else Frame 0 UND png_path existiert
         B->>F: readfile(png_path)
         F-->>B: PNG-Daten
         B->>U: 200 OK (image/png)
-    else png_path ist NULL
-        B->>R: renderToPng(image_id, uid)
-        R->>UH: getImage(image_id, uid)
-        UH-->>R: Image-Daten
-        R->>F: loadPdiFile(pdi_path)
-        F-->>R: PDI-Daten
-        R->>F: loadJsonFile(json_path)
-        F-->>R: JSON-Daten
-        R->>R: generatePng(pdi_data, json_data)
-        R->>F: imagepng() nach /uploads/{uid}/{uuid}.png
-        R->>UH: savePngPath(image_id, png_path)
-        UH->>D: UPDATE images SET png_path = ? WHERE id = ?
-        D-->>UH: Erfolg
+    else Frame N>=1 UND Datei existiert bereits
+        B->>F: readfile({base}-frame-{N}.png)
+        F-->>B: PNG-Daten
+        B->>U: 200 OK (image/png)
+    else nicht generiert
+        B->>R: renderFrameToPng(image_id, uid, frame)
+        R->>F: loadPdiFile(pdi_path) + loadJsonFile(json_path)
+        F-->>R: PDI-/JSON-Daten
+        R->>R: composeFrame(assets, frame)
+        R->>F: imagepng() nach /uploads/{uid}/{base}.png (Frame 0) bzw. {base}-frame-{N}.png
+        alt Frame 0
+            R->>UH: savePngPath(image_id, png_path)
+            UH->>D: UPDATE images SET png_path = ? WHERE id = ?
+        end
         R-->>B: png_path
         B->>F: readfile(png_path)
         F-->>B: PNG-Daten
@@ -306,16 +312,14 @@ sequenceDiagram
     end
 ```
 
-1. Nutzer klickt auf PNG-Download-Link
-2. Backend prüft Session-Token und Berechtigung
-3. Falls PNG noch nicht existiert: On-demand Rendering
-4. PDI-Datei wird geparst (Magic Bytes, Header, Pixel-Daten)
-5. JSON-Datei wird geparst (Tilemap-Daten)
-6. PNG wird mit GD-Bibliothek generiert (400x240, 1-Bit)
-7. PNG wird gespeichert und Pfad in DB aktualisiert
-8. PNG wird an Nutzer ausgeliefert
+1. Nutzer klickt auf einen der Frame-Vorschau-/Downloadlinks in der Galerie (`?frame=N`, 0-basiert, spec.md Clarifications).
+2. Backend prüft Session-Token und Berechtigung, danach die Frame-Anzahl (`UploadHandler::getFrameCount()`, aus frames.json abgeleitet, kein DB-Feld) — `frame` ausserhalb `0..frame_count-1` → `400 Bad Request`.
+3. Frame 0: weiterhin über die `png_path`-Spalte gecacht (unverändertes Verhalten). Frame ≥ 1: rein dateisystembasiert über den deterministischen Pfad `{base}-frame-{N}.png` (`{base}` = `client_image_id` oder Fallback auf die interne ID) — kein DB-Feld nötig.
+4. Falls die Datei noch nicht existiert: PDI + JSON werden geparst, der angeforderte Frame wird zusammengesetzt und als PNG geschrieben.
+5. **Tilemap-PNG** (`GET /download/tilemap/{image_id}`, analoger Ablauf ohne `frame`-Parameter): `Renderer::renderTilemapToPng()` schreibt die aus `sheet.pdi` geparsten Roh-Pixelzeilen 1:1 als PNG unter `{base}-table-16-16.png` (Playdate-SDK-Namenskonvention für Matrix-Imagetables) — kein Tile-Slicing nötig.
+6. **PDI-Download entfällt** (Spec 009 FR-012/013): `GET /download/pdi/{image_id}` liefert `410 Gone` statt der Rohdatei; die interne PDI-Nutzung fürs Rendering (Schritt 4) ist davon unberührt.
 
-**Ergebnis:** Nutzer erhält PNG-Datei (generiert on-demand beim ersten Zugriff).
+**Ergebnis:** Nutzer erhält die gewünschte Frame- oder Tilemap-PNG (generiert on-demand beim ersten Zugriff); die frühere PDI-Rohdatei ist nicht mehr über die Nutzer-Oberfläche/API erreichbar.
 
 ## 6.9 Szenario: Upload-Limit erreicht (Spec 007, Ende-zu-Ende bis zur Geräte-Anzeige)
 

@@ -1,27 +1,21 @@
 <!--
 Sync Impact Report
-- Version change: 1.1.0 → 1.2.0
-- Modified principles: keine umbenannt
-- Added sections: keine (bestehender Randbedingungs-Punkt "Persistenz"
-  präzisiert + neuer Randbedingungs-Punkt "Netzwerk (Sync-Ausnahme)")
+- Version change: 1.2.0 → 1.3.0
+- Modified principles: V. Testpflicht (NICHT VERHANDELBAR) — Gate 2
+  materiell erweitert, kein Titel-/Nummernwechsel
+- Added sections: keine neue Section (bestehendes Gate 2 innerhalb
+  Prinzip V erweitert)
 - Removed sections: keine
 - Modified sections:
-  - Technische Randbedingungen: "Persistenz"-Punkt auf die Kern-
-    Zeichenpersistenz (Editor Save/Load) präzisiert; neuer Punkt
-    "Netzwerk (Sync-Ausnahme)" ergänzt, der Netzwerkkommunikation
-    explizit — aber ausschließlich — für das Backend-Sync-Feature
-    (Spec 004) zulässt und dessen Optionalität festschreibt.
+  - Prinzip V, Gate 2: `Source/pdxinfo`s `buildNumber` MUSS vor jedem
+    `pdc`-Build, der eine Code-Änderung gegen Simulator/Hardware testet,
+    um genau 1 erhöht werden — nicht nur bei Releases. Blockierklausel
+    und Begründung entsprechend ergänzt (nachvollziehbare Testläufe).
 - Templates requiring updates:
-  - ✅ .specify/templates/plan-template.md (Constitution Check ist generisch, kompatibel)
+  - ✅ .specify/templates/plan-template.md (Constitution Check generisch, kompatibel)
   - ✅ .specify/templates/spec-template.md (keine constitution-spezifischen Pflichtabschnitte nötig)
-  - ✅ .specify/templates/tasks-template.md (Polish-/Verifikationsphase deckt Test-Tasks ab)
-- Follow-up TODOs:
-  - arc42/04-loesungsstrategie.md Abschnitt 4.4 ("Nicht-Ziele der
-    aktuellen Version") nennt noch "Kein Cloud-Sync", "Keine Netzwerk-
-    ... funktionen" — muss im Rahmen der Spec-004-Planung/Umsetzung
-    aktualisiert werden (bereits als Erwartete Evidenz in Spec 004
-    Architecture Governance vermerkt, hier nur zur Nachverfolgung
-    referenziert).
+  - ✅ .specify/templates/tasks-template.md (Verifikationsphase deckt Build-Gate bereits ab; buildNumber-Schritt ist Teil des bestehenden Gate-2-Tasks, kein neuer Task-Typ nötig)
+- Follow-up TODOs: keine
 -->
 
 # Hans Dither Constitution
@@ -95,14 +89,20 @@ die Änderung ausführt:
 
 1. Headless-Tests: `lua tests/headless_tests.lua` — MUSS mit
    "ALLE TESTS BESTANDEN" enden.
-2. Build: `pdc Source "Hans Dither.pdx"` — MUSS fehlerfrei durchlaufen.
+2. Build: `Source/pdxinfo` — `buildNumber` MUSS zuerst um genau 1 erhöht
+   werden; erst danach MUSS `pdc Source "Hans Dither.pdx"` fehlerfrei
+   durchlaufen. Das gilt für JEDE Code-Änderung, die einen Build-/
+   Simulator-/Hardware-Testlauf durchläuft — nicht nur für Releases —,
+   damit einzelne Testläufe anhand der `buildNumber` unterscheidbar
+   bleiben.
 
 Fehlschlagende Tests oder Builds BLOCKIEREN den Abschluss: Eine
 Implementierungs-Task DARF NICHT als erledigt markiert, ein Commit DARF
 NICHT erstellt und ein Feature DARF NICHT als fertig gemeldet werden,
-solange eines der Gates rot ist. Wer ein Gate nicht ausführen kann
-(z. B. fehlender Lua-Interpreter), MUSS das explizit als offenen Punkt
-ausweisen statt Erfolg zu melden.
+solange eines der Gates rot ist oder die `buildNumber` nicht erhöht
+wurde. Wer ein Gate nicht ausführen kann (z. B. fehlender
+Lua-Interpreter), MUSS das explizit als offenen Punkt ausweisen statt
+Erfolg zu melden.
 
 Neue Raum- und Modullogik SOLL headless-testbar gehalten werden:
 Standard-Lua-Syntax (keine pdc-Erweiterungen wie `+=`), SDK-Zugriffe
@@ -114,7 +114,11 @@ Begründung: Die v0.3.0-Neuschreibung hat gezeigt, dass plausible, aber
 nicht existierende SDK-APIs erst zur Laufzeit crashen. Die strikten
 Mocks der Headless-Tests fangen genau diese Fehlerklasse vor dem
 Simulator-Lauf ab; das Gate gilt zentral in der Constitution, damit es
-für alle Harnesses gleichermaßen verbindlich ist.
+für alle Harnesses gleichermaßen verbindlich ist. Die verpflichtende
+`buildNumber`-Erhöhung (Spec 009) macht einzelne Simulator-/Hardware-
+Testläufe nachvollziehbar auseinanderhaltbar — ohne sie lässt sich im
+Nachhinein nicht rekonstruieren, welcher Build welchem Testergebnis
+zugrunde lag.
 
 ## Technische Randbedingungen
 
@@ -165,4 +169,4 @@ unter `.specify/templates/` auf Konsistenz. Reviews von Plans und Specs
 MÜSSEN die Einhaltung der Prinzipien verifizieren; nicht begründbare
 Komplexität wird abgelehnt.
 
-**Version**: 1.2.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-18
+**Version**: 1.3.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-08-09

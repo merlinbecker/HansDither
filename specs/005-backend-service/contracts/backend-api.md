@@ -188,6 +188,11 @@ Definiert die API-Schnittstellen des Backend-Service für Hans Dither Sync. Alle
 
 ### E-06: GET `/download/pdi/{id}` — PDI-Datei herunterladen
 
+> **Entfernt seit Spec 009** — liefert `410 Gone` statt der Datei; siehe
+> [`specs/009-tile-cleanup-png-export/contracts/backend-api-amendment.md`](../../009-tile-cleanup-png-export/contracts/backend-api-amendment.md#e-06-get-downloadpdiid--entfällt).
+> Der Rest dieses Abschnitts beschreibt das ursprüngliche (Spec 005)
+> Verhalten und dient nur noch der historischen Nachvollziehbarkeit.
+
 **Zweck**: PDI-Binärdatei herunterladen
 
 **Request**:
