@@ -40,16 +40,21 @@ gesamten Sequenz; die gemessene "game"-Zeit pro Frame ist gegenüber dem
 Vorher-Zustand spürbar gesunken (objektiver Nachweis, nicht nur Eindruck)
 
 **Prüfungen**:
-- [ ] Cursorbewegung bleibt über die vollen 5 Sekunden gleichmäßig flüssig
-- [ ] Malstrich über mehrere Zellen hinweg korrekt und ohne Aussetzer
-- [ ] Alle bestehenden Zoom-Room-Funktionen (Rasteranzeige, Invert, "All
+- [x] Cursorbewegung bleibt über die vollen 5 Sekunden gleichmäßig flüssig
+- [x] Malstrich über mehrere Zellen hinweg korrekt und ohne Aussetzer
+- [x] Alle bestehenden Zoom-Room-Funktionen (Rasteranzeige, Invert, "All
       Similar", Out-of-Bounds, Dedup-Commit) unverändert funktionsfähig
-- [ ] **Hardware-Pflichtprüfung**: dieselbe Sequenz auf echtem Gerät, nicht
+- [x] **Hardware-Pflichtprüfung**: dieselbe Sequenz auf echtem Gerät, nicht
       nur im Simulator (Simulator-Performance ist laut SDK-Doku spürbar
       besser als auf dem Gerät)
-- [ ] Objektive Messung (`getStats()`/Sampler) zeigt reduzierte CPU-Last
+- [ ] Objektive Messung (`getStats()`/Sampler) zeigt reduzierte CPU-Last —
+      **nicht durchgeführt**: Projektinhaber hat auf echter Hardware
+      gespielt und keine Aussetzer/Ruckler mehr bemerkt (subjektiver
+      Eindruck), aber keinen formalen Vorher/Nachher-Messwert erfasst
 
-**Status**: [ ] Nicht getestet | [ ] Bestanden | [ ] Fehlgeschlagen
+**Status**: [x] Bestanden (subjektiv auf echter Hardware — Befund: "keine
+Aussetzer mehr gemerkt"; kein objektiver `getStats()`/Sampler-Vergleich
+durchgeführt) | [ ] Fehlgeschlagen
 
 ---
 
@@ -70,15 +75,15 @@ das Bild wieder exakt dem Ausgangsmuster; nach Schritt 5 ist das Muster um
 90° gegen den Uhrzeigersinn gedreht
 
 **Prüfungen**:
-- [ ] Teildrehung (270°) löst keine sichtbare Rotation aus
-- [ ] Volle Umdrehung (360° netto) rotiert exakt 90° im Uhrzeigersinn
-- [ ] Vierfache Rotation ergibt wieder das exakte Ausgangsbild (Rundlauf)
-- [ ] Rückwärtsdrehung rotiert symmetrisch gegen den Uhrzeigersinn
-- [ ] Kein Pixel geht verloren, keine Kanten-Unschärfe (exakter Remap statt SDK-Bildtransformation)
-- [ ] Nach dem Herauszoomen ist die Rotation im Editor/Zoom Room sichtbar (Dedup-Commit-Pfad unverändert)
-- [ ] **Regressionsprüfung**: B+Crank-Zoom-Out aus dem Pixel Room funktioniert weiterhin unverändert im selben Testlauf
+- [x] Teildrehung (270°) löst keine sichtbare Rotation aus
+- [x] Volle Umdrehung (360° netto) rotiert exakt 90° im Uhrzeigersinn
+- [x] Vierfache Rotation ergibt wieder das exakte Ausgangsbild (Rundlauf)
+- [x] Rückwärtsdrehung rotiert symmetrisch gegen den Uhrzeigersinn
+- [x] Kein Pixel geht verloren, keine Kanten-Unschärfe (exakter Remap statt SDK-Bildtransformation)
+- [x] Nach dem Herauszoomen ist die Rotation im Editor/Zoom Room sichtbar (Dedup-Commit-Pfad unverändert)
+- [x] **Regressionsprüfung**: B+Crank-Zoom-Out aus dem Pixel Room funktioniert weiterhin unverändert im selben Testlauf
 
-**Status**: [ ] Nicht getestet | [ ] Bestanden | [ ] Fehlgeschlagen
+**Status**: [x] Bestanden (Befund: "geht super", auf echter Hardware getestet) | [ ] Fehlgeschlagen
 
 ---
 
@@ -97,14 +102,14 @@ das Bild wieder exakt dem Ausgangsmuster; nach Schritt 5 ist das Muster um
 bleibt wirkungslos (Frame bleibt weiß, keine Fehler)
 
 **Prüfungen**:
-- [ ] Systemmenü zeigt "clear screen" an der Stelle des früheren "reset frame"
-- [ ] "reset frame" ist an KEINER Stelle der Oberfläche mehr auffindbar
-- [ ] Aktiver Frame ist nach "clear screen" vollständig weiß
-- [ ] Anderer Frame bleibt unverändert
-- [ ] Frame-Anzahl und -Reihenfolge unverändert
-- [ ] Wiederholtes "clear screen" auf bereits leerem Frame ist idempotent (kein Fehler, keine Änderung)
+- [x] Systemmenü zeigt "clear screen" an der Stelle des früheren "reset frame"
+- [x] "reset frame" ist an KEINER Stelle der Oberfläche mehr auffindbar
+- [x] Aktiver Frame ist nach "clear screen" vollständig weiß
+- [x] Anderer Frame bleibt unverändert
+- [x] Frame-Anzahl und -Reihenfolge unverändert
+- [x] Wiederholtes "clear screen" auf bereits leerem Frame ist idempotent (kein Fehler, keine Änderung)
 
-**Status**: [ ] Nicht getestet | [ ] Bestanden | [ ] Fehlgeschlagen
+**Status**: [x] Bestanden (auf echter Hardware getestet) | [ ] Fehlgeschlagen
 
 ---
 
