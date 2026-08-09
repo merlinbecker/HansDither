@@ -6,6 +6,13 @@ mygame.pdx.zip
 Hans Dither.pdx/
 Hans Dither.pdx.zip
 
+# Verirrte/abweichende pdc-Build-Ausgaben (nie Quellcode, nie einchecken)
+main.pdx/
+pdxinfo.pdx/
+
+# Build-Exporte generell nie einchecken
+*.zip
+
 .vscode
 
 .DS_Store
