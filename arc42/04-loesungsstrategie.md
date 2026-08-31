@@ -57,3 +57,33 @@ Der Planungsschnitt v0.3.0 ersetzt die Leitentscheidungen 3 und 10 sowie Teile v
 5. Animation als Kernfeature: Crank steuert Frames (max. 12, Kopie-Semantik, Rotation); B+Crank steuert die drei Zoomstufen (Malbreite 16x16-Tile / 2x2-Block / 1x1-Pixel).
 
 Damit entfaellt das bisherige Nicht-Ziel "keine Multi-Frame-Animationstools"; die Frame-Verwaltung wird bewusst minimal gehalten (Prinzip IV der Constitution). Die Feature-Spezifikationen liegen unter `specs/001-pdi-storage-format`, `specs/002-start-selection-screen` und `specs/003-editor-animation-zoom`.
+
+## 4.6 Ebenen & Pixel-Transparenz (Spec 010)
+
+Der Editor erhaelt Ebenen, praezises Pixel-Verschieben und Transparenz.
+Leitentscheidungen (Details in Kapitel 9, AD-039..AD-041):
+
+1. **Feste 3-Ebenen-Struktur je Frame.** Jeder Frame hat genau 3 Ebenen,
+   immer — eine harte Grenze wie MAX_FRAMES = 12. Kein Hinzufuegen/Loeschen
+   von Ebenen (AD-039). Eine komplett leere obere Ebene wird auf Platte
+   weggelassen und beim Laden wieder ergaenzt; Alt-Bilder (eine flache
+   Ebene) laden als Ebene 1 + zwei leere obere.
+2. **Transparenz pro Pixel im Tile.** Ein transparenter Pixel ist
+   `gfx.kColorClear` im 16×16-Tile-Bild — kein Nebendaten-Array.
+   `ImageStoreCodec.hashTile` unterscheidet drei Pixelklassen
+   (schwarz/weiss/transparent), sodass Transparenz-Varianten getrennt
+   dedupliziert werden (AD-040). Der „Nicht-Tinte“-Zustand ist
+   ebenenabhaengig: weiss auf Ebene 1, transparent auf Ebenen 2–3.
+3. **Compositing als flacher Cache.** `imageData.frameLayers` (3 Ebenen)
+   ist die Wahrheit; `imageData.frames` ist ein daraus abgeleiteter
+   flacher 375er-Cache (oberste nicht-leere Zelle gewinnt), den die
+   bestehende Tilemap zeichnet — kein neuer Renderpfad (AD-041). Nur die
+   aktive Ebene ist editierbar (Up/Down + Crank waehlt sie).
+4. **US4 = Frame-Verwaltung.** Ein neuer `FrameManagementView` (Halten B +
+   Kurbel rueckwaerts) laesst Frames anordnen und loeschen (min. 1). Keine
+   Layer View — Ebenen sind fest (AD-041).
+
+Speicherformat `frames.json` steigt auf Version `"1.1"`
+(`frames[].layers[].{layerIndex, name, positions[375], visible}`); v1.0
+wird strukturbasiert erkannt und automatisch migriert. Spezifikation:
+`specs/010-layer-management-with-transparency/`.

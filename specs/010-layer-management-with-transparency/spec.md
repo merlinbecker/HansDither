@@ -95,14 +95,14 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 **Why this priority**: Reordering and deleting frames is essential for building a real animation. Without it the user cannot fix the order of drawn frames or remove mistakes. P2 because the MVP (US1–US3) is usable without it.
 
-**Independent Test**: In Tile View with 3 frames, hold B and rotate Crank backward → Frame Management View appears listing Frame 1–3. Mark Frame 3, press Left → it becomes Frame 2. Mark a frame, press B → it is removed and the list shrinks to 2. Release B → back in Tile View, showing the reordered/shortened animation.
+**Independent Test**: In Tile View with 3 frames, hold B and rotate Crank backward → Frame Management View appears listing Frame 1–3. Mark Frame 3 (A), press Left → it becomes Frame 2. Mark a frame (A), press A again → it is removed and the list shrinks to 2. Release B → back in Tile View, showing the reordered/shortened animation.
 
 **Acceptance Scenarios**:
 
 1. **Given** in Tile View, **When** B is held and Crank is rotated counterclockwise, **Then** the Frame Management View opens, listing every animation frame in order
-2. **Given** the Frame Management View, **When** the user presses A on a frame entry, **Then** that frame is marked (visual indicator)
-3. **Given** a frame is marked, **When** the user presses Left or Right, **Then** the marked frame moves one position earlier / later in the animation sequence (clamped at the ends)
-4. **Given** a frame is marked, **When** the user presses B, **Then** that frame is deleted and the list refreshes — unless only one frame remains, in which case deletion is rejected
+2. **Given** the Frame Management View, **When** the user presses A on a frame entry, **Then** that frame is marked (visual indicator); moving the cursor with the D-Pad clears the mark
+3. **Given** a frame is marked, **When** the user presses Left or Right, **Then** the marked frame moves one position earlier / later in the animation sequence (clamped at the ends), and the mark follows it
+4. **Given** a frame is marked, **When** the user presses A again on that same frame, **Then** it is deleted and the list refreshes — unless only one frame remains, in which case deletion is rejected
 5. **Given** the Frame Management View, **When** the user releases B, **Then** navigation returns to the Tile View with the current frame clamped into the (possibly shorter/reordered) sequence
 6. **Given** frames were reordered or deleted, **When** the image is saved and reloaded, **Then** the new frame order and count persist
 
@@ -158,8 +158,8 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 - **FR-018**: System MUST open the Frame Management View when B is held and the Crank is rotated counterclockwise in Tile View
 - **FR-019**: The Frame Management View MUST list every animation frame in order as selectable entries
-- **FR-020**: The user MUST be able to mark a frame with A and delete the marked frame with B; deletion MUST be rejected when only one frame remains
-- **FR-021**: The user MUST be able to move the marked frame one position earlier (Left) or later (Right) in the sequence; moves are clamped at the ends
+- **FR-020**: The user MUST be able to mark a frame with A; a **second A-press on the marked frame** deletes it (two-step confirmation — B is occupied by the hold-to-stay gesture). Deletion MUST be rejected when only one frame remains
+- **FR-021**: The user MUST be able to move the marked frame one position earlier (Left) or later (Right) in the sequence; moves are clamped at the ends; moving the D-Pad cursor clears the mark
 - **FR-022**: Releasing B MUST return to the Tile View, with the current frame index clamped into the resulting (possibly shorter/reordered) sequence
 - **FR-023**: There MUST be no Layer View or per-frame layer submenu — layers are a fixed structure and are not managed here
 - **FR-024**: Reordered / deleted frames MUST persist through save and reload

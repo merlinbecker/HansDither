@@ -81,11 +81,11 @@ Edits (`setCell`, `applyTileEdits`) route through `writeActiveLayerPosition`: on
 |----------------|----------|
 | `FrameManagementView:init(switchRoom, editorRoom)` | Wiring. |
 | `FrameManagementView:setImageData(imageData)` | Receives the live `imageData` from EditorRoom on entry. |
-| D-Pad Up/Down | Move the list cursor over frame entries. |
+| D-Pad Up/Down | Move the list cursor over frame entries (clears any mark). |
 | A | Mark the frame under the cursor. |
-| Left / Right (frame marked) | Move the marked frame one slot earlier / later; clamped at the ends; `frameLayers` and the `frames` cache move together. |
-| B tap (frame marked) | Delete the marked frame; **rejected if only 1 frame remains**. |
-| B released | `switchRoom(editorRoom)`; `currentFrame` clamped into the new sequence. |
+| A again (marked frame) | Delete the marked frame (two-step confirmation); **rejected if only 1 frame remains**. |
+| Left / Right (frame marked) | Move the marked frame one slot earlier / later; clamped at the ends; `frameLayers` and the `frames` cache move together; the mark follows. |
+| B released | `switchRoom(editorRoom)`; sets `imageData.returnFrame`; `currentFrame` clamped into the new sequence. |
 
 No Layer View, no per-frame layer submenu (FR-023).
 

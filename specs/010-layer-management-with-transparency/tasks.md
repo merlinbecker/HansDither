@@ -53,6 +53,10 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 - **Phase 4** (T016–T024, US2 Transparenz in PixelRoom) ✅ — buildNumber 15 → 16.
 - **Phase 5** (T025–T032, US3 Layer-Cycling in EditorRoom) ✅ — buildNumber 16 → 17.
 - **Phase 3** (T010–T015, US1 Pixel-Shift in ZoomRoom) ✅ — buildNumber 17 → 18.
+- **Advisor-Fix** (Radierer auf oberen Ebenen → „absent“) ✅ — buildNumber 18 → 19.
+- **Third Round** (Klarstellung durch alle Artefakte + Code) ✅ — feste 3 Ebenen, ebenenabhängiger „Nicht-Tinte“-Zustand, buildNumber 19 → 20.
+- **Phase 6** (T033–T043, US4 Frame Management View) ✅ — buildNumber 20 → 21.
+- **Phase 7** (T044–T059): Gates grün (T044–T048) ✅; arc42 Ch.4/Ch.5/Ch.9 + ADR-039..041 (T049–T052) ✅; Performance-Profiling + Simulator-Integrationstests (T053–T059) **offen** (Gerät/Simulator).
 - **Phase 6** (T033–T043, US4 Management-Views) — offen.
 - **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
 
@@ -238,51 +242,43 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 - [X] T032 (beide Fassungen) [P] [US3] `tests/headless_tests.lua`: „Up/Down + Crank zyklt die aktive Ebene mit Wrap“, „Crank ohne Up/Down zyklt weiterhin Frames“, „aktiver Ebenenindex überlebt Frame-Wechsel mit Wrap“.
 
-**Checkpoint**: US3 ✅ — headless-Tests grün; buildNumber 16 → 17; pdc grün. 60-FPS-Compositing-Profiling → T053 (Simulator/Gerät). Commit folgt.
-
-**Checkpoint**: US3 complete when all tests pass + pdc build succeeds + buildNumber incremented
+**Checkpoint**: US3 ✅ — headless-Tests grün; buildNumber 16 → 17; pdc grün. 60-FPS-Compositing-Profiling → T053 (Simulator/Gerät).
 
 ---
 
-## Phase 6: User Story 4 - Layer & Frame Management View (Priority: P2)
+## Phase 6: User Story 4 - Frame Management View (Priority: P2)
 
-**Goal**: Implement dedicated Layer View + Animation Layer View for managing layers and frames
+> **Neu ausgerichtet (Third Round):** Ebenen sind fix 3 pro Frame — **keine Layer View**. US4 ist eine **Frame-Verwaltung**: Frames anordnen + löschen (min. 1). Alle „TileView“ = `Source/EditorRoom.lua`; neue Datei `Source/FrameManagementView.lua`.
 
-**3-Layer Constraint Context**: Layer deletion respects bounds (Layer 1 cannot be deleted, max 3 layers enforced)
+**Independent Test** (quickstart Szenario 4): Tile View → B halten + Kurbel rückwärts → Frame-Liste; Frame markieren (A) + Links → Reihenfolge ändert sich; A erneut auf dem markierten Frame → gelöscht; letzter Frame nicht löschbar; B loslassen → zurück.
 
-**Independent Test** (from quickstart.md): Tile View → B + Crank backward → Layer View shows 3 layer entries (max 3) → try delete Layer 1 (rejected) → delete Layer 3 → Layer View shows 2 → B + Crank backward again → Animation Layer View shows frames
+### Frame Management View
 
-### Layer View Implementation (3-Layer Aware)
+- [X] T033 (US4) `Source/FrameManagementView.lua` (neuer Room) — Liste aller Frames; D-Pad hoch/runter bewegt den Cursor (hebt Markierung auf).
 
-- [ ] T033 [US4] Create LayerView Room in `Source/Rooms/LayerView.lua`. Display all layers in current frame (1–3 entries) as entry list (similar to SelectionRoom pattern). Use D-Pad to navigate, A-press to select layer, B-press (on selected) to delete. File path: `Source/Rooms/LayerView.lua`
+- [X] T034 (US4) `FrameManagementView:draw()` — Frame-Einträge „Frame i / n“ mit Cursor-Highlight + `[*]`-Markierung; Hinweis „last frame cannot be deleted“ bei 1 Frame.
 
-- [ ] T034 [US4] Implement LayerView.draw(): render layer entries with cursor highlight. Display layer name + index + layer count (e.g., "1: Background (1/3)"). File path: `Source/Rooms/LayerView.lua`
+- [X] T035 (US4) `A` markiert den Frame unter dem Cursor. `A erneut` auf dem markierten Frame **löscht** ihn (Zwei-Schritt-Bestätigung; B ist durch die Halte-Geste belegt → A statt B). Löschen bei nur 1 Frame wird abgelehnt (FR-020). `table.remove` aus `frameLayers` **und** dem flachen `frames`-Cache.
 
-- [ ] T035 [US4] Implement LayerView.update(): handle D-Pad navigation through layers, A-press select, B-press delete. Call Frame:deleteLayer(selectedLayerIndex) when deleting. **Validation: prevent deletion of Layer 1 (mandatory base layer)**. Refresh view after deletion. File path: `Source/Rooms/LayerView.lua`
+- [X] T036 (US4) `Links`/`Rechts` auf dem markierten Frame verschieben ihn eine Position (an den Enden geklemmt); `swapFrames` tauscht `frameLayers[a]↔[b]` und `frames[a]↔[b]` im Gleichschritt; Cursor + Markierung folgen.
 
-- [ ] T036 [US4] Implement layer deletion logic: when layer deleted, adjust activeLayerIndex if needed (if deleted layer was active, switch to previous layer or Layer 0). Verify remaining layer count never drops below 1 (Layer 1 mandatory). Invalidate tile cache. File path: `Source/Rooms/LayerView.lua`
+### View-Navigation
 
-### View Hierarchy Navigation
+- [X] T037 (US4) `EditorRoom.handleCrank`: der B + Kurbel-rückwärts-Zweig (`zoomTickAccu <= -ZOOM_TICK_THRESHOLD`, früher No-op) → `openFrameManagementView()` → `frameManagementView:setImageData(imageData, currentFrame)` + `switchRoom`. File: `Source/EditorRoom.lua`
 
-- [ ] T037 [US4] Modify TileView.update() to detect B-press + Crank backward combination. When detected, switchRoom(LayerView) with reference to current frame. File path: `Source/Rooms/TileView.lua`
+- [X] T038 (US4) `FrameManagementView:update()` erkennt **B loslassen** (nach der Eintritts-Halte-Geste) → `switchRoom(editorRoom)`, setzt `imageData.returnFrame`. `EditorRoom:entered()` liest `returnFrame`, klemmt `currentFrame` + `activeLayer` in die evtl. kürzere Sequenz, `updateTilemapFrame()`.
 
-- [ ] T038 [US4] Implement LayerView back navigation: when user releases B, switchRoom(TileView). Persist any layer deletions to frame. Verify frame now has 1–3 layers (never 0, never > 3). File path: `Source/Rooms/LayerView.lua`
+### ~~Animation Layer View~~ (entfällt)
 
-### Animation Layer View (Frame-Level Management)
+- [X] T039–T041 ~~AnimationLayerView / Frame-Layer-Submenu~~ → **entfallen** (keine Ebenen-Verwaltung; die Frame-Verwaltung *ist* die frühere „Animation Layer View“, nur ohne Ebenen-Bezug). `main.lua`: `import "FrameManagementView"` + Verdrahtung `EditorRoom ⇄ FrameManagementView`.
 
-- [ ] T039 [US4] Create AnimationLayerView Room in `Source/Rooms/AnimationLayerView.lua`. Display all frames as entries (Frame 1, Frame 2, ..., Frame 12). Use D-Pad to navigate, A-press to drill down into Frame submenu. File path: `Source/Rooms/AnimationLayerView.lua`
+### Verification & Testing
 
-- [ ] T040 [US4] Implement submenu for AnimationLayerView: when A-press on frame entry, show all layers in that frame (1–3 entries). Allow delete operations (subject to Layer 1 protection). File path: `Source/Rooms/AnimationLayerView.lua`
+- [X] T042 (US4) `tests/headless_tests.lua` „FrameManagementView: Navigation, Markieren, Verschieben, Loeschen“: Reorder tauscht beide Arrays im Gleichschritt, zweiter A-Druck löscht, letzter Frame geschützt, B-Release → `switchRoom`.
 
-- [ ] T041 [US4] Modify LayerView to support progression to AnimationLayerView: when B + Crank backward from LayerView, switchRoom(AnimationLayerView). File path: `Source/Rooms/LayerView.lua`
+- [X] T043 (US4) `tests/headless_tests.lua` „EditorRoom: B + Kurbel rueckwaerts oeffnet die Frame Management View“ + Rückkehr mit `returnFrame`-Klemmung.
 
-### Verification & Testing (3-Layer Invariant)
-
-- [ ] T042 [P] [US4] Add test case to `tests/headless_tests.lua`: "Layer Management: create + delete layers (bounded 1–3)". Add 3 layers to frame, delete Layer 2, verify frame:getLayerCount() == 2, verify remaining layers re-indexed, verify cannot exceed 3. File path: `tests/headless_tests.lua`
-
-- [ ] T043 [P] [US4] Add test case: "Layer Management: Layer 1 cannot be deleted". Frame has 1–3 layers, attempt Frame:deleteLayer(0) → rejected. Verify frame:getLayerCount() unchanged. File path: `tests/headless_tests.lua`
-
-**Checkpoint**: US4 complete when all tests pass + layer management respects 3-layer bounds + pdc build succeeds + buildNumber incremented
+**Checkpoint**: US4 ✅ — headless-Tests grün; buildNumber 20 → 21; pdc grün.
 
 ---
 
@@ -292,45 +288,45 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 ### Headless Test Suite (Constitution V Gate 1)
 
-- [ ] T044 Run full test suite: `lua tests/headless_tests.lua`. All tests must pass. Output: "ALLE TESTS BESTANDEN". File path: `tests/headless_tests.lua`
+- [X] T044 `lua tests/headless_tests.lua` → „ALLE TESTS BESTANDEN“ (nach jeder Phase, siehe Fortschritt).
 
-- [ ] T045 Add comprehensive test section "Layer Management & Transparency (Spec 010, US1-US4)" to headless test suite. Include at least 15 test cases covering: pixel shifting (4 cases), transparency (4 cases), layer cycling (4 cases), management (3 cases). File path: `tests/headless_tests.lua`
+- [X] T045 Spec-010-Testsektionen ergänzt: PixelTransparency, LayerModel (Konstruktion/`padTo3`/`validate`/`cycleActive`/Compositing), 3-Zustands-`hashTile`, `createFramesTableV11` (leere obere Ebenen weglassen), `pruneUnusedTilesLayered`, v1.1-Round-Trip, v1.0→v1.1-Upgrade, 3-Layer-Cap; EditorRoom (aktive Ebene / Composite-Cache / Radierer / `tickForward`-Deep-Copy / „clear screen“ / Up-Down-Crank-Cyclen / Frame-Wechsel); PixelRoom (ebenenabhängiger Off-State / Strich); ZoomRoom (B+Pfeil-Shift-Dispatch); FrameManagementView (Navigation/Markieren/Verschieben/Löschen) + EditorRoom-Einstiegsgeste. ~180 Assertions.
 
-- [ ] T046 Verify Constitution V Testpflicht compliance: every implementation task (T001–T043) has corresponding test coverage. No task without test. File path: `tests/headless_tests.lua`
+- [X] T046 Jede Implementierungs-Task hat headless-Abdeckung; pixel-genaue PDI-Sheet-Roundtrips sind im Mock nicht prüfbar (`image:draw` No-op, gilt für die ganze Datei) → Simulator T056–T059.
 
 ### Build Gate (Constitution V Gate 2)
 
-- [ ] T047 Increment buildNumber in `Source/pdxinfo` by 1 before each test run. Verify build: `pdc Source "Hans Dither.pdx"`. No errors. Repeat for every test cycle. File path: `Source/pdxinfo`
+- [X] T047 `buildNumber` je `pdc`-Lauf um 1 erhöht: 13 → 21 über die Phasen.
 
-- [ ] T048 Final build gate: `pdc Source "Hans Dither.pdx"` must succeed, binary `Hans Dither.pdx` created, simulator can launch without crashes. File path: `Source/pdxinfo`
+- [X] T048 `pdc Source "Hans Dither.pdx"` läuft nach jeder Phase fehlerfrei durch (`main.pdz` erzeugt). Simulator-Launch → T056.
 
 ### arc42 Documentation Updates
 
-- [ ] T049 Update arc42 Chapter 4 (Solution Strategy): add section "Layer Architecture & Pixel Transparency". Describe: per-frame layers, compositing strategy, transparency state model. File path: `arc42/01_introduction_and_goals.md` (or relevant chapter file)
+- [X] T049 arc42 Kapitel 4: neuer Abschnitt **4.6 „Ebenen & Pixel-Transparenz (Spec 010)“** — feste 3-Ebenen-Struktur, flacher Composite-Cache, Transparenz als `kColorClear` im Tile, ebenenabhängiger Off-State, US4 = Frame-Verwaltung. File: `arc42/04-loesungsstrategie.md`
 
-- [ ] T050 Update arc42 Chapter 9 (Architecture Decisions): add ADR "Layer Rendering Order: Composite All Layers vs. Single Active Layer". Decision rationale: composite all layers (WYSIWYG), considered single-layer (simpler state). Include performance analysis. File path: `arc42/09_architecture_decisions.md`
+- [X] T050 arc42 Kapitel 9: **AD-041** (9.29) + [ADR-041](../../arc42/adr/ADR-041-Compositing-Cache-und-Frame-Verwaltung.md) — Compositing als flacher Cache (oberste nicht-leere Zelle gewinnt; Multi-Tilemap verworfen) + US4 = Frame-Verwaltung.
 
-- [ ] T051 Add ADR "Pixel Transparency Encoding: 3-State Model (opaque/transparent/empty)". Alternatives: single bit, separate alpha layer, blend modes. Chosen: 3-byte model for simplicity + SDK compatibility. File path: `arc42/09_architecture_decisions.md`
+- [X] T051 arc42 Kapitel 9: **AD-040** (9.28) + [ADR-040](../../arc42/adr/ADR-040-Pixel-Transparenz-im-Tile.md) — `kColorClear` im Tile + 3-Klassen-`hashTile` (per-Zelle-0/1/2-Array verworfen) + ebenenabhängiger Off-State.
 
-- [ ] T052 Add ADR "Layer Persistence on Frame Switch: Index Preservation + Wrap-Around". Decision: preserve activeLayerIndex, wrap if frame has fewer layers. Alternatives: reset to Layer 1, preserve by name. File path: `arc42/09_architecture_decisions.md`
+- [X] T052 arc42 Kapitel 9: **AD-039** (9.27) + [ADR-039](../../arc42/adr/ADR-039-Feste-3-Ebenen-Struktur.md) — feste 3-Ebenen-Struktur ohne Add/Delete, leere obere Ebenen auf Platte weggelassen. arc42 Kapitel 5 (Bausteinsicht) mitgezogen (neue Bausteine LayerModel/PixelTransparency/FrameManagementView + Spec-010-Klauseln an EditorRoom/ZoomRoom/PixelRoom/ImageStoreCodec). **Kapitel 6/7 (Laufzeit-/Verteilungssicht): Spec-010-Sequenzen als Folgeaufgabe offen.**
 
-### Performance Tuning
+### Performance Tuning (Simulator/Gerät)
 
-- [ ] T053 Profile Tile View rendering with 10+ layers: verify 60 FPS maintained. Measure frame time during compositing. Optimize if > 16ms per frame (60 FPS target). File path: `Source/Rooms/TileView.lua`
+- [ ] T053 Tile-View-Compositing (`LayerModel.compositeToFlat` je Edit + voller Frame bei Wechsel) auf 60 FPS profilen. `compositeToTiles` (pixel-genaue Ebenen-Überblendung) ist implementiert, aber noch **nicht im Renderpfad verdrahtet** — für die aktuelle „oberste Ebene je Zelle gewinnt“-Darstellung nicht nötig; Verdrahtung + Profiling hier.
 
-- [ ] T054 Profile Layer:shift() operation: verify pixel buffer + retiling completes within 1 frame (16ms). Optimize hot path if needed. File path: `Source/Models/Layer.lua`
+- [ ] T054 `LayerModel.shiftLayerContent` profilen: baut je Tastendruck alle 375 Tiles der Ebene neu (96k Pixel-Ops). Muss < 16 ms bleiben; ggf. auf tatsächlich geänderte Tiles beschränken.
 
-- [ ] T055 Memory audit: verify layer structures (375-entry arrays × 12 frames × 10 layers) fit within Playdate RAM budget (~27 KB for typical use). No heap explosions. File path: `Source/Models/Layer.lua`
+- [ ] T055 Speicher-Audit: 12 Frames × 3 Ebenen × 375 Tile-Indizes ≈ 13,5 K Ganzzahlen — unkritisch. Prüfen, dass `compositeToFlat`/Recomposite keine Tabellen-Leaks erzeugen.
 
-### Integration & End-to-End Testing
+### Integration & End-to-End Testing (Simulator)
 
-- [ ] T056 Manual integration test (quickstart.md Scenario 1): Load image with 3-layer frame in Simulator → Tile View → hold Up, rotate Crank → layer cycles forward → release, rotate Crank → frame cycles → verify layer index preserved across frame switches
+- [ ] T056 quickstart Szenario 1: 3 Ebenen cyclen (Up/Down + Crank), Frame-Cyclen unbeeinflusst, aktiver Index bleibt über Frame-Wechsel.
 
-- [ ] T057 Manual integration test (quickstart.md Scenario 2): Pixel View → A-press (opaque) + B-press (transparent) + Y-press (empty) → verify checkerboard rendering → save → reload → verify states persist
+- [ ] T057 quickstart Szenario 2: PixelRoom — B auf Ebene 2/3 malt transparent (Schachbrett), A radiert nach transparent; auf Ebene 1 malt B weiß. Tile View: untere Ebene scheint durch. Save/Reload.
 
-- [ ] T058 Manual integration test (quickstart.md Scenario 3): Zoom View → hold B + arrow keys → content shifts pixel-by-pixel → tiles recalculate → save → reload → shift persists
+- [ ] T058 quickstart Szenario 3: ZoomRoom — B + Pfeiltasten schieben den Ebeneninhalt pixelweise, Tiles neu berechnet. Save/Reload.
 
-- [ ] T059 Manual integration test (quickstart.md Scenario 5): Load v1.0 image → verify auto-upgrade to v1.1 → save → verify transparency array created (all zeros)
+- [ ] T059 quickstart Szenario 4 + 5: Frame Management View (B + Kurbel rückwärts) — anordnen/löschen/min. 1; v1.0-Bild lädt als Ebene 1 + 2 leere obere.
 
 ---
 

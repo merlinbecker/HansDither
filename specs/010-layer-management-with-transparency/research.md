@@ -199,17 +199,17 @@ Frame Management View  --(release B)-->  Tile View
 ```
 
 **In the Frame Management View**:
-- D-Pad Up/Down (or Left/Right) = move the list cursor between frame entries
+- D-Pad Up/Down = move the list cursor between frame entries (clears any mark)
 - A = mark the frame under the cursor
-- Left / Right (with a frame marked) = move the marked frame one slot earlier / later (clamped at the ends)
-- B (tap, with a frame marked) = delete the marked frame — rejected if only one frame remains
+- A again on the marked frame = delete it (two-step confirmation) — rejected if only one frame remains
+- Left / Right (with a frame marked) = move the marked frame one slot earlier / later (clamped at the ends); the mark follows
 - release B = return to Tile View; `currentFrame` is clamped into the new sequence
 
 **Rationale**:
-- One gesture in, one gesture out — no hierarchy, no "prevent loops" problem (FR-024 is satisfied by there being nowhere to loop).
+- One gesture in (hold B + Crank back), one gesture out (release B) — no hierarchy, so FR-024 ("prevent navigation loops") is satisfied trivially.
+- **Delete is confirmed with a second A, not B**: the user is *holding* B the whole time (that hold is what keeps them in the view), so B cannot also mean "delete". Two A-presses is the Session-1 two-step safety pattern with A in place of B.
+- B + Crank-backward in Tile View was a no-op (`zoomTickAccu <= -ZOOM_TICK_THRESHOLD` — "outermost zoom, backward is a no-op"), so the entry gesture is free and does not touch the Contract CR-01 zoom chain.
 - Reuses the SelectionRoom list-navigation feel.
-- B + Crank-backward in Tile View is currently a no-op (`zoomTickAccu <= -ZOOM_TICK_THRESHOLD` — "outermost zoom, backward is a no-op"), so the gesture is free and does not touch the Contract CR-01 zoom chain.
-- B is overloaded in the view (tap = delete, hold = the gesture that got you here, release = exit) but each is a distinct event and the set is small.
 
 **Evidence**: Existing EditorRoom `handleCrank` already reserves the B + backward-crank slot as an explicit no-op; SelectionRoom provides the list-UI precedent.
 

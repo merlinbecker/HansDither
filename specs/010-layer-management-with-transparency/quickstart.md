@@ -131,15 +131,15 @@ Then repeat on **Layer 1**: B-press produces **white** (identical to the A-erase
 | 3 | Press Left | The marked frame moves one slot earlier — the list now reads 1, 3, 2, 4 |
 | 4 | Press Left again | List reads 3, 1, 2, 4 |
 | 5 | Press Left again | No-op — the marked frame is already first |
-| 6 | Move the cursor to the last entry, press A to mark it, press B | That frame is deleted; the list shrinks to 3 |
-| 7 | Delete two more frames | The 3rd deletion (down to 1 frame) is **rejected** — at least one frame remains |
+| 6 | Move the cursor (D-Pad) to the last entry, press A to mark it, press A again | The mark is confirmed on the first A, the second A deletes it; the list shrinks to 3 |
+| 7 | Delete two more frames (A to mark, A again to delete) | The 3rd deletion (down to 1 frame) is **rejected** — at least one frame remains |
 | 8 | Release B | Back in Tile View; the animation now plays in the reordered/shortened sequence; `currentFrame` is clamped into range |
 | 9 | Save and reload | The new frame order and count persist |
 
 **Acceptance Criteria**:
 - ✅ Frame Management View accessible via one B + Crank-backward gesture in Tile View
-- ✅ A marks a frame; Left/Right move it (clamped at the ends)
-- ✅ B deletes the marked frame; deletion rejected when only 1 frame remains
+- ✅ A marks a frame; a second A on the marked frame deletes it (two-step); Left/Right move it (clamped)
+- ✅ Deletion rejected when only 1 frame remains
 - ✅ Releasing B returns to Tile View with `currentFrame` clamped
 - ✅ Reorder / delete persist through save/reload
 - ✅ There is no Layer View — layers are fixed at 3 and not managed here

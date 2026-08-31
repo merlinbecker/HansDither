@@ -158,4 +158,16 @@ New clarification integrated: **3-Layer Hard Limit per Frame**
 - Affects: FR-012, FR-012b, FR-017, Edge Cases (layer deletion, empty layers, max layers)
 - Rationale: Backward compatible, performance-optimized, simplifies architecture
 
+### Integration Note (Session 3, 2026-08-31) — supersedes parts of Sessions 1–2
+
+Re-validated against the updated spec. All 16 checklist items remain passing
+(16/16 → 16/16, no state changes). New clarifications integrated:
+
+- **Layers are a fixed structure of exactly 3 per frame** — no add/delete (like the 12-frame cap). Supersedes the Session-2 "1–3 optional" model and Session-1 Question 2/3 (there is no Layer View to delete layers in).
+- **Non-ink pixel state is layer-dependent**: white on Layer 1, transparent on Layers 2–3. Layer 1 has no transparent state.
+- **Empty upper layers** are omitted from the saved file, reconstituted to 3 on load.
+- **US4 is now a Frame Management View** (reorder + delete frames, min. 1) — the Layer View / Animation Layer View from Session-1 Questions 2–3 are dropped. Delete is confirmed with a second A-press (B is the hold-to-stay key).
+- Affects: FR-006..FR-011 (transparency), FR-012/012b/012c/017b (fixed 3 layers), FR-018..FR-024 (Frame Management View), Edge Cases, Key Entities, Success Criteria, Assumptions.
+- The "CLARIFICATION REQUIRED" Questions 1–3 above are historical; Q1 (index preservation) still holds trivially since every frame has all 3 layers.
+
 
