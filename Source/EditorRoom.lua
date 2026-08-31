@@ -69,6 +69,7 @@ local bUsedForZoom = false       -- Crank während B-Hold unterdrückt die Pipet
 local bNavConsumed = false       -- B+D-Pad hat Ebene/Frame gewechselt -> Pipette bei B-Release unterdruecken
 local pickerVisible = false      -- Tile-Picker-Overlay sichtbar (abgeleitet aus pickerUntilMs)
 local pickerUntilMs = 0
+local pickerTileList = nil       -- Cache der referenzierten Tile-Indizes; nil = neu bauen (bei Tile-Mutation invalidiert)
 local pickMessage = nil          -- "Tile N picked" (Pipette); ersetzt kurz das Bauchbinden-Label
 local pickMessageUntilMs = 0
 local pickMessageVisible = false -- abgeleitet; Uebergangs-Redraw wie bauchbindeVisible
@@ -121,15 +122,18 @@ local function updateTilemapFrame()
     end
 end
 
--- Distinkte, aktuell referenzierte Tile-Indizes fuer den Tile-Picker
--- (aufsteigend). Quelle sind die EBENEN-Positionen (`frameLayers`), NICHT der
--- flache Composite-Cache `imageData.frames`: dort gewinnt je Zelle nur die
--- oberste nicht-leere Ebene, sodass eine Kachel, die nur auf einer verdeckten
--- (oberen oder unteren) Ebene liegt, aus der Auswahl fiele — und mitten in der
--- Sitzung verschwinden koennte, sobald eine hoehere Ebene die Zelle abdeckt.
+-- Distinkte, aktuell referenzierte Tile-Indizes (aufsteigend). Gemeinsame
+-- Quelle fuer den Tile-Picker (Spec 010) UND die Pause-/Kontext-Ansicht
+-- (buildPauseMenuImage, Spec 006 CR-06 / FR-011).
+-- Quelle sind die EBENEN-Positionen (`frameLayers`), NICHT der flache
+-- Composite-Cache `imageData.frames`: dort gewinnt je Zelle nur die oberste
+-- nicht-leere Ebene, sodass eine Kachel, die nur auf einer verdeckten (oberen
+-- oder unteren) Ebene liegt, herausfiele — im Picker koennte sie mitten in der
+-- Sitzung verschwinden, sobald eine hoehere Ebene die Zelle abdeckt; in der
+-- Pause-Ansicht wuerde sie in "Tiles: N" fehlen.
 -- NICHT imagetable:getLength(): Sitzungs-Edits haengen neue Tiles an und
 -- verwaisen alte; erst das Speichern (pruneUnusedTilesLayered) raeumt auf.
--- Index 1 (Weiss-Basis) ist immer dabei -> Abwahl stets erreichbar.
+-- Index 1 (Weiss-Basis) ist immer dabei -> Abwahl im Picker stets erreichbar.
 local function referencedTileIndices()
     if not imageData then return {} end
     local seen, list = { [1] = true }, { 1 }
@@ -157,6 +161,19 @@ local function referencedTileIndices()
     end
     table.sort(list)
     return list
+end
+
+-- Gecachte Fassung fuer den Tile-Picker: `stepTilePicker` kann bei schnellem
+-- Kurbeln ~12x pro update() feuern, dazu einmal je draw() — ohne Cache waeren
+-- das ~13 Voll-Scans (3x375 Zellen) je Frame. Der Cache wird bei jeder
+-- Tile-Mutation invalidiert (`recompositeCell`/`recompositeCurrentFrame` und
+-- `entered()` setzen `pickerTileList = nil`). buildPauseMenuImage nutzt
+-- bewusst den frischen Scan (seltener Aufruf, Genauigkeit zaehlt).
+local function pickerList()
+    if not pickerTileList then
+        pickerTileList = referencedTileIndices()
+    end
+    return pickerTileList
 end
 
 -- ── Layer-Zugriff (Spec 010) ─────────────────────────────────────────────────
@@ -190,6 +207,7 @@ local function recompositeCell(cellIdx)
         local y = ((cellIdx - 1) // GRID_COLS) + 1
         tilemap:setTileAtPosition(x, y, idx)
     end
+    pickerTileList = nil  -- Tile-Menge kann sich geaendert haben
     needsRedraw = true
 end
 
@@ -200,6 +218,7 @@ local function recompositeCurrentFrame()
     if not entry then return end
     imageData.frames[currentFrame] = LayerModel.compositeToFlat(entry)
     updateTilemapFrame()
+    pickerTileList = nil  -- Tile-Menge kann sich geaendert haben
     needsRedraw = true
 end
 
@@ -314,7 +333,7 @@ end
 -- Landet sie auf Index 1 (Weiss), gilt das wie die Pipette auf Weiss: Abwahl
 -- (activeTile = nil, Toggle-Modus).
 local function stepTilePicker(dir)
-    local list = referencedTileIndices()
+    local list = pickerList()
     if #list == 0 then return end
     local current = activeTile or 1
     local pos = 1
@@ -323,7 +342,13 @@ local function stepTilePicker(dir)
     end
     pos = ((pos - 1 + dir) % #list) + 1
     local picked = list[pos]
-    activeTile = (picked == 1) and nil or picked
+    -- Index 1 (Weiss) = Abwahl/Toggle-Modus. KEIN `and nil or` — das ergaebe
+    -- in Lua immer `picked` (true and nil -> nil, nil or picked -> picked).
+    if picked == 1 then
+        activeTile = nil
+    else
+        activeTile = picked
+    end
     needsRedraw = true
 end
 
@@ -740,7 +765,7 @@ local PICKER_STRIP = 7
 local PICKER_CELL = 22
 
 local function drawTilePickerOverlay()
-    local list = referencedTileIndices()
+    local list = pickerList()
     if #list == 0 then return end
     local current = activeTile or 1
     local pos = 1
@@ -838,6 +863,7 @@ function EditorRoom:entered()
     bUsedForZoom = false
     bNavConsumed = false
     pickerVisible = false
+    pickerTileList = nil  -- Frame-Verwaltung kann Frames umgeordnet/geloescht haben
     pickMessage = nil
     pickMessageVisible = false
     lastActivityMs = playdate.getCurrentTimeMilliseconds()
@@ -891,20 +917,13 @@ local PAUSE_TILE_SCALE = PAUSE_TILE_SIZE / TILE_PX
 function EditorRoom:buildPauseMenuImage()
     if not imageData then return nil end
 
-    -- CR-06: NICHT imagetable:getLength() (koennte nie mehr referenzierte
-    -- Alt-Eintraege mitzaehlen) - frisches Set tatsaechlich referenzierter
-    -- Tile-Indizes ueber alle imageData.frames[*] hinweg (FR-011)
-    local seen = {}
-    local distinctIndices = {}
-    for _, frame in ipairs(imageData.frames) do
-        for _, tileIndex in ipairs(frame) do
-            if not seen[tileIndex] then
-                seen[tileIndex] = true
-                table.insert(distinctIndices, tileIndex)
-            end
-        end
-    end
-    table.sort(distinctIndices)
+    -- CR-06 (FR-011): frisches, aufsteigendes Set tatsaechlich referenzierter
+    -- Tile-Indizes — NICHT imagetable:getLength() (zaehlt nie mehr referenzierte
+    -- Alt-Eintraege mit). Seit Spec 010 gemeinsam mit dem Tile-Picker ueber
+    -- referencedTileIndices() (scannt die Ebenen-Positionen, sodass auch eine
+    -- nur auf einer verdeckten Ebene liegende Kachel gezaehlt wird — der fruehere
+    -- Scan des flachen Composite-Cache hat solche Kacheln uebersehen).
+    local distinctIndices = referencedTileIndices()
     local totalDistinctTileCount = #distinctIndices
 
     local img = gfx.image.new(400, 240, gfx.kColorWhite)

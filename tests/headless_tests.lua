@@ -1849,6 +1849,36 @@ mockDrawTextCalls = {}
 crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- 7 -> 9
 check(lastPickerLabel() == "Tile 9", "weiter zu Tile 9")
 
+-- Die Pause-/Kontext-Ansicht nutzt seit Spec 010 denselben Scan
+-- (referencedTileIndices) -> die verdeckte Kachel 7 wird jetzt mitgezaehlt
+-- (frueherer Composite-Cache-Scan hat sie uebersehen).
+mockDrawTextCalls = {}
+mockDrawScaledCalls = {}
+EditorRoom:buildPauseMenuImage()
+check(drawTextContains("Tiles: 3"),
+    "Pause-Ansicht zaehlt {1,7,9} = 3 (inkl. der nur auf Ebene 2 liegenden Kachel 7) — gemeinsamer Scan mit dem Picker")
+check(#mockDrawScaledCalls == 3, "3 Tile-Vorschauen gezeichnet (1, 7, 9)")
+
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- 9 -> Wrap -> 1 (Abwahl)
+check(lastPickerLabel() == "Tile 1", "Wrap am Listenende zurueck auf Kachel 1")
+
+-- Kachel 1 = echte Abwahl (activeTile == nil, Toggle-Modus): der A-Toggle auf
+-- einer weissen Basis-Zelle malt Schwarz (Tile 2) — NICHT Weiss. Faengt den
+-- Lua-Fallstrick `(picked == 1) and nil or picked` ab (der immer 1 ergibt).
+local pcov = EditorRoom:inputHandler()
+pcov.AButtonDown(); pcov.AButtonUp()          -- Zelle 1 / Ebene 1: Toggle Weiss -> Tile 2
+local covId = EditorRoom:getImageData()
+check(covId.frameLayers[1].layers[1].positions[1] == 2,
+    "nach Kachel-1-Abwahl toggelt A auf Schwarz (Tile 2), nicht auf Weiss -> activeTile war nil")
+
+-- ...und die frisch referenzierte Kachel 2 ist sofort im Picker (Cache
+-- invalidiert durch recompositeCell).
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- referenziert jetzt {1,2,7,9}; 1 -> 2
+check(lastPickerLabel() == "Tile 2",
+    "frisch gemalte Kachel 2 ist sofort waehlbar (Picker-Cache invalidiert)")
+
 -- ── US1: Pixel-Shift (Spec 010) ───────────────────────────────────────────
 
 section("LayerModel: shiftLayerContent verschiebt den Pixelinhalt um 1 Pixel (Spec 010, US1)")
