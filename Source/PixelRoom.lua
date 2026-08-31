@@ -2,7 +2,17 @@
 -- Innerste Zoomstufe: ein einzelnes Tile mit echten 16×16 Pixeln; ein
 -- Malvorgang setzt genau 1 nativen Pixel (FR-011).
 -- "All Similar" und "Invert" bleiben als Systemmenü-Funktionen erhalten (FR-015).
+--
+-- Spec 010 (US2): das 16x16-Malraster hat DREI Zustaende je Pixel
+-- (PixelTransparency): OPAQUE (schwarz), TRANSPARENT (durchsichtig, kColorClear)
+-- und EMPTY (weiss). A-Druck toggelt opak<->leer (Radierer, wie Spec 008),
+-- B-Druck malt transparent (FR-007). "Empty" aus "Transparent" erreicht man
+-- mit A (transparent->opak) und nochmal A (opak->leer) — die Playdate-Hardware
+-- hat keine dedizierte dritte Maltaste ("Y" in den Plan-Artefakten existiert
+-- nicht). Transparente Pixel landen als kColorClear im Tile und werden ueber
+-- den 3-Zustands-hashTile getrennt dedupliziert (spec.md Edge Case Z.104).
 import "CoreLibs/graphics"
+import "PixelTransparency"
 import "PencilCursor"
 local gfx = playdate.graphics
 
@@ -21,8 +31,12 @@ local PADDING_Y = (240 - GRID_ROWS * CELL_SIZE) // 2  -- 8 px
 local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
 
--- Grid-Zustand: false=weiß, true=schwarz
+-- Grid-Zustand: 3-Zustands-Code je Zelle (PixelTransparency: 0=opak/schwarz,
+-- 1=transparent, 2=leer/weiss). Default EMPTY.
 local gridState = {}
+local OPAQUE = PixelTransparency.OPAQUE
+local TRANSPARENT = PixelTransparency.TRANSPARENT
+local EMPTY = PixelTransparency.EMPTY
 
 -- Change All Similar Tiles: wenn true, wird beim Verlassen das bestehende
 -- Tile in-place überschrieben statt ein neues anzulegen.
@@ -62,11 +76,19 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
     gfx.setColor(gfx.kColorBlack)
     gfx.drawRect(x, y, width, height)
 
-    local isBlack = gridState[row][column]
-    if isBlack then
+    local state = gridState[row][column]
+    if state == OPAQUE then
         gfx.setColor(gfx.kColorBlack)
         gfx.fillRect(x + 1, y + 1, width - 2, height - 2)
+    elseif state == TRANSPARENT then
+        -- Schachbrettmuster = "transparent" (Industriestandard, FR-011);
+        -- sichtbar verschieden von opak (schwarz) und leer (weiss).
+        gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
+        gfx.fillRect(x + 1, y + 1, width - 2, height - 2)
+        gfx.setColor(gfx.kColorBlack)  -- Pattern wieder auf Volltonfarbe zuruecksetzen
     end
+    -- EMPTY: weisser Zellhintergrund bleibt
+
     -- Cursor immer in der selektierten Zelle zeichnen
     local isCursor = (section == selSection and row == selRow and column == selCol)
     if isCursor then
@@ -81,8 +103,8 @@ function PixelRoom:setCurrentTile(tile, tileIndex)
     for y = 1, GRID_ROWS do
         gridState[y] = {}
         for x = 1, GRID_COLS do
-            local color = tile:sample(x - 1, y - 1)
-            gridState[y][x] = color == gfx.kColorBlack
+            -- 3-Zustands-Code aus der Pixelfarbe (schwarz/clear/weiss).
+            gridState[y][x] = PixelTransparency.sampleState(tile, x - 1, y - 1)
         end
     end
 end
@@ -116,10 +138,12 @@ local function rotateGridCounterClockwise()
     needsRedraw = true
 end
 
--- Pencil-Strich: Der A-Druck bestimmt den Malwert des ganzen Strichs —
--- Pixel war schwarz -> Strich malt Weiß (Radierer), sonst Schwarz.
--- Bewegungen mit gehaltenem A malen denselben Wert weiter.
-local strokeValue = nil  -- true/false = Malwert des laufenden Strichs, nil = kein Strich
+-- Pencil-Strich: der erste Tastendruck bestimmt den Malwert des ganzen Strichs.
+--  * A auf opakem Pixel -> Strich malt EMPTY (Radierer, Spec 008); sonst OPAQUE.
+--  * B -> Strich malt TRANSPARENT (FR-007).
+-- Bewegungen mit gehaltener Starttaste malen denselben Wert weiter.
+local strokeValue = nil   -- 3-Zustands-Code des laufenden Strichs, nil = kein Strich
+local strokeButton = nil  -- "A" | "B" | nil
 
 local function paintCurrentCell(value)
     local _, row, col = gridView:getSelection()
@@ -129,16 +153,21 @@ local function paintCurrentCell(value)
     end
 end
 
-local function beginStroke()
+local function beginStroke(button)
     local _, row, col = gridView:getSelection()
-    if row and col and gridState[row] then
-        strokeValue = not gridState[row][col]
-        paintCurrentCell(strokeValue)
+    if not (row and col and gridState[row]) then return end
+    strokeButton = button
+    if button == "B" then
+        strokeValue = TRANSPARENT
+    else
+        strokeValue = (gridState[row][col] == OPAQUE) and EMPTY or OPAQUE
     end
+    paintCurrentCell(strokeValue)
 end
 
 local function endStroke()
     strokeValue = nil
+    strokeButton = nil
 end
 
 local function moveCursor(direction)
@@ -157,8 +186,9 @@ local function moveCursor(direction)
 
     local _, newRow, newCol = gridView:getSelection()
     if oldRow ~= newRow or oldCol ~= newCol then
-        -- Laufender A-Strich malt weiter (SDK: playdate.buttonIsPressed)
-        if strokeValue ~= nil and playdate.buttonIsPressed(playdate.kButtonA) then
+        -- Laufender Strich malt weiter, solange die Starttaste gehalten wird
+        local heldButton = (strokeButton == "B") and playdate.kButtonB or playdate.kButtonA
+        if strokeValue ~= nil and playdate.buttonIsPressed(heldButton) then
             paintCurrentCell(strokeValue)
         else
             needsRedraw = true
@@ -207,14 +237,20 @@ local function processDirectionHold()
     end
 end
 
--- Baut das 16×16-Tile-Bild aus dem aktuellen gridState.
+-- Baut das 16×16-Tile-Bild aus dem aktuellen gridState. OPAQUE -> schwarzer
+-- Pixel, TRANSPARENT -> kColorClear (durchsichtig), EMPTY -> weisser
+-- Hintergrund bleibt.
 local function buildTileImage()
     local newTile = gfx.image.new(GRID_COLS, GRID_ROWS, gfx.kColorWhite)
     gfx.pushContext(newTile)
-        gfx.setColor(gfx.kColorBlack)
         for y = 1, GRID_ROWS do
             for x = 1, GRID_COLS do
-                if gridState[y][x] then
+                local state = gridState[y][x]
+                if state == OPAQUE then
+                    gfx.setColor(gfx.kColorBlack)
+                    gfx.drawPixel(x - 1, y - 1)
+                elseif state == TRANSPARENT then
+                    gfx.setColor(gfx.kColorClear)
                     gfx.drawPixel(x - 1, y - 1)
                 end
             end
@@ -241,7 +277,7 @@ function PixelRoom:init(switchRoom, nextRoomReference)
     for y = 1, GRID_ROWS do
         gridState[y] = {}
         for x = 1, GRID_COLS do
-            gridState[y][x] = false
+            gridState[y][x] = EMPTY
         end
     end
     needsRedraw = true
@@ -317,9 +353,15 @@ function PixelRoom:entered()
         changeAllSimilar = checked
     end)
     menu:addMenuItem("Invert", function()
+        -- Spec 010: opak <-> leer tauschen; transparente Pixel bleiben.
         for y = 1, GRID_ROWS do
             for x = 1, GRID_COLS do
-                gridState[y][x] = not gridState[y][x]
+                local s = gridState[y][x]
+                if s == OPAQUE then
+                    gridState[y][x] = EMPTY
+                elseif s == EMPTY then
+                    gridState[y][x] = OPAQUE
+                end
             end
         end
         needsRedraw = true
@@ -354,9 +396,19 @@ function PixelRoom:inputHandler()
             stopDirectionHold("right")
         end,
         AButtonDown = function()
-            beginStroke()
+            beginStroke("A")
         end,
         AButtonUp = function()
+            endStroke()
+        end,
+        -- Spec 010 (US2, FR-007): B malt einen transparenten Pixel. Die
+        -- B+Crank-Zoom-Out-Geste (update(), Contract PR-01) bleibt unberuehrt —
+        -- ein kurzer B-Tipp malt, B-Halten+Kurbeln zoomt (und malt dabei einen
+        -- transparenten Pixel als Nebeneffekt, analog EditorRoom-Pipette).
+        BButtonDown = function()
+            beginStroke("B")
+        end,
+        BButtonUp = function()
             endStroke()
         end
     }

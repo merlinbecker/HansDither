@@ -1132,6 +1132,84 @@ check(switchedTo == zoomMock2, "B+Crank (-4 Ticks): Zoom-Out weiterhin ausgeloes
 crankTicksValue = 0
 heldButtons[playdate.kButtonB] = false
 
+-- ── PixelRoom: Transparenz (Spec 010, US2) ─────────────────────────────────
+
+-- Bewegt den PixelRoom-Cursor deterministisch nach oben-links (Zelle 1,1 ->
+-- Pixel "0,0"); der Selektionszustand des gridView ueberlebt sonst aus
+-- vorherigen Testabschnitten.
+local function pixelCursorToOrigin(h)
+    for _ = 1, 16 do h.leftButtonDown(); h.leftButtonUp() end
+    for _ = 1, 16 do h.upButtonDown(); h.upButtonUp() end
+end
+
+section("PixelRoom: B malt transparent, A toggelt opak<->leer, 3-Zustands-Zyklus (Spec 010, US2)")
+local tpTile = nil
+local tpZoom = { setNewTile = function(_, t) tpTile = t end, updateExistingTile = function(_, t) tpTile = t end }
+PixelRoom:init(noop, tpZoom)
+PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)  -- leeres Ausgangs-Tile
+PixelRoom:entered()
+local tph = PixelRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+crankChangeValue = 0
+crankTicksValue = 0
+pixelCursorToOrigin(tph)
+
+-- B-Druck -> transparent an Zelle (1,1) -> Pixel "0,0".
+tph.BButtonDown(); tph.BButtonUp()
+PixelRoom:commitForTerminate()
+check(tpTile.pixels["0,0"] == "clear", "B-Druck malt einen transparenten Pixel (kColorClear) an der Cursorposition (FR-007)")
+
+-- A-Druck auf transparentem Pixel -> opak (AS2)
+tph.AButtonDown(); tph.AButtonUp()
+PixelRoom:commitForTerminate()
+check(tpTile.pixels["0,0"] == true, "A-Druck auf transparentem Pixel -> opak/schwarz (AS2)")
+
+-- A-Druck auf opakem Pixel -> leer (Radierer, Spec 008)
+tph.AButtonDown(); tph.AButtonUp()
+PixelRoom:commitForTerminate()
+check(tpTile.pixels["0,0"] == nil, "A-Druck auf opakem Pixel -> leer/weiss (Radierer)")
+
+-- Voller 3-Zustands-Zyklus ueber die drei Zustaende
+tph.AButtonDown(); tph.AButtonUp()   -- leer -> opak
+tph.BButtonDown(); tph.BButtonUp()   -- opak -> transparent
+PixelRoom:commitForTerminate()
+check(tpTile.pixels["0,0"] == "clear", "leer -> A -> opak -> B -> transparent (Zyklus)")
+
+section("PixelRoom: transparenter Strich + Ruecklesen aus dem Tile (Spec 010, US2)")
+local strokeTile = nil
+local strokeZoom = { setNewTile = function(_, t) strokeTile = t end, updateExistingTile = function(_, t) strokeTile = t end }
+PixelRoom:init(noop, strokeZoom)
+PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)
+PixelRoom:entered()
+local sh = PixelRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+pixelCursorToOrigin(sh)
+
+-- B gehalten + zwei Schritte nach rechts -> transparenter Strich ueber 3 Zellen
+-- (1,1)(1,2)(1,3) -> Pixel "0,0" "1,0" "2,0"
+heldButtons[playdate.kButtonB] = true
+sh.BButtonDown()
+sh.rightButtonDown(); sh.rightButtonUp()
+sh.rightButtonDown(); sh.rightButtonUp()
+sh.BButtonUp()
+heldButtons[playdate.kButtonB] = false
+PixelRoom:commitForTerminate()
+check(strokeTile.pixels["0,0"] == "clear" and strokeTile.pixels["1,0"] == "clear"
+    and strokeTile.pixels["2,0"] == "clear", "B gehalten + Bewegung malt einen transparenten Strich")
+
+-- Ruecklesen: ein Tile mit transparentem Pixel laedt als TRANSPARENT-Zelle
+local reload = newMockImage(16, 16, "white")
+reload.pixels["3,3"] = "clear"
+PixelRoom:setCurrentTile(reload, 1)
+PixelRoom:commitForTerminate()
+check(strokeTile.pixels["3,3"] == "clear", "setCurrentTile liest kColorClear als transparente Zelle zurueck (Round-Trip)")
+
+-- Dedup: opakes vs. transparentes Tile hashen unterschiedlich (spec.md:104)
+local opaqueOnly = newMockImage(16, 16, "white"); opaqueOnly.pixels["0,0"] = true
+local transpToo = newMockImage(16, 16, "white"); transpToo.pixels["0,0"] = true; transpToo.pixels["1,1"] = "clear"
+check(ImageStoreCodec.hashTile(opaqueOnly) ~= ImageStoreCodec.hashTile(transpToo),
+    "Tile mit zusaetzlichem transparentem Pixel dedupliziert getrennt")
+
 -- ── ZoomRoom: Subpixel-Rendering unbearbeiteter Zellen (Spec 006 US1, R2) ────
 
 section("ZoomRoom: unbearbeitete Zelle zeigt vier echte Subpixel-Werte")

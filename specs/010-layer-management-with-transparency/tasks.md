@@ -50,8 +50,8 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
   Cache. `tickForward` nutzt `LayerModel.cloneFrameLayers` (tiefe Kopie aller
   Ebenen). „clear screen“ leert nur die aktive Ebene. Test: 2-Ebenen-Frame →
   Edit auf Ebene 2 → Save → Reload → Edit auf Ebene 2, Ebene 1 unberührt.
+- **Phase 4** (T016–T024, US2 Transparenz in PixelRoom) ✅ — buildNumber 15 → 16.
 - **Phase 3** (T010–T015, US1 Pixel-Shift in ZoomRoom) — offen.
-- **Phase 4** (T016–T024, US2 Transparenz in PixelRoom) — offen.
 - **Phase 5** (T025–T032, US3 Layer-Cycling in EditorRoom) — offen.
 - **Phase 6** (T033–T043, US4 Management-Views) — offen.
 - **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
@@ -176,31 +176,31 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 ### Transparency Placement (Pixel View)
 
-- [ ] T016 [US2] Modify PixelView.update() to detect B-press (in addition to existing A-press for opaque). When B pressed at cursor position, call Layer:setPosition(pos, tileIndex, 1) [transparency=1 for transparent]. File path: `Source/Rooms/PixelView.lua`
+- [X] T016 [US2] `PixelRoom:inputHandler` erhält `BButtonDown`/`BButtonUp` → `beginStroke("B")`. Malt `gridState[cell] = TRANSPARENT`. Kein `Layer:setPosition` — Transparenz lebt pro Pixel im 16×16-Tile (`kColorClear`), nicht in einem 375er-Array. File path: `Source/PixelRoom.lua`
 
-- [ ] T017 [US2] Implement visual feedback in Pixel View: render transparent pixels with checkerboard pattern (distinct from opaque black or empty white). Update PixelView.draw() to check transparency state before rendering. File path: `Source/Rooms/PixelView.lua`
+- [X] T017 [US2] `gridView:drawCell` rendert TRANSPARENT-Zellen mit Schachbrett-`setPattern` (sichtbar verschieden von opak-schwarz und leer-weiß, FR-011). File path: `Source/PixelRoom.lua`
 
-- [ ] T018 [US2] Extend PixelView delete action (Y-press) to set transparency = 2 (empty state). Add three-state cycle: A-press (opaque=0) → overwrite → B-press (transparent=1) → overwrite → Y-press (empty=2). File path: `Source/Rooms/PixelView.lua`
+- [X] T018 [US2] ~~Y-Druck~~ → **Playdate-Hardware hat keine Y-Taste** (Plan-Artefakt-Fehler). A toggelt opak↔leer (Radierer, Spec 008), B setzt transparent. transparent→leer = A (→opak) + A (→leer). `buildTileImage`: OPAQUE→schwarz, TRANSPARENT→`kColorClear`, EMPTY→weiß. "Invert" tauscht nur opak↔leer. File path: `Source/PixelRoom.lua`
 
 ### Transparency State Encoding
 
-- [ ] T019 [P] [US2] Update PixelTransparency module to correctly encode/decode transparency in Layer:setPosition(). When transparency=1, mark pixel as see-through (no blending needed, just metadata). File path: `Source/PixelTransparency.lua`
+- [X] T019 [P] [US2] `Source/PixelTransparency.lua` — `fromColor`/`toColor`/`sampleState` bilden Zustand↔`gfx.kColor*` ab (Phase 2). Kein `Layer:setPosition`.
 
-- [ ] T020 [P] [US2] Modify Layer:getTransparencyAt(index) to return correct state. Update Layer:setPosition() to atomically update both position AND transparency array (guarantee 1-to-1 mapping). File path: `Source/Models/Layer.lua`
+- [X] T020 [P] [US2] ~~`Layer:getTransparencyAt` / atomares position+transparency-Update~~ → **N/A**: kein per-Zelle-Transparenz-Array. Transparenz ist Teil des Tile-Bitmaps und damit per Definition atomar mit dem Tile.
 
 ### Backward Compatibility
 
-- [ ] T021 [US2] Test v1.0 image load: old images (no transparency array) should load with all pixels as opaque (transparency=0). Verify ImageStoreCodec:load() sets transparency array to all zeros if missing. File path: `Source/ImageStoreCodec.lua`
+- [X] T021 [US2] Erledigt in Phase 2: `newLoadOperation` — v1.0-Bilder (flache Frames, keine Transparenz) laden als eine Basisebene, alle Pixel opak (schwarz/weiß). Test „v1.0-Bild lädt als einzelne opake Ebene“.
 
-- [ ] T022 [US2] Add test case to `tests/headless_tests.lua`: "Transparency: backward compatibility (v1.0 → v1.1 auto-upgrade)". Load v1.0 JSON, verify all pixels opaque, save, verify v1.1 format written. File path: `tests/headless_tests.lua`
+- [X] T022 [US2] Erledigt in Phase 2: Test „v1.0-Bild lädt … Re-Save schreibt v1.1“.
 
 ### Persistence & Verification
 
-- [ ] T023 [P] [US2] Add test case to `tests/headless_tests.lua`: "Transparency: place transparent pixel, save, reload, verify transparent state persists". Test round-trip: Pixel View B-press → save → close → reopen → checkerboard still visible. File path: `tests/headless_tests.lua`
+- [X] T023 [P] [US2] `tests/headless_tests.lua` „PixelRoom: transparenter Strich + Ruecklesen aus dem Tile“: B-Strich → `buildTileImage` erzeugt `kColorClear`-Pixel; `setCurrentTile` liest sie als TRANSPARENT zurück; 3-Zustands-`hashTile` dedupliziert opak vs. transparent getrennt. Voller PixelRoom→ZoomRoom→EditorRoom→Save→Reload-Bilddurchlauf für einen Einzelpixel: Simulator (T057).
 
-- [ ] T024 [P] [US2] Add test case: "Transparency: three-state cycle (opaque → transparent → empty)". Place opaque, verify black. Press B, verify checkerboard. Press Y, verify empty (white). Repeat 3x, verify correct transitions. File path: `tests/headless_tests.lua`
+- [X] T024 [P] [US2] `tests/headless_tests.lua` „leer -> A -> opak -> B -> transparent (Zyklus)“ + A-auf-opak→leer + A-auf-transparent→opak.
 
-**Checkpoint**: US2 complete when all tests pass + pdc build succeeds + buildNumber incremented
+**Checkpoint**: US2 ✅ — headless-Tests grün; buildNumber 15 → 16; pdc grün. Commit folgt.
 
 ---
 
