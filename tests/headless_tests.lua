@@ -1636,6 +1636,62 @@ mockMenuItemCallbacks["clear screen"]()
 check(clr.frameLayers[1].layers[1].positions[1] == 1 and clr.frameLayers[1].layers[1].positions[375] == 1,
     "aktive Basisebene auf Voll-Weiss (1) geleert (Ein-Ebenen-Verhalten wie Spec 008)")
 
+-- ── EditorRoom: Ebenen-Cyclen per Up/Down + Crank (Spec 010, US3) ──────────
+
+local function threeLayerFrame(baseTile)
+    return { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(baseTile or 1), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } }
+end
+
+section("EditorRoom: Up/Down + Crank zyklt die aktive Ebene mit Wrap (Spec 010, US3, FR-013/014/017)")
+loadEditorV11("cyc3", { threeLayerFrame(1) }, 3)
+local cyc = EditorRoom:getImageData()
+check(cyc.activeLayer == 1 and EditorRoom:getActiveLayerInfo().count == 3, "Start: Ebene 1 von 3")
+check(EditorRoom:getActiveLayerInfo().name == "Background", "Indikator nennt den Ebenennamen (FR-015)")
+
+heldButtons[playdate.kButtonUp] = true
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+check(cyc.activeLayer == 2, "Up + 360 Grad -> Ebene 2 (vorwaerts)")
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+check(cyc.activeLayer == 3, "Up + weitere 360 Grad -> Ebene 3")
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+check(cyc.activeLayer == 1, "Up + weitere 360 Grad -> Wrap zurueck auf Ebene 1 (FR-017)")
+heldButtons[playdate.kButtonUp] = nil
+
+heldButtons[playdate.kButtonDown] = true
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+check(cyc.activeLayer == 3, "Down + 360 Grad -> rueckwaerts auf Ebene 3 (Wrap)")
+crankChangeValue = -360; EditorRoom:update(); crankChangeValue = 0
+check(cyc.activeLayer == 2, "Down + volle Umdrehung (Richtung egal) -> Ebene 2 rueckwaerts")
+heldButtons[playdate.kButtonDown] = nil
+
+section("EditorRoom: Crank ohne Up/Down zyklt weiterhin Frames (Spec 010, FR-016)")
+check(mockLastTilemap.lastFrame ~= nil, "Vorbedingung: Tilemap gesetzt")
+local layerBefore = cyc.activeLayer
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+check(#cyc.frameLayers == 2, "360 Grad ohne Up/Down -> neuer Frame (Frame-Cyclen unveraendert)")
+check(cyc.activeLayer == layerBefore, "Frame-Wechsel laesst den aktiven Ebenenindex unveraendert")
+
+section("EditorRoom: aktiver Ebenenindex ueberlebt Frame-Wechsel mit Wrap (Spec 010, US3 AS3, R4)")
+-- Frame 1: 3 Ebenen, Frame 2: nur 1 Ebene
+loadEditorV11("wrap2", {
+    threeLayerFrame(1),
+    { frameIndex = 1, duration = 100, layers = {
+        { layerIndex = 0, name = "Only", positions = pos375(1), visible = true },
+    } },
+}, 3)
+local wr = EditorRoom:getImageData()
+wr.activeLayer = 3                                       -- auf Frame 1 Ebene 3
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0   -- -> Frame 2 (1 Ebene)
+check(#wr.frameLayers[2].layers == 1, "Vorbedingung: Frame 2 hat nur 1 Ebene")
+check(wr.activeLayer == 1, "aktiver Index 3 auf Frame mit 1 Ebene -> Wrap auf 1 (AS3)")
+check(EditorRoom:getActiveLayerInfo().count == 1, "Indikator zeigt jetzt 1 Ebene")
+crankChangeValue = -360; EditorRoom:update(); crankChangeValue = 0  -- zurueck zu Frame 1
+check(#wr.frameLayers == 2, "wieder bei Frame 1 (kein neuer Frame angelegt)")
+
 -- ── SelectionRoom: Kreis-Schwenk des selektierten Eintrags (Spec 006 US6, ───
 -- revidiert) ──────────────────────────────────────────────────────────────
 

@@ -50,6 +50,7 @@ local cursor = { x = 1, y = 1 }  -- Tile-Koordinaten 1..25 / 1..15
 local activeTile = nil           -- number/nil: Pipetten-Auswahl; nil = Toggle-Modus
 local zoomTickAccu = 0           -- Tick-Akkumulator für B+Crank; Reset bei B-Release
 local crankAccumDegrees = 0      -- Spec 006 R1: signierter Grad-Akkumulator fuer Frame-Navigation ohne B
+local layerAccumDegrees = 0      -- Spec 010 US3: Grad-Akkumulator fuer Ebenen-Cyclen (Up/Down + Crank)
 local bUsedForZoom = false       -- Crank während B-Hold unterdrückt die Pipette
 local showGrid = true            -- Grid-Overlay an/aus (Checkmark-Menüeintrag)
 local loadingOperation = nil     -- RoomOperation während des Ladens
@@ -142,6 +143,25 @@ local function recompositeCurrentFrame()
     imageData.frames[currentFrame] = LayerModel.compositeToFlat(entry)
     updateTilemapFrame()
     needsRedraw = true
+end
+
+-- Spec 010 US3 (FR-013/014/017): aktive Ebene um delta zyklen (Wrap 1..count).
+local function cycleActiveLayer(delta)
+    local entry = currentEntry()
+    if not entry then return end
+    local before = imageData.activeLayer or 1
+    imageData.activeLayer = LayerModel.cycleActive(entry, before, delta)
+    if imageData.activeLayer ~= before then
+        needsRedraw = true
+    end
+end
+
+-- Anzeige-Infos fuer den Ebenen-Indikator (FR-015) / Tests.
+function EditorRoom:getActiveLayerInfo()
+    local entry = currentEntry()
+    if not entry then return nil end
+    local i = LayerModel.clampActive(entry, imageData.activeLayer or 1)
+    return { index = i, count = #entry.layers, name = entry.layers[i].name }
 end
 
 -- Hängt ein Tile an die Imagetable an; wächst die Table notfalls durch Neuaufbau.
@@ -492,7 +512,9 @@ local function clearMoveTimers()
 end
 
 -- ── Crank (FR-004/FR-005/FR-006, contracts CR-01): ohne B = volle Umdrehung
--- fuer Frame-Navigation, mit B = Zoom (unveraendert) ──────────────────────────
+-- fuer Frame-Navigation, mit B = Zoom (unveraendert). Spec 010 US3: mit
+-- gehaltener Up-/Down-Taste zyklt die volle Umdrehung stattdessen die aktive
+-- EBENE (Up = vorwaerts, Down = rueckwaerts, FR-013/014/016/017). ────────────
 --
 -- Pro Aufruf wird GENAU EINE Crank-Lese-API verwendet (CR-01) — niemals
 -- beide im selben Frame, sonst gehen Grad-/Tick-Anteile verloren
@@ -515,23 +537,41 @@ local function handleCrank()
         end
     else
         zoomTickAccu = 0
-        -- Spec 006 R1: signierter Netto-Akkumulator statt sofortigem Tick bei
-        -- 90°-Rasterung — wechselt den Frame erst bei einer vollen 360°-Umdrehung
-        -- ab der AKTUELLEN Kurbelposition (FR-004/005); Teildrehungen und
-        -- Richtungswechsel heben sich im Summenwert von selbst auf, kein
-        -- Reset auf 0 noetig (FR-006 - Einklappen mitten in der Drehung laesst
-        -- den Akkumulator einfach liegen).
         local change = playdate.getCrankChange() or 0
         if change ~= 0 then
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
         end
-        crankAccumDegrees = crankAccumDegrees + change
-        if crankAccumDegrees >= 360 then
-            crankAccumDegrees = crankAccumDegrees - 360
-            tickForward()
-        elseif crankAccumDegrees <= -360 then
-            crankAccumDegrees = crankAccumDegrees + 360
-            tickBackward()
+
+        local upHeld = playdate.buttonIsPressed(playdate.kButtonUp)
+        local downHeld = playdate.buttonIsPressed(playdate.kButtonDown)
+        if upHeld or downHeld then
+            -- Spec 010 US3: Ebenen-Cyclen. Richtung kommt aus der gehaltenen
+            -- Taste (Up = +1, Down = -1), die Kurbelrichtung ist egal — eine
+            -- volle Umdrehung (in beliebige Richtung) = ein Ebenenschritt.
+            -- Der Frame-Akku laeuft NICHT mit (FR-016).
+            crankAccumDegrees = 0
+            local delta = downHeld and -1 or 1
+            layerAccumDegrees = layerAccumDegrees + change
+            if layerAccumDegrees >= 360 then
+                layerAccumDegrees = layerAccumDegrees - 360
+                cycleActiveLayer(delta)
+            elseif layerAccumDegrees <= -360 then
+                layerAccumDegrees = layerAccumDegrees + 360
+                cycleActiveLayer(delta)
+            end
+        else
+            -- Spec 006 R1: signierter Netto-Akkumulator; Frame-Wechsel erst bei
+            -- einer vollen 360°-Umdrehung ab der aktuellen Kurbelposition
+            -- (FR-004/005). Teildrehungen/Richtungswechsel heben sich auf.
+            layerAccumDegrees = 0
+            crankAccumDegrees = crankAccumDegrees + change
+            if crankAccumDegrees >= 360 then
+                crankAccumDegrees = crankAccumDegrees - 360
+                tickForward()
+            elseif crankAccumDegrees <= -360 then
+                crankAccumDegrees = crankAccumDegrees + 360
+                tickBackward()
+            end
         end
     end
 end
@@ -562,7 +602,14 @@ local function draw()
         -- zeigt auf der dem Cursor gegenueberliegenden Bildschirmhaelfte (FR-003)
         if bauchbindeVisible then
             local side = (cursor.x <= GRID_COLS / 2) and "right" or "left"
-            bauchbinde:drawBottom(string.format("Frame %d/%d", currentFrame, #imageData.frames), side, 400, 240)
+            -- Spec 010 FR-015: Ebenen-Indikator (Index/Anzahl + Name) neben der
+            -- Frame-Anzeige. Bei nur einer Ebene bleibt es bei "Frame x/y".
+            local label = string.format("Frame %d/%d", currentFrame, #imageData.frames)
+            local li = EditorRoom:getActiveLayerInfo()
+            if li and li.count > 1 then
+                label = string.format("%s  L%d/%d %s", label, li.index, li.count, li.name or "")
+            end
+            bauchbinde:drawBottom(label, side, 400, 240)
         end
     end
     if statusMessage then
@@ -591,6 +638,7 @@ function EditorRoom:entered()
     endStroke()
     zoomTickAccu = 0
     crankAccumDegrees = 0
+    layerAccumDegrees = 0
     bUsedForZoom = false
     lastActivityMs = playdate.getCurrentTimeMilliseconds()
     bauchbindeVisible = true

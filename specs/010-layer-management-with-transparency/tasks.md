@@ -51,8 +51,8 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
   Ebenen). „clear screen“ leert nur die aktive Ebene. Test: 2-Ebenen-Frame →
   Edit auf Ebene 2 → Save → Reload → Edit auf Ebene 2, Ebene 1 unberührt.
 - **Phase 4** (T016–T024, US2 Transparenz in PixelRoom) ✅ — buildNumber 15 → 16.
+- **Phase 5** (T025–T032, US3 Layer-Cycling in EditorRoom) ✅ — buildNumber 16 → 17.
 - **Phase 3** (T010–T015, US1 Pixel-Shift in ZoomRoom) — offen.
-- **Phase 5** (T025–T032, US3 Layer-Cycling in EditorRoom) — offen.
 - **Phase 6** (T033–T043, US4 Management-Views) — offen.
 - **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
 
@@ -212,49 +212,33 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 **Independent Test** (from quickstart.md): Frame with 3 layers → Tile View → hold Up + Crank forward → Layer 1→2→3→1 (max 3), release Up → Crank cycles frames instead
 
-### Layer Cycling Implementation (Bounded to 3 Layers)
+> **Hinweis Doppel-IDs**: T025–T032 stehen zweimal in dieser Datei (zwei
+> unterschiedliche Formulierungen). Beide Blöcke beschreiben dasselbe US3-
+> Feature und sind mit einer gemeinsamen Umsetzung erledigt. Alle „TileView“ =
+> `Source/EditorRoom.lua`. „Frame:setActiveLayer“ = `imageData.activeLayer`
+> (1-basierter Sitzungsindex) + `LayerModel.cycleActive/clampActive`.
 
-- [ ] T025 [US3] Modify TileView.update() to detect Up-press + Crank rotation combination. When Up held and Crank rotated clockwise, call Frame:setActiveLayer(activeLayerIndex + 1 % 3) [wraparound max 3]. File path: `Source/Rooms/TileView.lua`
+### Layer Cycling Implementation (Bounded to 3 Layers) — erledigt
 
-- [ ] T026 [US3] Implement Down-press + Crank backward: When Down held and Crank rotated counterclockwise, call Frame:setActiveLayer((activeLayerIndex - 1 + 3) % 3) [wraparound max 3]. File path: `Source/Rooms/TileView.lua`
+- [X] T025 (beide Fassungen) [US3] `EditorRoom.handleCrank`: bei gehaltener **Up**-Taste zyklt die volle 360°-Umdrehung die aktive Ebene vorwärts (`cycleActiveLayer(+1)`), bei **Down** rückwärts (`cycleActiveLayer(-1)`); die Kurbelrichtung ist dabei egal (Taste bestimmt die Richtung). Ohne Up/Down bleibt es beim Frame-Cyclen (FR-016). Eigener `layerAccumDegrees`-Akkumulator; der Frame-Akku läuft dann nicht mit. File: `Source/EditorRoom.lua`
 
-- [ ] T027 [US3] Implement visual layer indicator in Tile View HUD: display current layer index (e.g., "Layer 1/3") and layer name. Update only when activeLayerIndex changes. File path: `Source/Rooms/TileView.lua`
+- [X] T026 (beide Fassungen) [US3] Down + Crank rückwärts: siehe T025 (`downHeld` → `delta = -1`). Wrap in beide Richtungen über `LayerModel.cycleActive` (Modulo 1..count, FR-017). File: `Source/EditorRoom.lua`
 
-- [ ] T028 [P] [US3] Implement layer compositing in Tile View rendering: composite all visible layers (1–3 per frame) in index order (Layer 1 bottom → Layer 3 top). Use transparency info from each layer for alpha blending. Performance target: 60 FPS. File path: `Source/Rooms/TileView.lua`
+- [X] T027 (beide Fassungen) [US3] Ebenen-Indikator: `EditorRoom:getActiveLayerInfo()` → `{index, count, name}`; `draw()` hängt bei `count > 1` `„ L<idx>/<count> <name>“` an die Frame-Bauchbinde (FR-015). Bei Ein-Ebenen-Bildern unverändert nur „Frame x/y“. File: `Source/EditorRoom.lua`
 
-### Layer State Management (3-Layer Frame Model)
+- [X] T028 (beide Fassungen) [P] [US3] Compositing: bereits durch die EditorRoom-Verdrahtung — `imageData.frames[f]` ist das per `LayerModel.compositeToFlat` gestapelte flache Array (oberste beitragende Ebene je Zelle gewinnt), das die Tilemap zeichnet. Pixelgenaue Überblendung mehrerer Ebenen in EINER Zelle: `LayerModel.compositeToTiles` steht bereit (noch nicht im Renderpfad verdrahtet — Polish/T053; für die aktuelle „oberste Ebene gewinnt je Zelle“-Darstellung nicht nötig).
 
-- [ ] T029 [P] [US3] Implement Frame:setActiveLayer(index) validation: ensure index ∈ {0, 1, 2} for current frame layer count. **Prevent out-of-bounds access**. If index ≥ current layer count, wrap to 0 (per research.md R4). File path: `Source/Models/ImageStore.lua`
+### Layer State Management — erledigt
 
-- [ ] T030 [P] [US3] Implement frame switching with layer index preservation: when switching frames, preserve activeLayerIndex. If new frame has fewer layers than activeLayerIndex, wrap to 0. Example: Frame 1 has 3 layers, Frame 2 has 1 layer, user was on Layer 2 → switch to Layer 0 (wrap). File path: `Source/Rooms/TileView.lua`
+- [X] T029 (beide Fassungen) [P] [US3] `LayerModel.clampActive(entry, i)` erzwingt `i ∈ 1..count`, sonst Wrap auf 1 (R4). `LayerModel.cycleActive` verhindert Out-of-bounds. Nur die aktive Ebene ist editierbar (`buildZoomContext`/`applyTileEdits` in der Verdrahtung). File: `Source/LayerModel.lua`, `Source/EditorRoom.lua`
 
-### Layer Indicator & Persistence
+- [X] T030 (beide Fassungen) [US3] Frame-Wechsel (`tickForward`/`tickBackward`/`deleteCurrentFrame`) klemmt `imageData.activeLayer` per `LayerModel.clampActive` gegen die Ebenenzahl des Ziel-Frames — hat Frame 2 weniger Ebenen als der aktive Index, Wrap auf 1 (AS3). File: `Source/EditorRoom.lua`
 
-- [ ] T031 [US3] Implement layer persistence across frame switches: save activeLayerIndex in Frame model, restore on frame reload. Verify activeLayerIndex is part of Frame JSON serialization. File path: `Source/Models/ImageStore.lua` + `Source/ImageStoreCodec.lua`
+- [X] T031 (beide Fassungen) [US3] `activeLayer` ist **bewusst Sitzungszustand, nicht persistiert** (Abweichung von der Task-Formulierung — siehe Implementation Notes / contracts kennen kein `activeLayerIndex`). Beim Laden immer `activeLayer = 1`. Der Ebenen-INHALT (positions je Ebene) persistiert vollständig über v1.1 (Phase 2, Test „v1.1 Round-Trip“).
 
-- [ ] T032 [P] [US3] Add test cases to `tests/headless_tests.lua`: (1) Layer cycling forward/backward (max 3), (2) Frame switching with layer wrap-around, (3) Layer persistence on save/reload. Test via Frame:setActiveLayer() and Crank simulation. File path: `tests/headless_tests.lua`
+- [X] T032 (beide Fassungen) [P] [US3] `tests/headless_tests.lua`: „Up/Down + Crank zyklt die aktive Ebene mit Wrap“, „Crank ohne Up/Down zyklt weiterhin Frames“, „aktiver Ebenenindex überlebt Frame-Wechsel mit Wrap“.
 
-**Checkpoint**: US3 complete when all tests pass + layer compositing renders correctly at 60 FPS + pdc build succeeds + buildNumber incremented
-
-- [ ] T025 [US3] Modify TileView.update() Crank handler: detect held keys (playdate.buttonIsPressed). If Up held, layer forward (activeLayerIndex = (activeLayerIndex + 1) % frame:getLayerCount()). If Down held, layer backward with modulo. If neither, use existing frame cycling. File path: `Source/Rooms/TileView.lua`
-
-- [ ] T026 [US3] Implement layer indicator in TileView.draw(): display current active layer (e.g., "Layer 2 / 3" or "Background"). Update indicator every frame to reflect activeLayerIndex. File path: `Source/Rooms/TileView.lua`
-
-- [ ] T027 [US3] Handle layer persistence across frame switches: when user switches to new frame (Crank without Up/Down), preserve activeLayerIndex if it exists. If new frame has fewer layers, wrap to Layer 1 (per research.md R4). File path: `Source/Rooms/TileView.lua`
-
-### Tile View Multi-Layer Rendering
-
-- [ ] T028 [US3] Modify TileView.draw() to render all layers composited (Layer 0 bottom, Layer N-1 top) instead of single layer. Iterate frame:getLayerCount(), draw each layer's tiles via SDK imagetable:drawTile(). Render transparent pixels with alpha blending (see-through). File path: `Source/Rooms/TileView.lua`
-
-- [ ] T029 [US3] Ensure only active layer is editable: when user enters Zoom/Pixel View, only activeLayer's content is editable. Other layers render as read-only background. File path: `Source/Rooms/TileView.lua`
-
-### Verification & Testing
-
-- [ ] T030 [P] [US3] Add test case to `tests/headless_tests.lua`: "Layer Cycling: forward + backward". Create frame with 3 layers, verify cycling forward (Layer 1→2→3→1) and backward (Layer 1→3→2→1). File path: `tests/headless_tests.lua`
-
-- [ ] T031 [P] [US3] Add test case: "Layer Cycling: preserve index on frame switch". Frame 1 (3 layers) Layer 2 → Frame 2 (2 layers) → verify active Layer 2. Frame 2 (2 layers) Layer 2 → Frame 3 (1 layer) → verify active Layer 1 (wrap). File path: `tests/headless_tests.lua`
-
-- [ ] T032 [P] [US3] Add test case: "Layer Cycling: frame cycling unchanged". Verify Crank alone (without Up/Down) still cycles frames (existing behavior preserved). File path: `tests/headless_tests.lua`
+**Checkpoint**: US3 ✅ — headless-Tests grün; buildNumber 16 → 17; pdc grün. 60-FPS-Compositing-Profiling → T053 (Simulator/Gerät). Commit folgt.
 
 **Checkpoint**: US3 complete when all tests pass + pdc build succeeds + buildNumber incremented
 
