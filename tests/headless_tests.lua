@@ -1372,31 +1372,34 @@ local function loadEditorImageForTest(id, framesArray, tileCount, name)
     end
 end
 
--- ── US2: Crank-Volldrehung (T005, research.md R1, Contract CR-01) ───────────
+-- ── Steuerungs-Redesign (Spec 010): Frame-Wechsel via B + Links/Rechts ─────
 
-section("EditorRoom: Frame-Wechsel erst bei 360 Grad Netto-Kurbeldrehung (Spec 006 US2, R1)")
+section("EditorRoom: Frame-Wechsel via B + Links/Rechts, NICHT mehr per Crank (Spec 010)")
 loadEditorImageForTest("crankTest", { makeFrame(1), makeFrame(2), makeFrame(3) }, 3, "crank-test")
 check(EditorRoom:getImageData() ~= nil, "Vorbedingung: Bild mit 3 Frames geladen")
 check(mockLastTilemap.lastFrame[1] == 1, "Vorbedingung: Frame 1 aktiv")
 
-crankChangeValue = 270
-EditorRoom:update()
-check(mockLastTilemap.lastFrame[1] == 1, "AS1: 270 Grad -> Frame 1 bleibt aktiv (kein Wechsel)")
+local crankNavH = EditorRoom:inputHandler()
 
-crankChangeValue = 90
+-- Kurbel OHNE B wechselt keinen Frame mehr (jetzt Tile-Picker)
+crankChangeValue = 720
 EditorRoom:update()
-check(mockLastTilemap.lastFrame[1] == 2, "AS2/AS3: weitere 90 Grad (360 gesamt) -> genau ein Wechsel zu Frame 2")
-
-crankChangeValue = 270
-EditorRoom:update()
-crankChangeValue = -90
-EditorRoom:update()
-check(mockLastTilemap.lastFrame[1] == 2, "Edge Case: 270+(-90)=180 Grad netto -> kein Wechsel (bleibt Frame 2)")
-
-crankChangeValue = 180
-EditorRoom:update()
-check(mockLastTilemap.lastFrame[1] == 3, "Restwert bleibt erhalten: weitere 180 Grad (360 seit letztem Wechsel) -> Frame 3")
 crankChangeValue = 0
+check(mockLastTilemap.lastFrame[1] == 1, "zwei Kurbelumdrehungen ohne B -> Frame unveraendert (kein Frame-Cyclen per Crank)")
+
+heldButtons[playdate.kButtonB] = true
+crankNavH.rightButtonDown(); crankNavH.rightButtonUp()
+check(mockLastTilemap.lastFrame[1] == 2, "B + Rechts -> Frame 2")
+crankNavH.rightButtonDown(); crankNavH.rightButtonUp()
+check(mockLastTilemap.lastFrame[1] == 3, "B + Rechts nochmal -> Frame 3")
+crankNavH.leftButtonDown(); crankNavH.leftButtonUp()
+check(mockLastTilemap.lastFrame[1] == 2, "B + Links -> zurueck zu Frame 2")
+
+-- B + Rechts am letzten Frame haengt einen neuen Frame an (einzige Anlage-Geste)
+crankNavH.rightButtonDown(); crankNavH.rightButtonUp()   -- -> Frame 3
+crankNavH.rightButtonDown(); crankNavH.rightButtonUp()   -- -> neuer Frame 4 (Kopie)
+check(#EditorRoom:getImageData().frameLayers == 4, "B + Rechts am Ende legt einen neuen Frame an")
+heldButtons[playdate.kButtonB] = false
 
 -- Regressionsschutz (CR-01): B+Crank-Zoomkette bleibt unveraendert
 heldButtons[playdate.kButtonB] = true
@@ -1475,9 +1478,12 @@ check(hasClear, "Systemmenue enthaelt 'clear screen' (EM-01)")
 check(not hasReset, "Systemmenue enthaelt NICHT mehr 'reset frame' (AD-037, FR-011)")
 
 -- Zu Frame 2 wechseln (Vorbedingung: gefuellt mit Tile-Index 9, nicht 1)
-crankChangeValue = 360
-EditorRoom:update()
-crankChangeValue = 0
+do
+    local h = EditorRoom:inputHandler()
+    heldButtons[playdate.kButtonB] = true
+    h.rightButtonDown(); h.rightButtonUp()   -- Spec 010: B + Rechts statt Crank
+    heldButtons[playdate.kButtonB] = false
+end
 check(mockLastTilemap.lastFrame[1] == 9, "Vorbedingung: Frame 2 aktiv, gefuellt mit Tile-Index 9")
 
 mockMenuItemCallbacks["clear screen"]()
@@ -1630,10 +1636,13 @@ loadEditorV11("dup2layer", {
 }, 3)
 local dup = EditorRoom:getImageData()
 check(#dup.frameLayers == 1, "Vorbedingung: 1 Frame")
-crankChangeValue = 360
-EditorRoom:update()                                     -- volle Umdrehung -> neuer Frame 2 (Kopie)
-crankChangeValue = 0
-check(#dup.frameLayers == 2, "360 Grad -> Frame 2 angelegt")
+do
+    local h = EditorRoom:inputHandler()
+    heldButtons[playdate.kButtonB] = true
+    h.rightButtonDown(); h.rightButtonUp()              -- Spec 010: B + Rechts am Ende -> neuer Frame 2 (Kopie)
+    heldButtons[playdate.kButtonB] = false
+end
+check(#dup.frameLayers == 2, "B + Rechts am Ende -> Frame 2 angelegt")
 check(#dup.frameLayers[2].layers == 3, "Frame 2 hat alle 3 Ebenen der tiefen Kopie")
 check(dup.frameLayers[2].layers[2].positions[10] == 2, "Ebene-2-Inhalt in die Kopie uebernommen")
 check(dup.frameLayers[2].layers[2].positions ~= dup.frameLayers[1].layers[2].positions,
@@ -1661,7 +1670,7 @@ mockMenuItemCallbacks["clear screen"]()
 check(clr.frameLayers[1].layers[1].positions[1] == 1 and clr.frameLayers[1].layers[1].positions[375] == 1,
     "aktive Basisebene auf Voll-Weiss (1) geleert (Ein-Ebenen-Verhalten wie Spec 008)")
 
--- ── EditorRoom: Ebenen-Cyclen per Up/Down + Crank (Spec 010, US3) ──────────
+-- ── EditorRoom: Ebenen-/Frame-Wechsel per B + D-Pad (Spec 010, Steuerungs-Redesign) ──
 
 local function threeLayerFrame(baseTile)
     return { frameIndex = 0, duration = 100, layers = {
@@ -1671,38 +1680,51 @@ local function threeLayerFrame(baseTile)
     } }
 end
 
-section("EditorRoom: Up/Down + Crank zyklt die aktive Ebene mit Wrap (Spec 010, US3, FR-013/014/017)")
+-- B halten + eine D-Pad-Taste (Down+Up). Hoch/Runter = aktive Ebene +1 / -1,
+-- Links/Rechts = Frame vor / zurueck (Spec 010 Steuerungs-Redesign).
+local function bDpad(btnDown, btnUp)
+    local h = EditorRoom:inputHandler()
+    heldButtons[playdate.kButtonB] = true
+    h[btnDown](); h[btnUp]()
+    heldButtons[playdate.kButtonB] = false
+end
+
+section("EditorRoom: B + Hoch/Runter zyklt die aktive Ebene mit Wrap (Spec 010, FR-013/014/017)")
 loadEditorV11("cyc3", { threeLayerFrame(1) }, 3)
 local cyc = EditorRoom:getImageData()
 check(cyc.activeLayer == 1 and EditorRoom:getActiveLayerInfo().count == 3, "Start: Ebene 1 von 3")
 check(EditorRoom:getActiveLayerInfo().name == "Background", "Indikator nennt den Ebenennamen (FR-015)")
 
-heldButtons[playdate.kButtonUp] = true
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
-check(cyc.activeLayer == 2, "Up + 360 Grad -> Ebene 2 (vorwaerts)")
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
-check(cyc.activeLayer == 3, "Up + weitere 360 Grad -> Ebene 3")
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
-check(cyc.activeLayer == 1, "Up + weitere 360 Grad -> Wrap zurueck auf Ebene 1 (FR-017)")
-heldButtons[playdate.kButtonUp] = nil
+bDpad("upButtonDown", "upButtonUp")
+check(cyc.activeLayer == 2, "B + Hoch -> Ebene 2 (vorwaerts)")
+bDpad("upButtonDown", "upButtonUp")
+check(cyc.activeLayer == 3, "B + Hoch nochmal -> Ebene 3")
+bDpad("upButtonDown", "upButtonUp")
+check(cyc.activeLayer == 1, "B + Hoch nochmal -> Wrap zurueck auf Ebene 1 (FR-017)")
 
-heldButtons[playdate.kButtonDown] = true
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
-check(cyc.activeLayer == 3, "Down + 360 Grad -> rueckwaerts auf Ebene 3 (Wrap)")
-crankChangeValue = -360; EditorRoom:update(); crankChangeValue = 0
-check(cyc.activeLayer == 2, "Down + volle Umdrehung (Richtung egal) -> Ebene 2 rueckwaerts")
-heldButtons[playdate.kButtonDown] = nil
+bDpad("downButtonDown", "downButtonUp")
+check(cyc.activeLayer == 3, "B + Runter -> rueckwaerts auf Ebene 3 (Wrap)")
+bDpad("downButtonDown", "downButtonUp")
+check(cyc.activeLayer == 2, "B + Runter nochmal -> Ebene 2 rueckwaerts")
 
-section("EditorRoom: Crank ohne Up/Down zyklt weiterhin Frames (Spec 010, FR-016)")
+section("EditorRoom: Kurbel OHNE B wechselt keinen Frame mehr (Spec 010, Steuerungs-Redesign)")
 check(mockLastTilemap.lastFrame ~= nil, "Vorbedingung: Tilemap gesetzt")
-local layerBefore = cyc.activeLayer
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
-check(#cyc.frameLayers == 2, "360 Grad ohne Up/Down -> neuer Frame (Frame-Cyclen unveraendert)")
-check(cyc.activeLayer == layerBefore, "Frame-Wechsel laesst den aktiven Ebenenindex unveraendert")
+local framesBefore = #cyc.frameLayers
+crankChangeValue = 720; EditorRoom:update(); crankChangeValue = 0
+check(#cyc.frameLayers == framesBefore, "zwei volle Kurbelumdrehungen ohne B -> kein neuer Frame")
 
-section("EditorRoom: aktiver Ebenenindex ueberlebt Frame-Wechsel (Spec 010, US3 AS3)")
--- Spec 010 Third Round: JEDES Frame hat 3 Ebenen — Frame 2 wird beim Laden
--- auf 3 Ebenen aufgefuellt, obwohl die frames.json nur eine Ebene enthaelt.
+section("EditorRoom: B + Links/Rechts wechselt Frames; aktiver Ebenenindex bleibt erhalten (Spec 010)")
+bDpad("upButtonDown", "upButtonUp")            -- Ebene 2 -> 3
+check(cyc.activeLayer == 3, "Vorbedingung: aktive Ebene 3")
+bDpad("rightButtonDown", "rightButtonUp")      -- am letzten Frame -> neuer Frame 2 (tiefe Kopie)
+check(#cyc.frameLayers == 2, "B + Rechts am Ende -> neuer Frame")
+check(cyc.activeLayer == 3, "Frame-Wechsel laesst den aktiven Ebenenindex unveraendert (jeder Frame hat 3 Ebenen)")
+check(EditorRoom:getActiveLayerInfo().count == 3, "Indikator zeigt weiterhin 3 Ebenen")
+bDpad("leftButtonDown", "leftButtonUp")        -- zurueck zu Frame 1
+check(#cyc.frameLayers == 2 and cyc.activeLayer == 3,
+    "B + Links: zurueck zu Frame 1, kein neuer Frame, Ebenenindex 3 bleibt")
+
+section("EditorRoom: jeder Frame wird beim Laden auf 3 Ebenen aufgefuellt (Spec 010, Third Round)")
 loadEditorV11("wrap2", {
     threeLayerFrame(1),
     { frameIndex = 1, duration = 100, layers = {
@@ -1712,11 +1734,99 @@ loadEditorV11("wrap2", {
 local wr = EditorRoom:getImageData()
 check(#wr.frameLayers[2].layers == 3, "Frame 2 wurde beim Laden auf 3 Ebenen aufgefuellt")
 wr.activeLayer = 3                                       -- auf Frame 1 Ebene 3
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0   -- -> Frame 2
+bDpad("rightButtonDown", "rightButtonUp")                -- -> Frame 2
 check(wr.activeLayer == 3, "aktiver Index 3 bleibt beim Frame-Wechsel erhalten (Frame 2 hat auch 3 Ebenen)")
 check(EditorRoom:getActiveLayerInfo().count == 3, "Indikator zeigt weiterhin 3 Ebenen")
-crankChangeValue = -360; EditorRoom:update(); crankChangeValue = 0  -- zurueck zu Frame 1
+bDpad("leftButtonDown", "leftButtonUp")                  -- zurueck zu Frame 1
 check(#wr.frameLayers == 2, "wieder bei Frame 1 (kein neuer Frame angelegt)")
+
+-- ── EditorRoom: Tile-Picker (Crank ohne B) + Pipetten-Meldung (Spec 010) ───
+
+section("EditorRoom: Crank ohne B waehlt reihum eine Kachel; Overlay zeigt 'Tile N' (Spec 010)")
+loadEditorV11("picker", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1, { [1] = 2, [2] = 3, [3] = 4 }), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } },
+}, 4)
+
+local function lastPickerLabel()
+    local found = nil
+    for _, c in ipairs(mockDrawTextCalls) do
+        if type(c.text) == "string" and c.text:match("^Tile %d") then found = c.text end
+    end
+    return found
+end
+
+-- referenzierte Tiles = {1,2,3,4}; ohne Auswahl entspricht das Slot 1
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- ein Kachelschritt vorwaerts
+check(lastPickerLabel() == "Tile 2", "30 Grad -> Kachel 2 gewaehlt, Overlay zeigt 'Tile 2'")
+
+mockDrawTextCalls = {}
+crankChangeValue = 60; EditorRoom:update(); crankChangeValue = 0   -- zwei weitere Schritte -> Kachel 4
+check(lastPickerLabel() == "Tile 4", "weitere 60 Grad -> Kachel 4")
+
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- Wrap 4 -> 1
+check(lastPickerLabel() == "Tile 1", "Wrap am Listenende: Kachel 4 -> Kachel 1 (= Abwahl)")
+
+mockDrawTextCalls = {}
+crankChangeValue = -30; EditorRoom:update(); crankChangeValue = 0  -- rueckwaerts 1 -> 4
+check(lastPickerLabel() == "Tile 4", "rueckwaerts vom Anfang -> Kachel 4 (Wrap)")
+
+mockDrawTextCalls = {}
+mockTimeMs = mockTimeMs + 2000
+EditorRoom:update()
+check(lastPickerLabel() == nil, "nach 2s ohne Kurbel: Picker-Overlay ausgeblendet")
+
+local pk = EditorRoom:getImageData()
+check(#pk.frameLayers == 1 and pk.activeLayer == 1,
+    "Kurbeln am Picker liess Frame-Anzahl und aktive Ebene unveraendert (weder Frame- noch Ebenen-Wechsel per Crank)")
+
+section("EditorRoom: Pipette meldet kurz 'Tile N picked' in der Bauchbinde (Spec 010)")
+local function lastBandLabel()
+    local found = nil
+    for _, c in ipairs(mockDrawTextCalls) do
+        if type(c.text) == "string" then found = c.text end
+    end
+    return found
+end
+-- Cursor steht nach dem Laden auf Zelle 1 (1,1); Composite dort = Tile 2
+mockDrawTextCalls = {}
+local ph = EditorRoom:inputHandler()
+ph.BButtonDown(); ph.BButtonUp()          -- kurzer B-Tipp = Pipette
+EditorRoom:update()
+check(lastBandLabel() == "Tile 2 picked",
+    "B-Tipp auf Zelle 1 (Composite Tile 2) -> Bauchbinde zeigt 'Tile 2 picked'")
+
+mockDrawTextCalls = {}
+mockTimeMs = mockTimeMs + 2000
+EditorRoom:update()
+check((lastBandLabel() or ""):match("^Frame 1/1"),
+    "nach 1.5s blendet die Meldung aus -> Bauchbinde zeigt wieder 'Frame 1/1 ...'")
+
+section("EditorRoom: B + D-Pad-Navigation unterdrueckt die Pipette beim B-Release (Spec 010)")
+loadEditorV11("nav-nopip", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1, { [1] = 5 }), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } },
+}, 5)
+local np = EditorRoom:getImageData()
+local nh = EditorRoom:inputHandler()
+heldButtons[playdate.kButtonB] = true
+nh.BButtonDown()
+nh.upButtonDown(); nh.upButtonUp()        -- B + Hoch -> Ebene 2 (bNavConsumed = true)
+check(np.activeLayer == 2, "B + Hoch hat die Ebene gewechselt")
+heldButtons[playdate.kButtonB] = false
+nh.BButtonUp()                            -- KEINE Pipette, weil B fuer Navigation genutzt wurde
+mockDrawTextCalls = {}
+EditorRoom:update()
+check(not (lastBandLabel() or ""):match("picked"),
+    "B-Release nach B+D-Pad loest KEINE Pipette aus (bNavConsumed)")
 
 -- ── US1: Pixel-Shift (Spec 010) ───────────────────────────────────────────
 

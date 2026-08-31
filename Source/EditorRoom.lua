@@ -1,6 +1,12 @@
 -- EditorRoom.lua
 -- Nativer 16x16-Tile-Editor für Hans Dither v0.3.0 (AD-016/AD-019):
--- 25x15-Raster auf 400x240, Crank = Animationsframes, B+Crank = Zoomkette.
+-- 25x15-Raster auf 400x240. Steuerung (Spec 010 Steuerungs-Redesign):
+--   D-Pad            = Cursor bewegen
+--   Crank (ohne B)   = Tile-Picker-Overlay (aktive Kachel reihum waehlen)
+--   B halten + Hoch/Runter  = aktive Ebene +1 / -1 (Wrap 1..3)
+--   B halten + Links/Rechts = Frame zurueck / vor (Rechts am Ende: neuer Frame)
+--   B + Crank vorwaerts / rueckwaerts = Zoomkette / Frame-Verwaltung (unveraendert)
+--   B kurz (ohne weitere Eingabe) = Pipette; zeigt kurz "Tile N picked"
 -- Ersetzt den alten TileRoom mit Pulp-Kopplung.
 
 import "CoreLibs/graphics"
@@ -29,6 +35,14 @@ local MAX_FRAMES = 12
 -- Zoom-Trigger: Tick-Akkumulation bei gehaltenem B, Schwelle wie ZoomRoom/PixelRoom
 local ZOOM_TICK_THRESHOLD = 4
 
+-- Spec 010 (Steuerungs-Redesign): Crank ohne B waehlt reihum eine Kachel
+-- (Tile-Picker). Ein Kachelschritt je PICKER_DEGREES_PER_TILE Grad
+-- Netto-Kurbeldrehung; das Overlay bleibt PICKER_VISIBLE_MS nach der letzten
+-- Bewegung sichtbar. "Tile N picked" (Pipette) blendet nach PICK_MESSAGE_MS aus.
+local PICKER_DEGREES_PER_TILE = 30
+local PICKER_VISIBLE_MS = 1500
+local PICK_MESSAGE_MS = 1500
+
 -- SDK-Key-Repeat (Constitution I) statt eigener Timer-Ketten
 local KEY_REPEAT_DELAY_MS = 300
 local KEY_REPEAT_MS = 100
@@ -50,9 +64,14 @@ local tilemap = nil              -- playdate.graphics.tilemap (25x15)
 local cursor = { x = 1, y = 1 }  -- Tile-Koordinaten 1..25 / 1..15
 local activeTile = nil           -- number/nil: Pipetten-Auswahl; nil = Toggle-Modus
 local zoomTickAccu = 0           -- Tick-Akkumulator für B+Crank; Reset bei B-Release
-local crankAccumDegrees = 0      -- Spec 006 R1: signierter Grad-Akkumulator fuer Frame-Navigation ohne B
-local layerAccumDegrees = 0      -- Spec 010 US3: Grad-Akkumulator fuer Ebenen-Cyclen (Up/Down + Crank)
+local crankAccumDegrees = 0      -- Spec 010: signierter Grad-Akkumulator fuer den Tile-Picker (Crank ohne B)
 local bUsedForZoom = false       -- Crank während B-Hold unterdrückt die Pipette
+local bNavConsumed = false       -- B+D-Pad hat Ebene/Frame gewechselt -> Pipette bei B-Release unterdruecken
+local pickerVisible = false      -- Tile-Picker-Overlay sichtbar (abgeleitet aus pickerUntilMs)
+local pickerUntilMs = 0
+local pickMessage = nil          -- "Tile N picked" (Pipette); ersetzt kurz das Bauchbinden-Label
+local pickMessageUntilMs = 0
+local pickMessageVisible = false -- abgeleitet; Uebergangs-Redraw wie bauchbindeVisible
 local showGrid = true            -- Grid-Overlay an/aus (Checkmark-Menüeintrag)
 local loadingOperation = nil     -- RoomOperation während des Ladens
 local savingOperation = nil      -- RoomOperation während "save + exit"
@@ -100,6 +119,26 @@ local function updateTilemapFrame()
     if frame and #frame == GRID_COLS * GRID_ROWS then
         tilemap:setTiles(frame, GRID_COLS)
     end
+end
+
+-- Distinkte, aktuell referenzierte Tile-Indizes ueber alle Frames (aufsteigend).
+-- Wie EditorRoom:buildPauseMenuImage (CR-06): NICHT imagetable:getLength() —
+-- Sitzungs-Edits haengen neue Tiles an und verwaisen alte; erst das Speichern
+-- (pruneUnusedTilesLayered) raeumt auf. Der Tile-Picker soll nur echte Kacheln
+-- durchlaufen. Index 1 (Weiss-Basis) ist immer dabei -> Abwahl stets erreichbar.
+local function referencedTileIndices()
+    if not imageData or not imageData.frames then return {} end
+    local seen, list = {}, {}
+    for _, frame in ipairs(imageData.frames) do
+        for _, idx in ipairs(frame) do
+            if idx and idx ~= 0 and not seen[idx] then
+                seen[idx] = true
+                list[#list + 1] = idx
+            end
+        end
+    end
+    table.sort(list)
+    return list
 end
 
 -- ── Layer-Zugriff (Spec 010) ─────────────────────────────────────────────────
@@ -231,7 +270,15 @@ local function endStroke()
     strokeTileIdx = nil
 end
 
--- B (kurz): Pipette; auf Weiß (Index 1) -> Abwahl (FR-003, research.md R4)
+local function setPickMessage(text)
+    pickMessage = text
+    pickMessageUntilMs = playdate.getCurrentTimeMilliseconds() + PICK_MESSAGE_MS
+    pickMessageVisible = true
+    needsRedraw = true
+end
+
+-- B (kurz): Pipette; auf Weiß (Index 1) -> Abwahl (FR-003, research.md R4).
+-- Spec 010: zeigt zusaetzlich kurz "Tile N picked" in der Bauchbinde.
 local function pipette()
     lastActivityMs = playdate.getCurrentTimeMilliseconds()
     local idx = imageData.frames[currentFrame][cursorCellIndex()]
@@ -240,6 +287,25 @@ local function pipette()
     else
         activeTile = idx
     end
+    setPickMessage(string.format("Tile %d picked", idx))
+    needsRedraw = true
+end
+
+-- Spec 010 (Steuerungs-Redesign): Crank ohne B schaltet die aktive Kachel-
+-- Auswahl (activeTile) reihum durch die tatsaechlich referenzierten Tiles.
+-- Landet sie auf Index 1 (Weiss), gilt das wie die Pipette auf Weiss: Abwahl
+-- (activeTile = nil, Toggle-Modus).
+local function stepTilePicker(dir)
+    local list = referencedTileIndices()
+    if #list == 0 then return end
+    local current = activeTile or 1
+    local pos = 1
+    for i, v in ipairs(list) do
+        if v == current then pos = i; break end
+    end
+    pos = ((pos - 1 + dir) % #list) + 1
+    local picked = list[pos]
+    activeTile = (picked == 1) and nil or picked
     needsRedraw = true
 end
 
@@ -272,6 +338,22 @@ local function tickBackward()
     imageData.activeLayer = LayerModel.clampActive(imageData.frameLayers[currentFrame], imageData.activeLayer or 1)
     updateTilemapFrame()
     needsRedraw = true
+end
+
+-- Spec 010 (Steuerungs-Redesign): B halten + D-Pad. Hoch/Runter = aktive Ebene
+-- +1 / -1 (Wrap 1..3), Links/Rechts = Frame zurueck / vor. Setzt bNavConsumed,
+-- damit der anschliessende B-Release nicht zusaetzlich die Pipette ausloest.
+local function bDpadNav(kind, delta)
+    if inputBlocked() then return end
+    bNavConsumed = true
+    lastActivityMs = playdate.getCurrentTimeMilliseconds()
+    if kind == "layer" then
+        cycleActiveLayer(delta)
+    elseif delta > 0 then
+        tickForward()
+    else
+        tickBackward()
+    end
 end
 
 -- FR-008a: aktiven Frame löschen, Nachrücker aktiv; letzter Frame gesperrt.
@@ -549,7 +631,12 @@ local function startMove(direction, dx, dy)
     end
     moveTimers[direction] = playdate.timer.keyRepeatTimerWithDelay(
         KEY_REPEAT_DELAY_MS, KEY_REPEAT_MS,
-        function() moveCursor(dx, dy) end
+        function()
+            -- B nachtraeglich gedrueckt (Richtungstaste war schon gehalten):
+            -- Cursor einfrieren, statt gegen die B+D-Pad-Navigation zu laufen.
+            if playdate.buttonIsPressed(playdate.kButtonB) then return end
+            moveCursor(dx, dy)
+        end
     )
 end
 
@@ -566,17 +653,20 @@ local function clearMoveTimers()
     end
 end
 
--- ── Crank (FR-004/FR-005/FR-006, contracts CR-01): ohne B = volle Umdrehung
--- fuer Frame-Navigation, mit B = Zoom (unveraendert). Spec 010 US3: mit
--- gehaltener Up-/Down-Taste zyklt die volle Umdrehung stattdessen die aktive
--- EBENE (Up = vorwaerts, Down = rueckwaerts, FR-013/014/016/017). ────────────
+-- ── Crank (contracts CR-01) ─────────────────────────────────────────────────
+-- Mit gehaltenem B: Zoomkette / Frame-Verwaltung (unveraendert, Tick-basiert).
+-- Ohne B: Tile-Picker — je PICKER_DEGREES_PER_TILE Grad Netto-Kurbeldrehung
+-- schaltet die aktive Kachel-Auswahl (activeTile) eine Position weiter, mit
+-- Wrap am Listenende. Frame- und Ebenen-Wechsel liegen jetzt auf B + D-Pad
+-- (bDpadNav), NICHT mehr auf der Kurbel.
 --
--- Pro Aufruf wird GENAU EINE Crank-Lese-API verwendet (CR-01) — niemals
--- beide im selben Frame, sonst gehen Grad-/Tick-Anteile verloren
--- (research.md R1 Detailhinweis).
+-- Pro Aufruf wird GENAU EINE Crank-Lese-API verwendet (CR-01): getCrankTicks()
+-- im B-Zweig, getCrankChange() im Picker-Zweig — nie beide im selben Frame,
+-- sonst gehen Grad-/Tick-Anteile verloren (research.md R1 Detailhinweis).
 
 local function handleCrank()
     if playdate.buttonIsPressed(playdate.kButtonB) then
+        crankAccumDegrees = 0  -- kein Rest aus einer vorherigen Picker-Drehung
         local crankTicks = playdate.getCrankTicks(4) or 0
         if crankTicks ~= 0 then
             bUsedForZoom = true
@@ -597,38 +687,18 @@ local function handleCrank()
         local change = playdate.getCrankChange() or 0
         if change ~= 0 then
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
+            pickerVisible = true
+            pickerUntilMs = playdate.getCurrentTimeMilliseconds() + PICKER_VISIBLE_MS
+            needsRedraw = true
         end
-
-        local upHeld = playdate.buttonIsPressed(playdate.kButtonUp)
-        local downHeld = playdate.buttonIsPressed(playdate.kButtonDown)
-        if upHeld or downHeld then
-            -- Spec 010 US3: Ebenen-Cyclen. Richtung kommt aus der gehaltenen
-            -- Taste (Up = +1, Down = -1), die Kurbelrichtung ist egal — eine
-            -- volle Umdrehung (in beliebige Richtung) = ein Ebenenschritt.
-            -- Der Frame-Akku laeuft NICHT mit (FR-016).
-            crankAccumDegrees = 0
-            local delta = downHeld and -1 or 1
-            layerAccumDegrees = layerAccumDegrees + change
-            if layerAccumDegrees >= 360 then
-                layerAccumDegrees = layerAccumDegrees - 360
-                cycleActiveLayer(delta)
-            elseif layerAccumDegrees <= -360 then
-                layerAccumDegrees = layerAccumDegrees + 360
-                cycleActiveLayer(delta)
-            end
-        else
-            -- Spec 006 R1: signierter Netto-Akkumulator; Frame-Wechsel erst bei
-            -- einer vollen 360°-Umdrehung ab der aktuellen Kurbelposition
-            -- (FR-004/005). Teildrehungen/Richtungswechsel heben sich auf.
-            layerAccumDegrees = 0
-            crankAccumDegrees = crankAccumDegrees + change
-            if crankAccumDegrees >= 360 then
-                crankAccumDegrees = crankAccumDegrees - 360
-                tickForward()
-            elseif crankAccumDegrees <= -360 then
-                crankAccumDegrees = crankAccumDegrees + 360
-                tickBackward()
-            end
+        crankAccumDegrees = crankAccumDegrees + change
+        while crankAccumDegrees >= PICKER_DEGREES_PER_TILE do
+            crankAccumDegrees = crankAccumDegrees - PICKER_DEGREES_PER_TILE
+            stepTilePicker(1)
+        end
+        while crankAccumDegrees <= -PICKER_DEGREES_PER_TILE do
+            crankAccumDegrees = crankAccumDegrees + PICKER_DEGREES_PER_TILE
+            stepTilePicker(-1)
         end
     end
 end
@@ -645,6 +715,46 @@ local function drawGridOverlay()
     end
 end
 
+-- Spec 010: Kachel-Auswahl-Overlay (Crank ohne B). Filmstreifen aus
+-- PICKER_STRIP Kacheln, die aktuelle mittig umrahmt, darunter "Tile N".
+-- Wird nur gezeichnet, solange pickerVisible (Auto-Ausblendung in update()).
+local PICKER_STRIP = 7
+local PICKER_CELL = 22
+
+local function drawTilePickerOverlay()
+    local list = referencedTileIndices()
+    if #list == 0 then return end
+    local current = activeTile or 1
+    local pos = 1
+    for i, v in ipairs(list) do
+        if v == current then pos = i; break end
+    end
+
+    local half = (PICKER_STRIP - 1) // 2
+    local panelW = PICKER_STRIP * PICKER_CELL + 16
+    local panelH = PICKER_CELL + 30
+    local px = (400 - panelW) // 2
+    local py = (240 - panelH) // 2
+
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(px, py, panelW, panelH)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawRect(px, py, panelW, panelH)
+
+    local cy = py + 6
+    for s = -half, half do
+        local li = ((pos - 1 + s) % #list) + 1
+        local tileIdx = list[li]
+        local img = imageData.imagetable and imageData.imagetable:getImage(tileIdx)
+        local cx = px + 8 + (s + half) * PICKER_CELL + (PICKER_CELL - TILE_PX) // 2
+        if img then img:draw(cx, cy) end
+        if s == 0 then
+            gfx.drawRect(cx - 3, cy - 3, TILE_PX + 6, TILE_PX + 6)
+        end
+    end
+    gfx.drawText(string.format("Tile %d", current), px + 8, py + panelH - 18)
+end
+
 local function draw()
     gfx.clear(gfx.kColorWhite)
     if tilemap then
@@ -659,15 +769,26 @@ local function draw()
         -- zeigt auf der dem Cursor gegenueberliegenden Bildschirmhaelfte (FR-003)
         if bauchbindeVisible then
             local side = (cursor.x <= GRID_COLS / 2) and "right" or "left"
-            -- Spec 010 FR-015: Ebenen-Indikator (Index/Anzahl + Name) neben der
-            -- Frame-Anzeige. Bei nur einer Ebene bleibt es bei "Frame x/y".
-            local label = string.format("Frame %d/%d", currentFrame, #imageData.frames)
-            local li = EditorRoom:getActiveLayerInfo()
-            if li and li.count > 1 then
-                label = string.format("%s  L%d/%d %s", label, li.index, li.count, li.name or "")
+            local label
+            if pickMessageVisible and pickMessage then
+                -- Spec 010: die Pipette meldet kurz "Tile N picked" — ersetzt
+                -- fuer PICK_MESSAGE_MS das normale Frame/Ebenen-Label im selben
+                -- Bauchbinden-Balken (keine zweite Bandzeile).
+                label = pickMessage
+            else
+                -- Spec 010 FR-015: Ebenen-Indikator (Index/Anzahl + Name) neben
+                -- der Frame-Anzeige. Bei nur einer Ebene bleibt es bei "Frame x/y".
+                label = string.format("Frame %d/%d", currentFrame, #imageData.frames)
+                local li = EditorRoom:getActiveLayerInfo()
+                if li and li.count > 1 then
+                    label = string.format("%s  L%d/%d %s", label, li.index, li.count, li.name or "")
+                end
             end
             bauchbinde:drawBottom(label, side, 400, 240)
         end
+    end
+    if imageData and pickerVisible then
+        drawTilePickerOverlay()
     end
     if statusMessage then
         bauchbinde:drawBottom(statusMessage, "left", 400, 240)
@@ -696,8 +817,11 @@ function EditorRoom:entered()
     endStroke()
     zoomTickAccu = 0
     crankAccumDegrees = 0
-    layerAccumDegrees = 0
     bUsedForZoom = false
+    bNavConsumed = false
+    pickerVisible = false
+    pickMessage = nil
+    pickMessageVisible = false
     lastActivityMs = playdate.getCurrentTimeMilliseconds()
     bauchbindeVisible = true
     needsRedraw = true
@@ -810,6 +934,25 @@ function EditorRoom:update()
         end
     end
 
+    -- Spec 010: Tile-Picker-Overlay nach PICKER_VISIBLE_MS ohne Kurbelbewegung
+    -- ausblenden; danach den Grad-Rest verwerfen, damit ein spaeterer Anstupser
+    -- nicht sofort weiterschaltet.
+    if pickerVisible and playdate.getCurrentTimeMilliseconds() > pickerUntilMs then
+        pickerVisible = false
+        crankAccumDegrees = 0
+        needsRedraw = true
+    end
+    -- "Tile N picked"-Hinweis: Uebergangs-Redraw auch ohne weitere Eingabe
+    -- (analog Bauchbinde/statusMessage).
+    if pickMessage then
+        local vis = playdate.getCurrentTimeMilliseconds() <= pickMessageUntilMs
+        if vis ~= pickMessageVisible then
+            pickMessageVisible = vis
+            needsRedraw = true
+        end
+        if not vis then pickMessage = nil end
+    end
+
     if loadingOperation then
         loadingOperation:resume(function(err)
             handleLoadError(err)
@@ -842,32 +985,61 @@ function EditorRoom:inputHandler()
         end,
         BButtonDown = function()
             -- CR-02: B-Druck zaehlt als Aktivitaet unabhaengig davon, ob
-            -- spaeter Pipette oder Zoom ausgeloest wird (sonst wuerde ein
-            -- langes B-Halten ohne Crank-Bewegung die Bauchbinde
-            -- faelschlich ausblenden lassen, bevor B losgelassen wird)
+            -- spaeter Pipette, Zoom oder B+D-Pad-Navigation ausgeloest wird
+            -- (sonst wuerde ein langes B-Halten ohne weitere Eingabe die
+            -- Bauchbinde faelschlich ausblenden lassen, bevor B los ist)
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
             bUsedForZoom = false
+            bNavConsumed = false
             zoomTickAccu = 0
         end,
         BButtonUp = function()
             -- CR-02: B-Release zaehlt IMMER als Aktivitaet, auch wenn die
-            -- Pipette unten uebersprungen wird (bUsedForZoom==true); pipette()
-            -- setzt lastActivityMs zwar ebenfalls, aber nur im Nicht-Zoom-Fall
+            -- Pipette unten uebersprungen wird; pipette() setzt lastActivityMs
+            -- zwar ebenfalls, aber nur im Nicht-Zoom/Nicht-Nav-Fall
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
-            -- Pipette bei B-Release ohne akkumulierte Zoom-Ticks
-            if not bUsedForZoom and not inputBlocked() then
+            -- Pipette nur, wenn B NICHT fuer Zoom (Crank) oder Ebene/Frame
+            -- (D-Pad) benutzt wurde — der kurze B-Tipp allein ist die Pipette.
+            if not bUsedForZoom and not bNavConsumed and not inputBlocked() then
                 pipette()
             end
             bUsedForZoom = false
+            bNavConsumed = false
             zoomTickAccu = 0
         end,
-        upButtonDown = function() startMove("up", 0, -1) end,
+        -- Spec 010: B gehalten -> D-Pad wechselt Ebene (Hoch/Runter) bzw. Frame
+        -- (Links/Rechts). Ohne B: normale Cursor-Bewegung (mit Key-Repeat).
+        upButtonDown = function()
+            if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
+                bDpadNav("layer", 1)
+            else
+                startMove("up", 0, -1)
+            end
+        end,
         upButtonUp = function() stopMove("up") end,
-        downButtonDown = function() startMove("down", 0, 1) end,
+        downButtonDown = function()
+            if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
+                bDpadNav("layer", -1)
+            else
+                startMove("down", 0, 1)
+            end
+        end,
         downButtonUp = function() stopMove("down") end,
-        leftButtonDown = function() startMove("left", -1, 0) end,
+        leftButtonDown = function()
+            if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
+                bDpadNav("frame", -1)
+            else
+                startMove("left", -1, 0)
+            end
+        end,
         leftButtonUp = function() stopMove("left") end,
-        rightButtonDown = function() startMove("right", 1, 0) end,
+        rightButtonDown = function()
+            if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
+                bDpadNav("frame", 1)
+            else
+                startMove("right", 1, 0)
+            end
+        end,
         rightButtonUp = function() stopMove("right") end
     }
 end
