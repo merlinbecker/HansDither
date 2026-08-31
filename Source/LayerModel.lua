@@ -38,7 +38,10 @@ import "PixelTransparency"
 
 LayerModel = {}
 
-LayerModel.MAX_LAYERS = 3
+-- Spec 010 (Third Round): jedes Frame hat GENAU 3 Ebenen, immer — eine feste
+-- Struktur wie die 12-Frame-Grenze. Kein Hinzufuegen/Loeschen von Ebenen.
+LayerModel.LAYER_COUNT = 3
+LayerModel.MAX_LAYERS = 3   -- Alias (Rueckwaertskompatibilitaet im Code)
 LayerModel.POSITIONS = 375
 LayerModel.GRID_COLS = 25
 LayerModel.GRID_ROWS = 15
@@ -76,17 +79,40 @@ function LayerModel.newLayer(index0, name)
     }
 end
 
+-- Stellt sicher, dass ein Frame-Layer-Entry GENAU 3 Ebenen hat: fehlende
+-- obere Ebenen werden leer ("absent") ergaenzt, ueberzaehlige verworfen,
+-- layerIndex/Name normalisiert. Beim Laden nach dem Parsen aufgerufen
+-- (data-model.md "pad every frame to 3 layers").
+function LayerModel.padTo3(entry)
+    entry.layers = entry.layers or {}
+    for i = 1, LayerModel.LAYER_COUNT do
+        local layer = entry.layers[i]
+        if type(layer) ~= "table" or type(layer.positions) ~= "table"
+            or #layer.positions ~= LayerModel.POSITIONS then
+            entry.layers[i] = LayerModel.newLayer(i - 1)
+        else
+            layer.layerIndex = i - 1
+            layer.name = layer.name or ("Layer " .. i)
+            if layer.visible == nil then layer.visible = true end
+        end
+    end
+    for i = LayerModel.LAYER_COUNT + 1, #entry.layers do
+        entry.layers[i] = nil
+    end
+    entry.duration = entry.duration or 100
+    return entry
+end
+
 -- Wandelt ein flaches Spec-009-Frame (375 Tile-Indizes) in ein Frame-Layer-
--- Entry mit genau einer (der Basis-)Ebene um — Grundlage fuer neue Bilder
--- (ImageStore.createImage) UND fuer das v1.0->v1.1-Upgrade beim Laden
--- (contracts/save-format.md "Backward Compatibility").
+-- Entry mit GENAU 3 Ebenen um (Basis aus den flachen Positionen, Ebenen 2-3
+-- leer) — Grundlage fuer neue Bilder (ImageStore.createImage) UND fuer das
+-- v1.0->v1.1-Upgrade beim Laden (contracts/save-format.md).
 function LayerModel.newFrameLayersFromFlat(flatPositions, duration, name)
     local positions = LayerModel.copyArray(flatPositions or {})
-    -- Defensive: auf exakt 375 Eintraege bringen (fehlende -> Weiss)
     for i = 1, LayerModel.POSITIONS do
         if positions[i] == nil then positions[i] = LayerModel.WHITE_TILE end
     end
-    return {
+    local entry = {
         duration = duration or 100,
         layers = {
             [1] = {
@@ -97,6 +123,7 @@ function LayerModel.newFrameLayersFromFlat(flatPositions, duration, name)
             },
         },
     }
+    return LayerModel.padTo3(entry)
 end
 
 -- Tiefe Kopie eines Frame-Layer-Entry (Frame-Duplikation bei tickForward()).
@@ -116,26 +143,32 @@ end
 
 -- ── Validierung (contracts/save-format.md "Validation on Load") ─────────────
 
+-- Gueltig ist ein In-Memory-Frame-Layer-Entry mit GENAU 3 Ebenen
+-- (layerIndex 0..2), je 375 nicht-negative Ganzzahl-Positionen; die
+-- Basisebene (Ebene 1) hat keine "absent" (0) Zellen.
 function LayerModel.validate(entry)
     if type(entry) ~= "table" or type(entry.layers) ~= "table" then return false end
-    local count = #entry.layers
-    if count < 1 or count > LayerModel.MAX_LAYERS then return false end
-    for i = 1, count do
+    if #entry.layers ~= LayerModel.LAYER_COUNT then return false end
+    for i = 1, LayerModel.LAYER_COUNT do
         local layer = entry.layers[i]
         if type(layer) ~= "table" then return false end
         if layer.layerIndex ~= (i - 1) then return false end
         if type(layer.positions) ~= "table" or #layer.positions ~= LayerModel.POSITIONS then return false end
         for _, p in ipairs(layer.positions) do
             if type(p) ~= "number" or p < 0 or p ~= math.floor(p) then return false end
+            if i == 1 and p < 1 then return false end  -- Basisebene: kein "absent"
         end
     end
     return true
 end
 
--- ── Aktive Ebene / Wechsel-Klemmung (US3, data-model.md "State Machine") ────
+-- ── Aktive Ebene (US3, data-model.md "State Machine") ─────────────────────
+--
+-- Es gibt kein Hinzufuegen/Loeschen von Ebenen (Spec 010 Third Round). Die
+-- aktive Ebene ist ein reiner 1..3-Sitzungscursor.
 
 function LayerModel.layerCount(entry)
-    return entry and entry.layers and #entry.layers or 1
+    return entry and entry.layers and #entry.layers or LayerModel.LAYER_COUNT
 end
 
 -- 1-basierter Zugriff; ausserhalb des Bereichs -> Basisebene.
@@ -143,9 +176,8 @@ function LayerModel.getLayer(entry, active1)
     return entry.layers[active1] or entry.layers[1]
 end
 
--- Klemmt einen 1-basierten aktiven Index auf die Ebenenanzahl eines Frames;
--- aus dem Bereich gefallene Indizes (z.B. nach Frame-Wechsel zu einem Frame
--- mit weniger Ebenen) springen auf 1 zurueck (research.md R4).
+-- Klemmt einen 1-basierten aktiven Index auf 1..3. Da jedes Frame immer 3
+-- Ebenen hat, greift das praktisch nur bei defekten Daten.
 function LayerModel.clampActive(entry, active1)
     local count = LayerModel.layerCount(entry)
     if not active1 or active1 < 1 or active1 > count then
@@ -160,39 +192,6 @@ function LayerModel.cycleActive(entry, active1, delta)
     local zero = (active1 - 1 + delta) % count
     if zero < 0 then zero = zero + count end
     return zero + 1
-end
-
--- ── Layer-Verwaltung (US4, contracts/layer-api.md "Frame API Extensions") ──
-
--- Fuegt eine neue (leere) obere Ebene hinzu; verweigert bei bereits 3 Ebenen
--- (FR-012b, hartes Limit).
-function LayerModel.addLayer(entry, name)
-    if #entry.layers >= LayerModel.MAX_LAYERS then
-        return false, "max-layers-reached"
-    end
-    local newIndex0 = #entry.layers
-    entry.layers[newIndex0 + 1] = LayerModel.newLayer(newIndex0, name)
-    return true, entry.layers[newIndex0 + 1]
-end
-
--- Loescht eine Ebene per 1-basiertem Index. Ebene 1 (Basis, layerIndex 0) ist
--- verpflichtend und darf nie geloescht werden (spec.md Edge Cases). Die
--- verbleibenden Ebenen werden luekenlos reindiziert.
-function LayerModel.deleteLayer(entry, active1)
-    if active1 == 1 then
-        return false, "layer-1-protected"
-    end
-    if #entry.layers <= 1 then
-        return false, "min-one-layer"
-    end
-    if active1 < 1 or active1 > #entry.layers then
-        return false, "layer-not-found"
-    end
-    table.remove(entry.layers, active1)
-    for i = 1, #entry.layers do
-        entry.layers[i].layerIndex = i - 1
-    end
-    return true
 end
 
 -- ── Compositing (US3, data-model.md "Example: Three-Layer Frame") ──────────

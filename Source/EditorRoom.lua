@@ -360,7 +360,10 @@ local function buildZoomContext()
         slots = slots,
         gridState = gridState,
         showGrid = showGrid,
-        imageData = imageData
+        imageData = imageData,
+        -- Spec 010: bestimmt den "Nicht-Tinte"-Zustand im PixelRoom
+        -- (weiss auf der Basisebene, transparent auf Ebenen 2-3).
+        activeLayerIsBase = (layer ~= nil and layer.layerIndex == 0),
     }
 end
 

@@ -407,8 +407,9 @@ function ImageStoreCodec.newLoadOperation(id)
             for _, fd in ipairs(frames) do
                 if type(fd) == "table" and type(fd.layers) == "table" and #fd.layers >= 1 then
                     local builtLayers = {}
-                    local n = math.min(#fd.layers, LayerModel.MAX_LAYERS)
-                    for j = 1, n do
+                    -- Nur die ersten 3 Ebenen (data-model.md: exakt 3); ueberzaehlige
+                    -- verwirft padTo3() ohnehin.
+                    for j = 1, math.min(#fd.layers, LayerModel.LAYER_COUNT) do
                         local ld = fd.layers[j]
                         if type(ld) == "table" and type(ld.positions) == "table"
                             and #ld.positions == 375 then
@@ -421,16 +422,18 @@ function ImageStoreCodec.newLoadOperation(id)
                         end
                     end
                     if #builtLayers >= 1 then
-                        frameLayers[#frameLayers + 1] = {
+                        -- Spec 010: jedes Frame IMMER auf genau 3 Ebenen bringen
+                        -- (fehlende obere Ebenen leer ergaenzen).
+                        frameLayers[#frameLayers + 1] = LayerModel.padTo3({
                             duration = tonumber(fd.duration) or 100,
                             layers = builtLayers,
-                        }
+                        })
                     end
                 end
             end
         else
             -- v1.0 -> v1.1 Upgrade: jeder flache Frame wird zur Basisebene
-            -- "Layer 1" (alle Pixel opak, contracts/save-format.md).
+            -- "Layer 1", Ebenen 2-3 leer (newFrameLayersFromFlat -> padTo3).
             for _, frameData in ipairs(frames or {}) do
                 if type(frameData) == "table" and #frameData == 375 then
                     frameLayers[#frameLayers + 1] =
@@ -641,11 +644,19 @@ function ImageStoreCodec.createFramesTable(name, frames, tileCount)
     return framesData
 end
 
+-- Prueft, ob eine Ebene komplett leer ist (jede Position 0 = "absent").
+local function layerIsEmpty(layer)
+    for _, p in ipairs(layer.positions) do
+        if p ~= 0 then return false end
+    end
+    return true
+end
+
 -- Spec 010: frames.json v1.1 mit verschachtelten Ebenen je Frame
--- (contracts/save-format.md). frameLayers ist im LayerModel-Format
--- ({duration, layers = {{layerIndex, name, positions[375], visible}, ...}}).
--- Frames mit ungueltiger Ebenenzahl (0 oder > 3) oder Positions-Laenge != 375
--- werden verworfen (defensiv, wie schon createFramesTable).
+-- (contracts/save-format.md). Eingabe: LayerModel-Frame-Entries mit GENAU 3
+-- Ebenen. Ausgabe: je Frame 1-3 Ebeneneintraege — komplett leere obere Ebenen
+-- (Ebene 2/3) werden WEGGELASSEN (Third Round: "wird halt nichts gespeichert"),
+-- der Loader ergaenzt sie beim Laden wieder (padTo3).
 function ImageStoreCodec.createFramesTableV11(name, frameLayers, tileCount)
     local framesData = {
         version = "1.1",
@@ -657,13 +668,24 @@ function ImageStoreCodec.createFramesTableV11(name, frameLayers, tileCount)
     }
 
     if type(frameLayers) == "table" then
-        for i, entry in ipairs(frameLayers) do
+        for _, entry in ipairs(frameLayers) do
             local layers = entry and entry.layers
-            if type(layers) == "table" and #layers >= 1 and #layers <= LayerModel.MAX_LAYERS then
+            if type(layers) == "table" and #layers >= 1 then
+                -- Hoechste Ebene mit Inhalt bestimmen (Ebene 1 immer schreiben).
+                local highest = 1
+                for j = 2, math.min(#layers, LayerModel.LAYER_COUNT) do
+                    if type(layers[j]) == "table" and type(layers[j].positions) == "table"
+                        and not layerIsEmpty(layers[j]) then
+                        highest = j
+                    end
+                end
+
                 local outLayers = {}
                 local ok = true
-                for j, layer in ipairs(layers) do
-                    if type(layer.positions) ~= "table" or #layer.positions ~= LayerModel.POSITIONS then
+                for j = 1, highest do
+                    local layer = layers[j]
+                    if type(layer) ~= "table" or type(layer.positions) ~= "table"
+                        or #layer.positions ~= LayerModel.POSITIONS then
                         ok = false
                         break
                     end

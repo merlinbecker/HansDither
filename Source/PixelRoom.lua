@@ -32,11 +32,17 @@ local HOLD_INITIAL_DELAY_MS = 220
 local HOLD_REPEAT_MS = 80
 
 -- Grid-Zustand: 3-Zustands-Code je Zelle (PixelTransparency: 0=opak/schwarz,
--- 1=transparent, 2=leer/weiss). Default EMPTY.
+-- 1=transparent, 2=leer/weiss).
 local gridState = {}
 local OPAQUE = PixelTransparency.OPAQUE
 local TRANSPARENT = PixelTransparency.TRANSPARENT
 local EMPTY = PixelTransparency.EMPTY
+
+-- Spec 010 (Third Round): der "Nicht-Tinte"-Zustand ist ebenenabhaengig —
+-- EMPTY (weiss) auf der Basisebene, TRANSPARENT auf den Ebenen 2-3. Wird von
+-- der ZoomRoom je aktiver Ebene gesetzt (setCurrentTile); Default EMPTY
+-- (Basisebene / Alt-Aufrufer).
+local offState = EMPTY
 
 -- Change All Similar Tiles: wenn true, wird beim Verlassen das bestehende
 -- Tile in-place überschrieben statt ein neues anzulegen.
@@ -97,8 +103,12 @@ function gridView:drawCell(section, row, column, selected, x, y, width, height)
 end
 
 
-function PixelRoom:setCurrentTile(tile, tileIndex)
+-- offStateCode: 3-Zustands-Code des "Nicht-Tinte"-Zustands der aktiven Ebene
+-- (PixelTransparency.EMPTY fuer die Basisebene, .TRANSPARENT fuer Ebenen 2-3).
+-- Optional; Default EMPTY.
+function PixelRoom:setCurrentTile(tile, tileIndex, offStateCode)
     currentTileIndex = tileIndex
+    offState = (offStateCode == TRANSPARENT) and TRANSPARENT or EMPTY
     rotationAccumDegrees = 0 -- Spec 008: kein Uebertrag zwischen Bearbeitungssitzungen
     for y = 1, GRID_ROWS do
         gridState[y] = {}
@@ -139,8 +149,11 @@ local function rotateGridCounterClockwise()
 end
 
 -- Pencil-Strich: der erste Tastendruck bestimmt den Malwert des ganzen Strichs.
---  * A auf opakem Pixel -> Strich malt EMPTY (Radierer, Spec 008); sonst OPAQUE.
---  * B -> Strich malt TRANSPARENT (FR-007).
+--  * A auf Tinte -> Strich malt den ebenenabhaengigen "Nicht-Tinte"-Zustand
+--    (offState: weiss auf Ebene 1, transparent auf Ebenen 2-3 — Radierer,
+--    Spec 008 / FR-008); sonst OPAQUE.
+--  * B -> Strich malt offState direkt (FR-007: weiss auf Ebene 1, transparent
+--    auf Ebenen 2-3).
 -- Bewegungen mit gehaltener Starttaste malen denselben Wert weiter.
 local strokeValue = nil   -- 3-Zustands-Code des laufenden Strichs, nil = kein Strich
 local strokeButton = nil  -- "A" | "B" | nil
@@ -158,9 +171,9 @@ local function beginStroke(button)
     if not (row and col and gridState[row]) then return end
     strokeButton = button
     if button == "B" then
-        strokeValue = TRANSPARENT
+        strokeValue = offState
     else
-        strokeValue = (gridState[row][col] == OPAQUE) and EMPTY or OPAQUE
+        strokeValue = (gridState[row][col] == OPAQUE) and offState or OPAQUE
     end
     paintCurrentCell(strokeValue)
 end
@@ -237,20 +250,18 @@ local function processDirectionHold()
     end
 end
 
--- Baut das 16×16-Tile-Bild aus dem aktuellen gridState. OPAQUE -> schwarzer
--- Pixel, TRANSPARENT -> kColorClear (durchsichtig), EMPTY -> weisser
--- Hintergrund bleibt.
+-- Baut das 16×16-Tile-Bild aus dem aktuellen gridState. Der Canvas startet in
+-- der Farbe des ebenenabhaengigen "Nicht-Tinte"-Zustands (weiss auf Ebene 1,
+-- kColorClear auf Ebenen 2-3); nur davon abweichende Pixel werden gesetzt.
 local function buildTileImage()
-    local newTile = gfx.image.new(GRID_COLS, GRID_ROWS, gfx.kColorWhite)
+    local bg = PixelTransparency.toColor(offState)
+    local newTile = gfx.image.new(GRID_COLS, GRID_ROWS, bg)
     gfx.pushContext(newTile)
         for y = 1, GRID_ROWS do
             for x = 1, GRID_COLS do
-                local state = gridState[y][x]
-                if state == OPAQUE then
-                    gfx.setColor(gfx.kColorBlack)
-                    gfx.drawPixel(x - 1, y - 1)
-                elseif state == TRANSPARENT then
-                    gfx.setColor(gfx.kColorClear)
+                local color = PixelTransparency.toColor(gridState[y][x])
+                if color ~= bg then
+                    gfx.setColor(color)
                     gfx.drawPixel(x - 1, y - 1)
                 end
             end
@@ -277,7 +288,7 @@ function PixelRoom:init(switchRoom, nextRoomReference)
     for y = 1, GRID_ROWS do
         gridState[y] = {}
         for x = 1, GRID_COLS do
-            gridState[y][x] = EMPTY
+            gridState[y][x] = offState
         end
     end
     needsRedraw = true
@@ -353,13 +364,14 @@ function PixelRoom:entered()
         changeAllSimilar = checked
     end)
     menu:addMenuItem("Invert", function()
-        -- Spec 010: opak <-> leer tauschen; transparente Pixel bleiben.
+        -- Spec 010: Tinte <-> "Nicht-Tinte"-Zustand der aktiven Ebene tauschen
+        -- (offState = weiss auf Ebene 1, transparent auf Ebenen 2-3).
         for y = 1, GRID_ROWS do
             for x = 1, GRID_COLS do
                 local s = gridState[y][x]
                 if s == OPAQUE then
-                    gridState[y][x] = EMPTY
-                elseif s == EMPTY then
+                    gridState[y][x] = offState
+                elseif s == offState then
                     gridState[y][x] = OPAQUE
                 end
             end

@@ -8,6 +8,7 @@ import "CoreLibs/graphics"
 import "CoreLibs/ui"
 import "CoreLibs/crank"
 import "PencilCursor"
+import "PixelTransparency"
 import "ImageStoreCodec"
 
 local gfx = playdate.graphics
@@ -55,6 +56,10 @@ local baselineGrid = {}
 
 -- Referenz auf imageData des Editors (für "All Similar" in-place, FR-015)
 local imageDataRef = nil
+
+-- Spec 010: ist die aktive Ebene die Basisebene? Bestimmt den "Nicht-Tinte"-
+-- Zustand im PixelRoom (weiss vs. transparent). Default true (Basisebene).
+local activeLayerIsBase = true
 
 -- Cursor im 24×24-Grid (1-basiert)
 local cursorRow = 12
@@ -295,7 +300,9 @@ local function zoomIntoPixelRoom()
     end
     lastEditedSlotRow = slotRow
     lastEditedSlotCol = slotCol
-    pixelRoom:setCurrentTile(buildWorkingImage(slotRow, slotCol), slot.originalIndex)
+    -- Spec 010: "Nicht-Tinte"-Zustand je aktiver Ebene weiterreichen.
+    local offStateCode = activeLayerIsBase and PixelTransparency.EMPTY or PixelTransparency.TRANSPARENT
+    pixelRoom:setCurrentTile(buildWorkingImage(slotRow, slotCol), slot.originalIndex, offStateCode)
     switchRoomFunction(pixelRoom)
 end
 
@@ -485,6 +492,7 @@ end
 function ZoomRoom:setFromEditorContext(ctx)
     imageDataRef = ctx.imageData
     showGridLines = (ctx.showGrid ~= false)
+    activeLayerIsBase = (ctx.activeLayerIsBase ~= false)  -- Default: Basisebene
 
     for sr = 1, SLOTS do
         for sc = 1, SLOTS do

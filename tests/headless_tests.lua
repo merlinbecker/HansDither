@@ -1142,51 +1142,67 @@ local function pixelCursorToOrigin(h)
     for _ = 1, 16 do h.upButtonDown(); h.upButtonUp() end
 end
 
-section("PixelRoom: B malt transparent, A toggelt opak<->leer, 3-Zustands-Zyklus (Spec 010, US2)")
+section("PixelRoom: 'Nicht-Tinte'-Zustand ist ebenenabhaengig (Spec 010, US2, Third Round)")
 local tpTile = nil
 local tpZoom = { setNewTile = function(_, t) tpTile = t end, updateExistingTile = function(_, t) tpTile = t end }
+local T = PixelTransparency.TRANSPARENT
+
+-- OBERE Ebene: offState = TRANSPARENT. B malt transparent, A radiert nach transparent.
 PixelRoom:init(noop, tpZoom)
-PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)  -- leeres Ausgangs-Tile
+PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1, T)
 PixelRoom:entered()
 local tph = PixelRoom:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
-crankChangeValue = 0
-crankTicksValue = 0
+crankChangeValue = 0; crankTicksValue = 0
 pixelCursorToOrigin(tph)
 
--- B-Druck -> transparent an Zelle (1,1) -> Pixel "0,0".
 tph.BButtonDown(); tph.BButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile.pixels["0,0"] == "clear", "B-Druck malt einen transparenten Pixel (kColorClear) an der Cursorposition (FR-007)")
+check(tpTile:sample(0, 0) == "clear", "obere Ebene: B-Druck malt einen transparenten Pixel (FR-007)")
 
--- A-Druck auf transparentem Pixel -> opak (AS2)
 tph.AButtonDown(); tph.AButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile.pixels["0,0"] == true, "A-Druck auf transparentem Pixel -> opak/schwarz (AS2)")
+check(tpTile:sample(0, 0) == "black", "obere Ebene: A auf transparentem Pixel -> Tinte (AS2)")
 
--- A-Druck auf opakem Pixel -> leer (Radierer, Spec 008)
 tph.AButtonDown(); tph.AButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile.pixels["0,0"] == nil, "A-Druck auf opakem Pixel -> leer/weiss (Radierer)")
+check(tpTile:sample(0, 0) == "clear", "obere Ebene: A auf Tinte -> radiert nach transparent (nicht weiss!)")
 
--- Voller 3-Zustands-Zyklus ueber die drei Zustaende
-tph.AButtonDown(); tph.AButtonUp()   -- leer -> opak
-tph.BButtonDown(); tph.BButtonUp()   -- opak -> transparent
+-- BASISEBENE: offState = EMPTY (Default). B malt WEISS, A radiert nach weiss.
+PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)  -- kein offStateCode -> EMPTY
+PixelRoom:entered()
+local bh = PixelRoom:inputHandler()
+pixelCursorToOrigin(bh)
+bh.BButtonDown(); bh.BButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile.pixels["0,0"] == "clear", "leer -> A -> opak -> B -> transparent (Zyklus)")
+check(tpTile:sample(0, 0) == "white", "Basisebene: B-Druck = weiss (identisch zum Radierer, kein Transparent)")
+bh.AButtonDown(); bh.AButtonUp()   -- weiss -> Tinte
+bh.AButtonDown(); bh.AButtonUp()   -- Tinte -> weiss
+PixelRoom:commitForTerminate()
+check(tpTile:sample(0, 0) == "white", "Basisebene: A toggelt Tinte <-> weiss")
 
 section("PixelRoom: transparenter Strich + Ruecklesen aus dem Tile (Spec 010, US2)")
 local strokeTile = nil
 local strokeZoom = { setNewTile = function(_, t) strokeTile = t end, updateExistingTile = function(_, t) strokeTile = t end }
 PixelRoom:init(noop, strokeZoom)
-PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)
+PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1, T)   -- obere Ebene
 PixelRoom:entered()
 local sh = PixelRoom:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
 pixelCursorToOrigin(sh)
 
--- B gehalten + zwei Schritte nach rechts -> transparenter Strich ueber 3 Zellen
--- (1,1)(1,2)(1,3) -> Pixel "0,0" "1,0" "2,0"
+-- Erst Tinte ueber 3 Zellen, dann B-Strich radiert sie nach transparent zurueck.
+heldButtons[playdate.kButtonA] = true
+sh.AButtonDown()
+sh.rightButtonDown(); sh.rightButtonUp()
+sh.rightButtonDown(); sh.rightButtonUp()
+sh.AButtonUp()
+heldButtons[playdate.kButtonA] = false
+PixelRoom:commitForTerminate()
+check(strokeTile:sample(0, 0) == "black" and strokeTile:sample(1, 0) == "black"
+    and strokeTile:sample(2, 0) == "black", "A gehalten + Bewegung malt einen Tinten-Strich")
+
+pixelCursorToOrigin(sh)
 heldButtons[playdate.kButtonB] = true
 sh.BButtonDown()
 sh.rightButtonDown(); sh.rightButtonUp()
@@ -1194,15 +1210,15 @@ sh.rightButtonDown(); sh.rightButtonUp()
 sh.BButtonUp()
 heldButtons[playdate.kButtonB] = false
 PixelRoom:commitForTerminate()
-check(strokeTile.pixels["0,0"] == "clear" and strokeTile.pixels["1,0"] == "clear"
-    and strokeTile.pixels["2,0"] == "clear", "B gehalten + Bewegung malt einen transparenten Strich")
+check(strokeTile:sample(0, 0) == "clear" and strokeTile:sample(1, 0) == "clear"
+    and strokeTile:sample(2, 0) == "clear", "B gehalten + Bewegung radiert den Strich nach transparent")
 
 -- Ruecklesen: ein Tile mit transparentem Pixel laedt als TRANSPARENT-Zelle
 local reload = newMockImage(16, 16, "white")
 reload.pixels["3,3"] = "clear"
-PixelRoom:setCurrentTile(reload, 1)
+PixelRoom:setCurrentTile(reload, 1, T)
 PixelRoom:commitForTerminate()
-check(strokeTile.pixels["3,3"] == "clear", "setCurrentTile liest kColorClear als transparente Zelle zurueck (Round-Trip)")
+check(strokeTile:sample(3, 3) == "clear", "setCurrentTile liest kColorClear als transparente Zelle zurueck (Round-Trip)")
 
 -- Dedup: opakes vs. transparentes Tile hashen unterschiedlich (spec.md:104)
 local opaqueOnly = newMockImage(16, 16, "white"); opaqueOnly.pixels["0,0"] = true
@@ -1556,7 +1572,7 @@ loadEditorV11("edit2layer", {
     } },
 }, 3)
 local data = EditorRoom:getImageData()
-check(data ~= nil and #data.frameLayers[1].layers == 2, "2-Ebenen-Frame geladen")
+check(data ~= nil and #data.frameLayers[1].layers == 3, "Frame hat immer 3 Ebenen (geladen, obere leer ergaenzt)")
 check(data.activeLayer == 1, "aktive Ebene startet bei 1")
 
 data.activeLayer = 2
@@ -1618,7 +1634,7 @@ crankChangeValue = 360
 EditorRoom:update()                                     -- volle Umdrehung -> neuer Frame 2 (Kopie)
 crankChangeValue = 0
 check(#dup.frameLayers == 2, "360 Grad -> Frame 2 angelegt")
-check(#dup.frameLayers[2].layers == 2, "Frame 2 hat beide Ebenen der Kopie")
+check(#dup.frameLayers[2].layers == 3, "Frame 2 hat alle 3 Ebenen der tiefen Kopie")
 check(dup.frameLayers[2].layers[2].positions[10] == 2, "Ebene-2-Inhalt in die Kopie uebernommen")
 check(dup.frameLayers[2].layers[2].positions ~= dup.frameLayers[1].layers[2].positions,
     "tiefe Kopie: eigene positions-Tabelle je Frame")
@@ -1684,8 +1700,9 @@ crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
 check(#cyc.frameLayers == 2, "360 Grad ohne Up/Down -> neuer Frame (Frame-Cyclen unveraendert)")
 check(cyc.activeLayer == layerBefore, "Frame-Wechsel laesst den aktiven Ebenenindex unveraendert")
 
-section("EditorRoom: aktiver Ebenenindex ueberlebt Frame-Wechsel mit Wrap (Spec 010, US3 AS3, R4)")
--- Frame 1: 3 Ebenen, Frame 2: nur 1 Ebene
+section("EditorRoom: aktiver Ebenenindex ueberlebt Frame-Wechsel (Spec 010, US3 AS3)")
+-- Spec 010 Third Round: JEDES Frame hat 3 Ebenen — Frame 2 wird beim Laden
+-- auf 3 Ebenen aufgefuellt, obwohl die frames.json nur eine Ebene enthaelt.
 loadEditorV11("wrap2", {
     threeLayerFrame(1),
     { frameIndex = 1, duration = 100, layers = {
@@ -1693,11 +1710,11 @@ loadEditorV11("wrap2", {
     } },
 }, 3)
 local wr = EditorRoom:getImageData()
+check(#wr.frameLayers[2].layers == 3, "Frame 2 wurde beim Laden auf 3 Ebenen aufgefuellt")
 wr.activeLayer = 3                                       -- auf Frame 1 Ebene 3
-crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0   -- -> Frame 2 (1 Ebene)
-check(#wr.frameLayers[2].layers == 1, "Vorbedingung: Frame 2 hat nur 1 Ebene")
-check(wr.activeLayer == 1, "aktiver Index 3 auf Frame mit 1 Ebene -> Wrap auf 1 (AS3)")
-check(EditorRoom:getActiveLayerInfo().count == 1, "Indikator zeigt jetzt 1 Ebene")
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0   -- -> Frame 2
+check(wr.activeLayer == 3, "aktiver Index 3 bleibt beim Frame-Wechsel erhalten (Frame 2 hat auch 3 Ebenen)")
+check(EditorRoom:getActiveLayerInfo().count == 3, "Indikator zeigt weiterhin 3 Ebenen")
 crankChangeValue = -360; EditorRoom:update(); crankChangeValue = 0  -- zurueck zu Frame 1
 check(#wr.frameLayers == 2, "wieder bei Frame 1 (kein neuer Frame angelegt)")
 
@@ -1775,8 +1792,8 @@ while coroutine.status(shco) ~= "dead" do coroutine.resume(shco) end
 local shrl
 local shlco = ImageStoreCodec.newLoadOperation("shift2l-rt")
 while coroutine.status(shlco) ~= "dead" do local ok, r = coroutine.resume(shlco); if ok and r then shrl = r end end
-check(shrl and #shrl.frameLayers[1].layers == 2 and #shrl.frameLayers[1].layers[2].positions == 375,
-    "nach Save+Reload: 2 Ebenen, 375 Positionen erhalten")
+check(shrl and #shrl.frameLayers[1].layers == 3 and #shrl.frameLayers[1].layers[2].positions == 375,
+    "nach Save+Reload: 3 Ebenen, 375 Positionen erhalten")
 check(shrl and shrl.frameLayers[1].layers[1].positions[1] == 1, "nach Save+Reload: Basisebene unveraendert")
 
 section("ZoomRoom: B + Pfeiltaste loest den Ebenen-Shift aus (Spec 010, US1, FR-001)")
@@ -1885,76 +1902,61 @@ check(upperLayer.positions[1] == 0 and upperLayer.positions[200] == 0,
 local flat = {}
 for i = 1, 375 do flat[i] = (i % 2 == 0) and 2 or 1 end
 local entry = LayerModel.newFrameLayersFromFlat(flat, 150)
-check(entry.duration == 150 and #entry.layers == 1, "newFrameLayersFromFlat: 1 Ebene, uebernommene duration")
-check(entry.layers[1].layerIndex == 0 and entry.layers[1].name == "Layer 1", "gewrappte Ebene ist die Basisebene")
+check(entry.duration == 150 and #entry.layers == 3,
+    "newFrameLayersFromFlat: IMMER 3 Ebenen (Basis + 2 leere), uebernommene duration")
+check(entry.layers[1].layerIndex == 0 and entry.layers[1].name == "Layer 1", "Ebene 1 ist die Basisebene")
 check(entry.layers[1].positions[2] == 2 and entry.layers[1].positions[3] == 1,
     "flache Positionen werden 1:1 in die Basisebene uebernommen")
 check(entry.layers[1].positions ~= flat, "Positionen werden kopiert, nicht referenziert")
+check(entry.layers[2].positions[1] == 0 and entry.layers[3].positions[1] == 0,
+    "Ebenen 2 + 3 starten komplett 'absent' (0)")
+check(entry.layers[2].layerIndex == 1 and entry.layers[3].layerIndex == 2, "layerIndex fortlaufend 0..2")
 
-section("LayerModel: validate() (contracts/save-format.md 'Validation on Load')")
-check(LayerModel.validate(entry) == true, "1-Ebenen-Entry ist gueltig")
-local threeLayer = LayerModel.cloneFrameLayers(entry)
-LayerModel.addLayer(threeLayer, "L2")
-LayerModel.addLayer(threeLayer, "L3")
-check(LayerModel.validate(threeLayer) == true and #threeLayer.layers == 3, "3-Ebenen-Entry ist gueltig")
-local badCount = LayerModel.cloneFrameLayers(threeLayer)
+section("LayerModel: validate() erzwingt genau 3 Ebenen (Spec 010, Third Round)")
+check(LayerModel.validate(entry) == true, "3-Ebenen-Entry ist gueltig")
+local badCount = LayerModel.cloneFrameLayers(entry)
 badCount.layers[4] = LayerModel.newLayer(3, "L4")
-check(LayerModel.validate(badCount) == false, "4 Ebenen -> ungueltig (hartes 3-Limit, FR-012b)")
-local badIndex = LayerModel.cloneFrameLayers(threeLayer)
+check(LayerModel.validate(badCount) == false, "4 Ebenen -> ungueltig (feste Struktur = 3)")
+local badCount2 = LayerModel.cloneFrameLayers(entry)
+badCount2.layers[3] = nil
+check(LayerModel.validate(badCount2) == false, "2 Ebenen -> ungueltig (feste Struktur = 3)")
+local badIndex = LayerModel.cloneFrameLayers(entry)
 badIndex.layers[2].layerIndex = 5
 check(LayerModel.validate(badIndex) == false, "nicht fortlaufende layerIndex -> ungueltig")
 local badLen = LayerModel.cloneFrameLayers(entry)
 badLen.layers[1].positions = { 1, 2, 3 }
 check(LayerModel.validate(badLen) == false, "positions != 375 -> ungueltig")
+local badBase = LayerModel.cloneFrameLayers(entry)
+badBase.layers[1].positions[1] = 0
+check(LayerModel.validate(badBase) == false, "Basisebene mit 'absent' (0) -> ungueltig (Ebene 1 hat keine Transparenz)")
 
--- ── LayerModel: Ebenen-Verwaltung (US4) ────────────────────────────────────
-
-section("LayerModel: addLayer/deleteLayer respektieren das 3-Layer-Limit (Spec 010, US4)")
-local mgmt = LayerModel.newFrameLayersFromFlat(flat)
-local ok1 = LayerModel.addLayer(mgmt, "Character")
-local ok2 = LayerModel.addLayer(mgmt, "Effects")
-check(ok1 and ok2 and #mgmt.layers == 3, "zwei Ebenen hinzugefuegt -> 3 Ebenen")
-local ok3, err3 = LayerModel.addLayer(mgmt, "Vierte")
-check(ok3 == false and err3 == "max-layers-reached" and #mgmt.layers == 3,
-    "vierte Ebene wird abgelehnt (FR-012b)")
-local okD1, errD1 = LayerModel.deleteLayer(mgmt, 1)
-check(okD1 == false and errD1 == "layer-1-protected" and #mgmt.layers == 3,
-    "Ebene 1 (Basis) kann nicht geloescht werden (spec.md Edge Cases)")
-local okD2 = LayerModel.deleteLayer(mgmt, 2)
-check(okD2 == true and #mgmt.layers == 2, "obere Ebene 2 geloescht -> 2 Ebenen")
-check(mgmt.layers[1].layerIndex == 0 and mgmt.layers[2].layerIndex == 1,
-    "verbleibende Ebenen werden luekenlos reindiziert")
-check(mgmt.layers[2].name == "Effects", "die richtige Ebene wurde entfernt (Character), Effects bleibt")
-local single = LayerModel.newFrameLayersFromFlat(flat)
-local okD3, errD3 = LayerModel.deleteLayer(single, 2)
-check(okD3 == false and errD3 == "min-one-layer",
-    "Loeschen bei nur 1 Ebene schlaegt fehl (mind. 1 Ebene, Basis ist Pflicht)")
-local okD4, errD4 = LayerModel.deleteLayer(mgmt, 9)
-check(okD4 == false and errD4 == "layer-not-found",
-    "Loeschen eines Index ausserhalb des Bereichs schlaegt fehl")
+section("LayerModel: padTo3 fuellt fehlende obere Ebenen leer auf")
+local one = { duration = 100, layers = { LayerModel.newLayer(0, "Layer 1") } }
+LayerModel.padTo3(one)
+check(#one.layers == 3, "1 Ebene -> auf 3 aufgefuellt")
+check(one.layers[2].positions[1] == 0 and one.layers[3].positions[7] == 0, "ergaenzte Ebenen sind leer")
+local four = LayerModel.cloneFrameLayers(entry)
+four.layers[4] = LayerModel.newLayer(3, "L4")
+LayerModel.padTo3(four)
+check(#four.layers == 3, "4 Ebenen -> auf 3 gestutzt")
 
 -- ── LayerModel: aktive Ebene / Wrap-Around (US3) ───────────────────────────
 
 section("LayerModel: cycleActive/clampActive Wrap-Around (Spec 010, US3, FR-017)")
 local cyc = LayerModel.newFrameLayersFromFlat(flat)
-LayerModel.addLayer(cyc, "L2"); LayerModel.addLayer(cyc, "L3")
 check(LayerModel.cycleActive(cyc, 1, 1) == 2 and LayerModel.cycleActive(cyc, 2, 1) == 3,
     "vorwaerts: 1 -> 2 -> 3")
-check(LayerModel.cycleActive(cyc, 3, 1) == 1, "vorwaerts-Wrap: 3 -> 1 (max 3 Ebenen)")
+check(LayerModel.cycleActive(cyc, 3, 1) == 1, "vorwaerts-Wrap: 3 -> 1")
 check(LayerModel.cycleActive(cyc, 1, -1) == 3, "rueckwaerts-Wrap: 1 -> 3")
 check(LayerModel.cycleActive(cyc, 2, -1) == 1, "rueckwaerts: 2 -> 1")
-local twoLayer = LayerModel.newFrameLayersFromFlat(flat)
-LayerModel.addLayer(twoLayer, "L2")
-check(LayerModel.clampActive(twoLayer, 3) == 1, "aktiver Index 3 auf Frame mit 2 Ebenen -> Wrap auf 1 (R4)")
-check(LayerModel.clampActive(twoLayer, 2) == 2, "gueltiger Index bleibt erhalten")
-check(LayerModel.clampActive(twoLayer, nil) == 1, "nil -> 1")
+check(LayerModel.clampActive(cyc, 4) == 1, "Index ausserhalb 1..3 -> 1 (defensiv)")
+check(LayerModel.clampActive(cyc, 2) == 2, "gueltiger Index bleibt erhalten")
+check(LayerModel.clampActive(cyc, nil) == 1, "nil -> 1")
 
 -- ── LayerModel: Compositing ────────────────────────────────────────────────
 
 section("LayerModel: compositeToFlat stapelt Ebenen (Spec 010, US3, data-model 'Three-Layer Frame')")
-local comp = LayerModel.newFrameLayersFromFlat(flat)          -- Basis: gerade Zellen = 2
-LayerModel.addLayer(comp, "Character")                        -- alles absent
-LayerModel.addLayer(comp, "Effects")                         -- alles absent
+local comp = LayerModel.newFrameLayersFromFlat(flat)          -- Basis: gerade Zellen = 2, Ebenen 2+3 leer
 comp.layers[2].positions[1] = 9                               -- Character deckt Zelle 1
 comp.layers[3].positions[1] = 15                              -- Effects deckt Zelle 1 (oberste gewinnt)
 comp.layers[2].positions[4] = 7                               -- nur Character deckt Zelle 4
@@ -1990,19 +1992,26 @@ check(ImageStoreCodec.hashTile(blackOnWhite) ~= ImageStoreCodec.hashTile(blackOn
 
 -- ── ImageStoreCodec: createFramesTableV11 ──────────────────────────────────
 
-section("ImageStoreCodec: createFramesTableV11 schreibt v1.1-Schema (Spec 010, T005)")
+section("ImageStoreCodec: createFramesTableV11 schreibt v1.1, laesst leere obere Ebenen weg (Spec 010, T005)")
+-- 3-Ebenen-Entry, Ebene 2 hat Inhalt, Ebene 3 leer -> es werden 2 Eintraege geschrieben.
 local twoLayerEntry = LayerModel.newFrameLayersFromFlat(flat)
-LayerModel.addLayer(twoLayerEntry, "Character")
+twoLayerEntry.layers[2].name = "Character"
 twoLayerEntry.layers[2].positions[1] = 3
 local v11 = ImageStoreCodec.createFramesTableV11("demo", { twoLayerEntry }, 4)
 check(v11.version == "1.1", "version-Feld ist der String '1.1'")
 check(v11.tileCount == 4 and v11.gridWidth == 25 and v11.gridHeight == 15, "Metafelder wie gehabt")
 check(#v11.frames == 1 and v11.frames[1].frameIndex == 0 and v11.frames[1].duration == 100,
     "Frame 0 mit Default-Dauer 100")
-check(#v11.frames[1].layers == 2 and v11.frames[1].layers[1].layerIndex == 0
-    and v11.frames[1].layers[2].layerIndex == 1, "zwei Ebenen mit fortlaufendem layerIndex")
+check(#v11.frames[1].layers == 2,
+    "Ebene 3 ist leer -> nur 2 Ebeneneintraege geschrieben (leere obere Ebenen weggelassen)")
+check(v11.frames[1].layers[1].layerIndex == 0 and v11.frames[1].layers[2].layerIndex == 1,
+    "fortlaufender layerIndex")
 check(v11.frames[1].layers[2].name == "Character" and v11.frames[1].layers[2].positions[1] == 3,
-    "Ebenennamen und -positionen werden uebernommen")
+    "Ebenenname und -positionen werden uebernommen")
+-- Alle oberen Ebenen leer -> nur Ebene 1 geschrieben.
+local baseOnly = LayerModel.newFrameLayersFromFlat(flat)
+local v11base = ImageStoreCodec.createFramesTableV11("demo", { baseOnly }, 4)
+check(#v11base.frames[1].layers == 1, "nur Basisebene mit Inhalt -> 1 Ebeneneintrag auf Platte")
 local badEntry = { duration = 100, layers = { { positions = { 1, 2, 3 } } } }
 local v11bad = ImageStoreCodec.createFramesTableV11("demo", { badEntry }, 4)
 check(#v11bad.frames == 0, "Frame mit positions-Laenge != 375 wird verworfen")
@@ -2095,18 +2104,23 @@ do
         if okl and res then loaded = res end
     end
     check(loaded ~= nil, "v1.0-Bild laedt ohne Fehler")
-    check(loaded and #loaded.frameLayers[1].layers == 1, "Auto-Upgrade: genau eine Ebene")
-    check(loaded and loaded.frameLayers[1].layers[1].name == "Layer 1", "Ebene heisst 'Layer 1'")
+    check(loaded and #loaded.frameLayers[1].layers == 3,
+        "Auto-Upgrade: Alt-Inhalt -> Ebene 1, Ebenen 2+3 leer ergaenzt (immer 3)")
+    check(loaded and loaded.frameLayers[1].layers[1].name == "Layer 1", "Ebene 1 heisst 'Layer 1'")
     check(loaded and loaded.frameLayers[1].layers[1].positions[1] == 2
-        and loaded.frameLayers[1].layers[1].positions[2] == 1, "Alt-Positionen 1:1 uebernommen")
+        and loaded.frameLayers[1].layers[1].positions[2] == 1, "Alt-Positionen 1:1 in Ebene 1")
+    check(loaded and loaded.frameLayers[1].layers[2].positions[1] == 0
+        and loaded.frameLayers[1].layers[3].positions[1] == 0, "Ebenen 2+3 komplett leer (0)")
     check(loaded and loaded.frames[1][1] == 2, "kompositiertes frames-Array entspricht der Basisebene")
 
-    -- Re-Save schreibt v1.1
+    -- Re-Save schreibt v1.1, aber nur EINEN Ebeneneintrag (leere obere weggelassen)
     loaded.id = "legacy-v10"
     local sco = ImageStoreCodec.newSaveOperation(loaded)
     while coroutine.status(sco) ~= "dead" do coroutine.resume(sco) end
-    check(datastoreFiles["saves/legacy-v10/frames"].version == "1.1",
-        "naechstes Speichern hebt die Datei auf v1.1 (nahtloses Upgrade)")
+    local resaved = datastoreFiles["saves/legacy-v10/frames"]
+    check(resaved.version == "1.1", "naechstes Speichern hebt die Datei auf v1.1")
+    check(#resaved.frames[1].layers == 1,
+        "Alt-Bild bleibt auf Platte kompakt: nur 1 Ebeneneintrag (leere Ebenen 2+3 weggelassen)")
 end
 
 section("ImageStoreCodec: Laden erzwingt das 3-Layer-Limit (Spec 010, FR-012b, T007)")
