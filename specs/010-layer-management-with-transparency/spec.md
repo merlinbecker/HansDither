@@ -20,7 +20,15 @@
 
 ### Session 2026-08-31 (Second Round)
 
-- Q: Maximum layers per frame — limit or unbounded? → A: **Fixed limit: exactly 3 layers maximum per frame**. Layer 1 (bottom/mandatory base layer) is always present. Layers 2 and 3 are optional. Old images with single layer load as Layer 1 only (backward compatible). Transparency becomes critical for proper layer compositing across all 3 layers.
+- Q: Maximum layers per frame — limit or unbounded? → A: **Fixed limit: exactly 3 layers maximum per frame**. Layer 1 (bottom/mandatory base layer) is always present. Layers 2 and 3 are optional. Old images with single layer load as Layer 1 only (backward compatible). Transparency becomes critical for proper layer compositing across all 3 layers. *(Superseded by Third Round: layers are now a fixed structure of exactly 3 — see below.)*
+
+### Session 2026-08-31 (Third Round)
+
+- Q: Should users be able to add or delete layers? → A: **No.** Every frame ALWAYS has exactly 3 layers — a fixed structure, like the hard cap of 12 animation frames. There is no UI (and no gesture) to add or remove a layer. An empty layer simply carries no content.
+- Q: What is the non-ink ("toggle off") pixel state per layer? → A: **Layer-dependent.** Layer 1 (bottom) toggles between ink and **white** (white is Layer 1's background). Layers 2–3 toggle between ink and **transparent** (so lower layers show through). Each layer has exactly one "off" state; its colour depends on the layer. In Pixel View the B-press produces that same "off" state (white on Layer 1, transparent on Layers 2–3).
+- Q: Can Layer 1 hold a transparent pixel? → A: **No.** Layer 1 is strictly two-valued (ink / white). Layers 2–3 are strictly two-valued (ink / transparent). Tile deduplication still distinguishes white vs. transparent tiles so the upper layers round-trip correctly.
+- Q: What becomes of US4 (Layer & Frame Management View)? → A: **US4 is now a Frame Management View only.** The Layer View is dropped entirely (layers are fixed, nothing to manage). The new view lists all animation frames; the user can reorder frames and delete frames (minimum 1 frame remains), so the animation stays controllable.
+- Q: How are empty upper layers stored? → A: A fully-empty Layer 2 or 3 is **omitted from the saved JSON**; on load every frame is reconstituted to exactly 3 layers. Single-layer artwork therefore stays as compact on disk as before.
 
 ---
 
@@ -67,47 +75,49 @@ In the Tile View (first View showing complete image with all tiles), the user ca
 
 **Why this priority**: Layers are fundamental to digital art creation. Combined with animation frames, this enables the user to create complex layered animations. This is explicitly requested and part of the core feature set.
 
-**Independent Test**: Load image with Frame 1 containing 3 layers, hold Up and turn Crank, verify Layer indicator changes, release Up, turn Crank and verify frame indicator changes instead. Confirm layers are per-frame by switching frames and observing different layer counts.
+**Independent Test**: Load an image, hold Up and turn Crank, verify the layer indicator cycles Layer 1 → 2 → 3 → 1, release Up, turn Crank and verify the frame indicator changes instead. Every frame has the same fixed set of 3 layers.
 
 **Acceptance Scenarios**:
 
-1. **Given** an image with multiple frames and layers in Tile View, **When** holding Up and rotating Crank clockwise, **Then** active layer cycles forward (e.g., Layer 1 → Layer 2 → Layer 3 → Layer 1)
+1. **Given** an image in Tile View, **When** holding Up and rotating Crank clockwise, **Then** the active layer cycles forward Layer 1 → Layer 2 → Layer 3 → Layer 1
 2. **Given** Up is being held and Crank is rotated, **When** Up is released and Crank continues to rotate, **Then** Crank now cycles frames (not layers)
-3. **Given** Frame 1 with 3 layers and Frame 2 with 2 layers, **When** active on Frame 1 Layer 2 and switching to Frame 2, **Then** active layer becomes Layer 2 (preserved by index). If Frame 2 only has 2 layers and active index was 3, active layer wraps to Layer 1
-4. **Given** holding Down and rotating Crank, **When** layers cycle backward, **Then** active layer decrements (e.g., Layer 2 → Layer 1 → Layer 3 [wrapping])
+3. **Given** the user is on Layer 2 of Frame 1, **When** switching to another frame, **Then** the active layer stays Layer 2 (index preserved; every frame has all 3 layers so no wrap is needed)
+4. **Given** holding Down and rotating Crank, **When** layers cycle backward, **Then** the active layer decrements Layer 2 → Layer 1 → Layer 3 (wrapping)
 5. **Given** no Up/Down key pressed, **When** Crank is rotated, **Then** animation frames cycle (existing behavior preserved)
 
 ---
 
-### User Story 4 - Layer & Frame Management View (Priority: P2)
+### User Story 4 - Frame Management View (Priority: P2)
 
-A dedicated Management View provides centralized control for organizing frames and layers. Access to this view is through the Tile View: hold B and rotate Crank backward (counterclockwise). This action navigates upward in a view hierarchy: Tile View → Layer View → Animation Layer View. Within the Layer View, all layers in the current frame are displayed as entries (similar to project selection UI pattern). The user can delete individual layers. From Layer View, continuing to rotate Crank backward (while still holding B) navigates to Animation Layer View, where all animation frames are listed with their associated layer configurations, and layers can be reordered or deleted globally.
+A dedicated Frame Management View lets the user keep the animation controllable: reorder frames and delete frames. It is reached from the Tile View by holding B and rotating the Crank backward (counterclockwise). All animation frames are shown as a list (mirroring the project-selection UI pattern). The user navigates with the D-Pad, marks a frame with A, moves the marked frame in the sequence with Left/Right, and deletes the marked frame with B. At least one frame always remains. Releasing B returns to the Tile View.
 
-**Why this priority**: Layer and frame management is essential for complex animations. Without this, users cannot organize or clean up their work, making it a P2 feature that unblocks serious workflow use cases.
+There is **no** Layer View — layers are a fixed structure of exactly 3 per frame (like the 12-frame cap) and need no management UI.
 
-**Independent Test**: In Tile View with Frame 1 containing 3 layers, hold B and rotate Crank backward, verify Layer View appears showing 3 layer entries, delete one layer entry, Layer View now shows 2 layers, rotate Crank backward again, verify Animation Layer View appears showing all frames.
+**Why this priority**: Reordering and deleting frames is essential for building a real animation. Without it the user cannot fix the order of drawn frames or remove mistakes. P2 because the MVP (US1–US3) is usable without it.
+
+**Independent Test**: In Tile View with 3 frames, hold B and rotate Crank backward → Frame Management View appears listing Frame 1–3. Mark Frame 3, press Left → it becomes Frame 2. Mark a frame, press B → it is removed and the list shrinks to 2. Release B → back in Tile View, showing the reordered/shortened animation.
 
 **Acceptance Scenarios**:
 
-1. **Given** in Tile View, **When** B is held and Crank is rotated counterclockwise, **Then** navigation enters Layer View showing all layers in current frame
-2. **Given** Layer View is displayed with multiple layers, **When** user presses A on a layer entry, **Then** that layer is highlighted/selected with visual indicator. When B is pressed on a selected layer, **Then** the layer is deleted and view refreshes
-3. **Given** Layer View with multiple layers, **When** navigating left/right or up/down (directional controls), **Then** layer selection moves (following standard UI pattern)
-4. **Given** in Layer View, **When** B is held and Crank rotates counterclockwise again, **Then** navigation progresses to Animation Layer View (frame-level management)
-5. **Given** Animation Layer View with frame entries displayed, **When** user presses A on a frame entry, **Then** a submenu is entered showing all layers within that frame (similar to Layer View). From this submenu, the user can delete individual layers using the A-press to select and B-press to delete pattern
-6. **Given** a layer is deleted in Layer View, **When** returning to Tile View, **Then** that layer is no longer available in Crank cycling and all drawings on that layer are removed
+1. **Given** in Tile View, **When** B is held and Crank is rotated counterclockwise, **Then** the Frame Management View opens, listing every animation frame in order
+2. **Given** the Frame Management View, **When** the user presses A on a frame entry, **Then** that frame is marked (visual indicator)
+3. **Given** a frame is marked, **When** the user presses Left or Right, **Then** the marked frame moves one position earlier / later in the animation sequence (clamped at the ends)
+4. **Given** a frame is marked, **When** the user presses B, **Then** that frame is deleted and the list refreshes — unless only one frame remains, in which case deletion is rejected
+5. **Given** the Frame Management View, **When** the user releases B, **Then** navigation returns to the Tile View with the current frame clamped into the (possibly shorter/reordered) sequence
+6. **Given** frames were reordered or deleted, **When** the image is saved and reloaded, **Then** the new frame order and count persist
 
 ---
 
 ### Edge Cases
 
-- **Pixel Shift Beyond Boundaries**: When shifting content by pixels that would move it beyond tile boundaries, tiles are recalculated, but content wraps or clips gracefully (no data loss; see FR-005)
-- **Transparency & Tile Generation**: Transparent pixels are treated as distinct from opaque and empty in tile deduplication. Two tiles with identical colors but different transparency patterns are stored separately (affects tile deduplication algorithm in storage)
-- **Layer Deletion of Active Layer**: When the active (editable) layer is deleted in Layer View:
-  - If Layer 1 is deleted: Error — Layer 1 is mandatory and cannot be deleted
-  - If Layer 2 or 3 (while active) is deleted: System automatically switches to Layer 1 (or highest remaining layer)
-- **Frame Switching & Active Layer**: When switching between frames with different layer counts, active layer index is preserved with wrapping (see Clarifications, FR-017)
-- **Empty Layers**: Layers are allowed to be empty (no pixel content). Empty layers are persistent and not auto-deleted. User deletes them explicitly via Layer View
-- **Maximum Layers (3-Layer Hard Limit)**: Each frame supports exactly 3 layers maximum. Layer 1 is mandatory. Layers 2 and 3 are optional per frame. System prevents creation of Layer 4 or higher. (Resolved in Clarifications Session 2)
+- **Pixel Shift Beyond Boundaries**: When shifting content by pixels that would move it beyond tile boundaries, tiles are recalculated, but content wraps around (no data loss; see FR-005)
+- **Transparency & Tile Generation**: Transparent tiles are treated as distinct from opaque and white tiles in tile deduplication. Two tiles with the same ink pattern but one white background and one transparent background are stored separately (3-state tile hash)
+- **Layer 1 Transparency**: Layer 1 (bottom) has no transparent state — its non-ink pixels are white. A B-press in Pixel View on Layer 1 therefore produces white (identical to the eraser)
+- **Frame Switching & Active Layer**: Switching frames preserves the active layer index. Because every frame has all 3 layers, the index always exists — no wrap is required (a defensive clamp to Layer 1 remains for corrupt data)
+- **Empty Layers**: Layers 2 and 3 may be entirely empty. An empty layer carries no content and is omitted from the saved file; it is reconstituted on load so every frame always exposes exactly 3 layers in the editor
+- **Fixed Layer Count**: Every frame has exactly 3 layers, always. There is no gesture or UI to add or remove a layer (Clarifications, Third Round)
+- **Deleting the Last Frame**: The Frame Management View rejects deleting a frame when only one frame remains
+- **Reordering at the Ends**: Moving the first frame Left, or the last frame Right, is a no-op (clamped)
 
 ---
 
@@ -125,43 +135,44 @@ A dedicated Management View provides centralized control for organizing frames a
 
 **Transparency Support (US2)**
 
-- **FR-006**: System MUST distinguish between three pixel states: opaque, transparent, and empty
-- **FR-007**: System MUST allow B-press in Pixel View to place transparent pixels at cursor position
-- **FR-008**: System MUST allow A-press in Pixel View to place/overwrite opaque pixels (existing behavior)
-- **FR-009**: System MUST persist transparency state when image is saved and reloaded
-- **FR-010**: System MUST treat legacy images without transparency as fully opaque (backward compatibility)
-- **FR-011**: Transparent pixels in Pixel View MUST render visually distinct from opaque or empty pixels (e.g., checkerboard pattern or distinct color)
+- **FR-006**: System MUST support a per-pixel non-ink state whose colour depends on the layer: **white** on Layer 1 (bottom), **transparent** on Layers 2–3
+- **FR-007**: System MUST allow B-press in Pixel View to set the current layer's non-ink state at the cursor (white on Layer 1, transparent on Layers 2–3); A-press sets/overwrites ink (existing behaviour)
+- **FR-008**: System MUST let A-press toggle a pixel between ink and the layer's non-ink state (eraser behaviour, as in Spec 008)
+- **FR-009**: System MUST persist transparent pixels through save/reload — a transparent tile round-trips distinctly from a white tile
+- **FR-010**: System MUST treat legacy images without transparency as fully opaque black/white (backward compatibility)
+- **FR-011**: Transparent pixels in Pixel View MUST render visually distinct from ink and from white (e.g. checkerboard pattern)
 
 **Layer Cycling with Crank (US3)**
 
-- **FR-012**: System MUST store exactly 3 layers per frame maximum (Layer 1 is mandatory/base, Layers 2 and 3 are optional). Layer 1 is always present, even in legacy images
-- **FR-012b**: System MUST NOT allow creation of more than 3 layers per frame; UI must prevent adding Layer 4
-- **FR-013**: System MUST support holding Up and rotating Crank to cycle forward through layers in active frame
-- **FR-014**: System MUST support holding Down and rotating Crank to cycle backward through layers in active frame
-- **FR-015**: System MUST display current layer index (1/2/3) and layer name in Tile View (visual indicator)
-- **FR-016**: System MUST preserve existing Crank behavior for frame cycling when Up/Down keys are not held
-- **FR-017**: System MUST handle layer wrap-around (after Layer 3, cycle back to Layer 1, and vice versa for backward)
+- **FR-012**: Every frame MUST have **exactly 3 layers, always** — a fixed structure (Layer 1 = bottom/base, Layers 2–3 stacked above). Legacy 1-layer images gain two empty upper layers on load
+- **FR-012b**: There MUST be no gesture or UI to add or delete a layer; the layer count is not user-modifiable
+- **FR-012c**: An entirely empty Layer 2 or 3 MUST be omitted from the saved file and reconstituted on load (every frame exposes 3 layers in the editor)
+- **FR-013**: System MUST support holding Up and rotating Crank to cycle forward through the 3 layers of the active frame
+- **FR-014**: System MUST support holding Down and rotating Crank to cycle backward through the 3 layers
+- **FR-015**: System MUST display the current layer index (1/2/3) and layer name in Tile View (visual indicator)
+- **FR-016**: System MUST preserve existing Crank behaviour for frame cycling when Up/Down keys are not held
+- **FR-017**: System MUST wrap layer cycling (after Layer 3 → Layer 1 forward; before Layer 1 → Layer 3 backward)
+- **FR-017b**: Switching frames MUST preserve the active layer index (every frame has all 3 layers, so the index always exists)
 
-**Management View (US4)**
+**Frame Management View (US4)**
 
-- **FR-018**: System MUST enter Layer View when B is held and Crank is rotated counterclockwise in Tile View
-- **FR-019**: Layer View MUST display all layers in the current frame as selectable entries
-- **FR-020**: System MUST allow deletion of layers in Layer View via two-step interaction: A-press selects/highlights layer, B-press confirms deletion
-- **FR-021**: System MUST navigate to Animation Layer View when B is held and Crank rotates counterclockwise from Layer View
-- **FR-022**: Animation Layer View MUST display all animation frames with layer configuration summary
-- **FR-023**: Animation Layer View MUST allow frame-level layer management via submenu drill-down: A-press on frame entry opens submenu showing all layers within that frame (similar to main Layer View), where user can select and delete layers using A-press (select) + B-press (confirm delete)
-- **FR-024**: System MUST prevent navigation loops (e.g., no cycling from Animation Layer View back into Layer View)
+- **FR-018**: System MUST open the Frame Management View when B is held and the Crank is rotated counterclockwise in Tile View
+- **FR-019**: The Frame Management View MUST list every animation frame in order as selectable entries
+- **FR-020**: The user MUST be able to mark a frame with A and delete the marked frame with B; deletion MUST be rejected when only one frame remains
+- **FR-021**: The user MUST be able to move the marked frame one position earlier (Left) or later (Right) in the sequence; moves are clamped at the ends
+- **FR-022**: Releasing B MUST return to the Tile View, with the current frame index clamped into the resulting (possibly shorter/reordered) sequence
+- **FR-023**: There MUST be no Layer View or per-frame layer submenu — layers are a fixed structure and are not managed here
+- **FR-024**: Reordered / deleted frames MUST persist through save and reload
 
 ---
 
 ### Key Entities *(include if feature involves data)*
 
-- **Frame**: Container for a single animation frame, contains one or more Layers, linked to animation timing
-- **Layer**: Container for drawable content within a frame, contains pixel grid (16×16 minimum), supports transparency, linked to visual rendering order
-- **Pixel**: Individual drawing unit, can be opaque, transparent, or empty; stored with color/transparency state
-- **Tile**: Reference to a tile in the tile sheet used for efficient storage; multiple pixels may reference the same tile
-- **LayerView**: UI mode showing all layers in current frame as entries; supports selection, deletion, cycling
-- **AnimationLayerView**: UI mode showing all frames with layer organization; supports frame-level and layer-level management
+- **Frame**: Container for a single animation frame; contains **exactly 3 Layers**; linked to animation timing (duration) and to its position in the frame sequence
+- **Layer**: A drawable canvas within a frame at a fixed stacking index (1 = bottom, 3 = top). Layer 1's non-ink pixels are white; Layers 2–3's non-ink pixels are transparent. A layer may be empty
+- **Pixel**: Individual drawing unit — ink, or the layer's non-ink state (white on Layer 1, transparent on Layers 2–3)
+- **Tile**: A 16×16 cell of pixels referenced by index from the shared PDI imagetable. Tiles are deduplicated by a 3-state hash (ink / white / transparent) so white and transparent tiles never collide
+- **FrameManagementView**: UI mode listing all frames in order; supports marking, reordering (Left/Right) and deleting (min. 1 frame)
 
 ---
 
@@ -169,12 +180,12 @@ A dedicated Management View provides centralized control for organizing frames a
 
 ### Measurable Outcomes
 
-- **SC-001**: User can shift drawn content by exactly one pixel in any direction and have shifts persist through save/reload cycles
-- **SC-002**: Transparent pixels can be placed, stored, and rendered visually distinct from opaque or empty pixels
-- **SC-003**: User can cycle through layers using Crank + Up/Down without interfering with existing frame cycling behavior
-- **SC-004**: Layer and frame management view is reachable within 2-3 Crank rotations from Tile View and provides intuitive layer deletion
-- **SC-005**: All legacy images (created before transparency support) load without errors and render all pixels as opaque
-- **SC-006**: Layer information persists when images are saved and reloaded (each frame retains its layer count and content)
+- **SC-001**: User can shift the active layer's content by exactly one pixel in any direction and have shifts persist through save/reload cycles
+- **SC-002**: Transparent pixels can be placed on Layers 2–3, rendered visually distinct from ink and white, and persist through save/reload
+- **SC-003**: User can cycle through the 3 layers using Crank + Up/Down without interfering with existing frame cycling behavior
+- **SC-004**: The Frame Management View is reachable with one B + Crank-backward gesture from Tile View and lets the user reorder and delete frames (min. 1)
+- **SC-005**: All legacy images (created before this feature) load without errors, render identically, and gain two empty upper layers
+- **SC-006**: Layer content, frame order and frame count persist when images are saved and reloaded; every reloaded frame exposes exactly 3 layers
 
 ---
 
@@ -182,12 +193,12 @@ A dedicated Management View provides centralized control for organizing frames a
 
 - **User Control Model**: The three views (Tile, Zoom, Pixel) already exist and have established Crank and button behaviors. This feature extends those controls, assuming no conflicting bindings (e.g., B is available in Zoom View for shift control, Up/Down are available in Tile View for layer cycling). [VERIFY: confirm available button/input bindings]
 - **Storage Format**: The existing image storage format (PDI/JSON) can be extended to include transparency data and layer metadata without breaking existing loaders. [DEPENDENCY: Spec 009 tile cleanup must complete first; confirms JSON structure can be extended]
-- **Layer Architecture**: Exactly **3 layers maximum per frame** (fixed hard limit). Layer 1 (base layer) is mandatory and always present. Layers 2 and 3 are optional. Each frame independently can have 1, 2, or 3 layers active.
-- **Backward Compatibility (1-Layer Upgrade)**: Legacy images (created before this feature) have only 1 layer (the base content). On load, they are automatically upgraded: the existing content becomes Layer 1, and Layers 2 and 3 are empty/not created. The image remains editable with full layer support.
-- **Frame Independence**: Layers are stored per-frame, not globally. This allows frames to have different layer counts (e.g., Frame 1 has 3 layers, Frame 2 has 1 layer). [DESIGN CHOICE: simplifies frame-switching logic and layer persistence]
-- **Layer Rendering Order**: Layers are rendered in index order (Layer 1 bottom, Layer 3 top) in Tile View compositing. Only the active layer is editable in Zoom/Pixel views. Transparency between layers is critical for proper compositing (see US2).
-- **Empty Layer Handling**: Layers are allowed to be empty (contain no pixel content). Empty layers are not automatically deleted; user has full control via Layer View deletion.
-- **Management View Navigation**: The view hierarchy (Tile View → Layer View → Animation Layer View) is linear and unidirectional (B + Crank backward progresses one step; no back button). [DESIGN CHOICE: follows Playdate's constrained navigation patterns]
+- **Layer Architecture**: Every frame has **exactly 3 layers, always** (fixed structure, like the 12-frame cap). Layer 1 = bottom/base, Layers 2–3 stacked above. No add/delete. An empty upper layer is simply omitted on disk and rebuilt on load.
+- **Backward Compatibility (1-Layer Upgrade)**: Legacy images have a single flat layer. On load the existing content becomes Layer 1 and two empty upper layers are added, so the frame exposes 3 layers. Save then writes the v1.1 format (still 1 layer entry on disk while Layers 2–3 stay empty).
+- **Frame Independence**: Layers are stored per-frame, not globally, but every frame has the same 3 stacking slots — frame switching never changes the layer count.
+- **Layer Rendering Order**: Layers are composited bottom-up (Layer 1 → Layer 3). Only the active layer is editable in Zoom/Pixel views. Layer 1's white background is opaque; Layers 2–3's non-ink pixels are transparent so lower layers show through.
+- **Empty Layer Handling**: Layers 2–3 may be empty. An empty layer is omitted from the saved JSON and rebuilt on load; there is no user action to delete a layer (there is nothing to delete — the slot always exists).
+- **Frame Management Navigation**: One gesture (hold B + Crank backward in Tile View) opens the Frame Management View; releasing B returns to Tile View. No deeper hierarchy.
 
 ---
 
@@ -196,27 +207,25 @@ A dedicated Management View provides centralized control for organizing frames a
 ### Architecture Impact Assessment
 
 **Scope**: This feature affects:
-- **Data Model**: Introduction of transparency channel and layer metadata in image storage format
-- **Runtime Behavior**: View navigation hierarchy, input multiplexing (Crank behavior conditional on held keys)
-- **Interfaces**: Editor state machine, layer management API
+- **Data Model**: 3-layer structure per frame + per-pixel transparency carried in the tile bitmap (kColorClear); no per-cell transparency array
+- **Runtime Behavior**: Input multiplexing (Crank behaviour conditional on held Up/Down for layers, B + Crank-backward for the Frame Management View), plus a re-composite step after every layer edit
+- **Interfaces**: Editor state machine, `LayerModel` helper API, new `FrameManagementView` room
 
 **Quality Attributes Affected**:
-- **Usability**: Improved precision control (US1), enhanced artistic capabilities (US2), workflow efficiency (US3/US4)
-- **Maintainability**: Increased complexity in frame/layer state management; risk of state consistency issues across view transitions
-- **Performance**: Layer rendering and tile recalculation on every pixel shift could impact frame rate (Playdate has limited resources)
+- **Usability**: Improved precision control (US1), transparent pixels on upper layers (US2), layer cycling (US3), frame reorder/delete (US4)
+- **Maintainability**: `imageData.frames` becomes a derived composite cache that must be regenerated on every layer mutation
+- **Performance**: Re-tiling on every pixel shift and re-compositing on every edit must stay within one frame on the Playdate
 
 **Evidence & Decisions**:
-- See `docs/architecture/` for expected artifacts after planning:
-  - `data-model-transparency.md`: Detailed schema for transparency channel in JSON/PDI storage
-  - `layer-state-machine.md`: View transition diagram and input routing logic
-  - `rendering-pipeline.md`: Layer compositing and tile recalculation strategy
-- **ADR Required**: "Layer Rendering Order & Compositing Strategy" (determine if single active layer or multi-layer preview in Tile View)
-- **Risk Record**: "Playdate Performance Under Pixel Shifting" (repeated tile recalculation on every Crank rotation must not drop frame rate below 30 FPS)
+- **ADR Required**: "Layer Rendering Order & Compositing Strategy" — decision: composite all 3 layers, topmost non-empty cell wins; flat composite cache feeds the tilemap
+- **ADR Required**: "Pixel Transparency Encoding" — decision: transparency lives per-pixel as kColorClear in the tile; 3-state tile hash; no per-cell array
+- **ADR Required**: "Fixed 3-Layer Structure" — decision: layers are a fixed structure (no add/delete), like the 12-frame cap; empty upper layers omitted on disk
+- **Risk Record**: "Playdate Performance Under Pixel Shifting" (re-tiling all 375 cells of a layer per keypress must not drop frame rate below 30 FPS)
 
 ### Existing Dependencies & Compatibility
 
 - **Spec 009 (Tile Cleanup)** — MUST complete first: Provides framework for tile recalculation and frame-to-tiles mapping, which is extended by pixel shifting in US1
-- **Existing View System** — Assumed stable: Tile View, Zoom View, Pixel View navigation exists; this feature adds Management View without refactoring existing views
+- **Existing View System** — Tile View, Zoom View, Pixel View navigation exists; this feature threads the active layer through all three editing paths and adds one new Frame Management View
 - **Playdate SDK** — Assumed available: Crank API, button input handling, image rendering; no new platform capabilities required
 
 ### Technical Debt & Risk Mitigation
@@ -232,6 +241,6 @@ A dedicated Management View provides centralized control for organizing frames a
 
 ## Status Summary
 
-**Ready for Clarification**: 3 clarification markers identified (layer persistence across frames, delete interaction pattern, Animation Layer View interaction). User is invited to resolve via `/speckit-clarify`.
+**Clarified** (three rounds — see `## Clarifications`). Third round (2026-08-31) restructured US4: layers are a fixed structure of exactly 3 per frame (no add/delete); the non-ink pixel state is white on Layer 1 and transparent on Layers 2–3; US4 becomes a Frame Management View (reorder + delete frames). This is being propagated through plan / research / data-model / contracts / tasks and the implementation.
 
-**Next Steps**: → `/speckit-clarify` → `/speckit-plan` → `/speckit-tasks`
+**Implementation status**: MVP (US1 shift, US2 transparency, US3 layer cycling) implemented and green on the `feature/0.3-addons` branch; the fixed-3-layer restructuring and US4 Frame Management View follow.

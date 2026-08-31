@@ -2,230 +2,105 @@
 
 **Feature**: `specs/010-layer-management-with-transparency/`
 
-**Defines**: Schema for persistent storage of frames, layers, and transparency
+**Updated**: 2026-08-31 (Third Round — fixed 3 layers; no per-cell transparency array)
+
+**File**: `saves/<id>/frames` (datastore appends `.json`). Tile pixels live in `saves/<id>/sheet.pdi` (unchanged).
 
 ---
 
-## JSON Schema
+## Root
 
-**File**: `{base}.json` (where `base` is client_image_id or UUID)
-
-**Root**:
 ```json
 {
   "version": "1.1",
-  "frames": [...]
+  "name": "my-image",
+  "gridWidth": 25,
+  "gridHeight": 15,
+  "tileCount": 24,
+  "frames": [ ...Frame... ]
 }
 ```
+
+- `version`: string `"1.1"`. The loader also accepts number `1`, `"1.0"`, or a missing field → treated as v1.0 (flat) and upgraded.
+- `frames`: 1–12, **in animation order** (the array index is the play order; reordering the array reorders the animation).
 
 ---
 
-## Frame Object
+## Frame
 
-**Array Element** (each frame):
 ```json
-{
-  "frameIndex": 0,
-  "duration": 100,
-  "layers": [...]
-}
+{ "frameIndex": 0, "duration": 100, "layers": [ ...Layer... ] }
 ```
 
-**Fields**:
-- `frameIndex` (integer, 0–11): Zero-based position in animation
-- `duration` (integer, > 0): Milliseconds to display
-- `layers` (array): At least 1 layer per frame
-
-**Validation**: 
-- Frame count 1–12 (Constitution IV)
-- frameIndex unique and consecutive (0 to frame_count - 1)
+- `frameIndex` (int): 0-based position; rewritten to match array order on save.
+- `duration` (int > 0): ms.
+- `layers`: **1–3 entries on disk**. A fully-empty Layer 2 or 3 (every position `0`) is omitted. The loader pads every frame back to **exactly 3** layers in memory.
 
 ---
 
-## Layer Object
+## Layer
 
-**Array Element** (each layer in frame):
 ```json
-{
-  "layerIndex": 0,
-  "name": "Background",
-  "positions": [1, 1, 2, 2, 3, 3, ...],
-  "transparency": [0, 0, 0, 0, 0, 0, ...],
-  "visible": true
-}
+{ "layerIndex": 0, "name": "Layer 1", "positions": [1, 1, 2, 2, ...], "visible": true }
 ```
 
-**Fields**:
-- `layerIndex` (integer): 0-based position in frame (0 = bottom, N-1 = top)
-  - Validation: Unique within frame, consecutive from 0
-  
-- `name` (string, max 32 chars): User-friendly name
-  - Validation: Non-empty
-  - Examples: "Background", "Character", "Effects"
-  
-- `positions` (array<integer>): Tile indices for 25×15 grid
-  - Length: Exactly 375 entries
-  - Values: 0 (empty) or 1..N (tile index in PDI)
-  - Validation: Non-zero values must be <= max_tile_in_pdi
-  
-- `transparency` (array<integer>): Transparency per position
-  - Length: Exactly 375 entries (must match `positions`)
-  - Values: 
-    - `0` = opaque
-    - `1` = transparent
-    - `2` = empty
-  - Validation: Each value in [0, 1, 2]
-  
-- `visible` (boolean, optional, default: true): Display state in editor
+- `layerIndex` (int): 0 = bottom/base, 1–2 = above. Matches the entry's position in `layers`.
+- `name` (string): non-empty.
+- `positions` (array<int>): exactly 375. Values:
+  - `0` = **absent** (Layers 2–3 only — lower layers show through).
+  - `1` = the white base tile.
+  - `1..tileCount` = tile in the PDI sheet. That tile may contain `kColorClear` pixels (per-pixel transparency).
+  - **Layer 1 has no `0`** — its non-ink cells are `1` (white).
+- `visible` (bool, optional, default `true`).
 
-**Validation**:
-- layerIndex matches position in frame.layers array
-- Unique layerIndex per frame
-- All position/transparency values valid
+**No `transparency` field.** Two tiles with the same ink pattern but different backgrounds (white vs. `kColorClear`) are stored as **separate tiles** — `hashTile` classifies each pixel as black / white / clear.
 
 ---
 
 ## Backward Compatibility (v1.0 → v1.1)
 
-**Old Format** (Spec 009):
-```json
-{
-  "version": "1.0",
-  "frames": [
-    {
-      "frameIndex": 0,
-      "positions": [1, 1, 2, 2, ...],
-      "duration": 100
-    }
-  ]
-}
+Old format: `frames` is an array of flat 375-int arrays (or of `{frameIndex, positions, duration}`). Detected by `frames[0]` **not** having a `.layers` table.
+
+On load:
+```
+for each flat frame F:
+  layer1 = { layerIndex 0, name "Layer 1", positions = validate375(F), visible true }
+  frame  = { duration = F.duration or 100, layers = [ layer1 ] }
+  padTo3(frame)   -- add empty Layer 2 + Layer 3 (positions all 0)
 ```
 
-**Auto-Upgrade on Load**:
-```lua
-if root.version == "1.0" then
-  for frameIndex, oldFrame in ipairs(root.frames) do
-    oldFrame.layers = {
-      {
-        layerIndex = 0,
-        name = "Layer 1",
-        positions = oldFrame.positions,
-        transparency = array_fill(375, 0),  -- all opaque
-        visible = true
-      }
-    }
-    oldFrame.positions = nil
-  end
-  root.version = "1.1"
-end
-```
-
-**Result**: Single default layer, all pixels opaque. Next save updates file to v1.1.
-
----
-
-## Example: Three-Layer Frame
-
-```json
-{
-  "version": "1.1",
-  "frames": [
-    {
-      "frameIndex": 0,
-      "duration": 100,
-      "layers": [
-        {
-          "layerIndex": 0,
-          "name": "Background",
-          "positions": [1, 1, 2, 2, 3, 3, 1, 1, ...],
-          "transparency": [0, 0, 0, 0, 0, 0, 0, 0, ...],
-          "visible": true
-        },
-        {
-          "layerIndex": 1,
-          "name": "Character",
-          "positions": [0, 0, 5, 6, 0, 0, 0, 0, ...],
-          "transparency": [2, 2, 0, 0, 2, 2, 2, 2, ...],
-          "visible": true
-        },
-        {
-          "layerIndex": 2,
-          "name": "Effects",
-          "positions": [0, 0, 0, 0, 9, 0, 0, 0, ...],
-          "transparency": [2, 2, 2, 2, 1, 2, 2, 2, ...],
-          "visible": true
-        }
-      ]
-    }
-  ]
-}
-```
-
----
-
-## PDI Reference
-
-**File**: `{base}.pdi` (unchanged from Spec 009)
-
-**Relationship**:
-- All layer position entries reference tiles in this PDI
-- Tiles deduplicated across all frames/layers
-- Tile count stored in PDI, validated against position values
-
----
-
-## File Size
-
-**Example** (12 frames, 3 layers/frame):
-- Positions: 27 KB
-- Transparency: 13.5 KB
-- Metadata: ~5 KB
-- **Total**: ~45 KB (~8 KB gzipped)
-
-**On Playdate**: Well within available storage
+Next save writes v1.1 (one layer entry on disk for legacy art). Legacy tiles are black/white only, so the 3-class hash behaves identically to the old 2-class one.
 
 ---
 
 ## Validation on Load
 
-- [ ] version is "1.0" or "1.1"
-- [ ] frames array non-empty
-- [ ] Each frameIndex unique and 0..(frame_count-1)
-- [ ] Frame count 1–12
-- [ ] Each frame has ≥1 layer
-- [ ] Each layerIndex unique within frame (0..(layer_count-1))
-- [ ] Each layer: positions exactly 375 entries, values [0..tile_count]
-- [ ] Each layer: transparency exactly 375 entries, values [0, 1, 2]
-- [ ] Layer names non-empty, max 32 chars
-- [ ] Auto-upgrade if version "1.0"
+- [ ] `version` is `"1.1"` / `1` / `"1.0"` / absent
+- [ ] 1–12 frames
+- [ ] each frame: after padding, exactly 3 layers with `layerIndex` 0, 1, 2
+- [ ] each layer: `positions` exactly 375, values `0 .. tileCount` (Layer 1: `1 .. tileCount`)
+- [ ] malformed frame → skipped; all frames malformed → one white fallback frame
 
 ---
 
-## Test Validation
+## Example (2 layers on disk, 3 in memory)
 
-```lua
-test("JSON v1.1 load: parse all layers", function()
-  local image = Image:loadJSON("test.json")
-  local frame = image:getFrame(0)
-  assert(frame:getLayerCount() == 3)
-  assert(#frame:getLayer(0):getPositions() == 375)
-end)
-
-test("JSON v1.0 backward compat", function()
-  local image = Image:loadJSON("old.json")
-  local frame = image:getFrame(0)
-  assert(frame:getLayerCount() == 1)
-  assert(frame:getLayer(0):getName() == "Layer 1")
-end)
-
-test("JSON round-trip preservation", function()
-  local img1 = Image:loadJSON("orig.json")
-  img1:saveJSON("copy.json")
-  local img2 = Image:loadJSON("copy.json")
-  -- verify identical
-end)
+```json
+{
+  "version": "1.1", "name": "hero", "tileCount": 12,
+  "frames": [
+    {
+      "frameIndex": 0, "duration": 100,
+      "layers": [
+        { "layerIndex": 0, "name": "Layer 1", "positions": [1,1,2,2, ...], "visible": true },
+        { "layerIndex": 1, "name": "Layer 2", "positions": [0,0,5,6, ...], "visible": true }
+      ]
+    }
+  ]
+}
 ```
+Loads as Frame 0 with Layers 1, 2 as given plus an empty Layer 3.
 
 ---
 
-**Status**: ✅ Storage format contract defined
+**Status**: ✅ Updated for Third-Round clarification.

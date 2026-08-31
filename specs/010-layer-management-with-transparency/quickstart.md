@@ -17,14 +17,14 @@
 
 ## Test Scenario 1: Layer Cycling with Crank (US3)
 
-**Goal**: Verify that layers can be cycled forward/backward via Crank + Up/Down keys without interfering with frame cycling.
+**Goal**: Verify that the 3 fixed layers can be cycled forward/backward via Crank + Up/Down without interfering with frame cycling.
 
 **Setup**:
-1. Create a new Hans-Dither project with 3 frames
-2. In Frame 1, create 3 layers:
-   - Layer 1 (Background): Draw 5 tiles of a background pattern
-   - Layer 2 (Character): Draw 2 tiles of a character sprite
-   - Layer 3 (Effects): Draw 1 transparent tile with an effect overlay
+1. Create a new Hans-Dither project with 3 frames (every frame already has 3 layers — nothing to "create")
+2. In Frame 1:
+   - Layer 1 (bottom): draw a background pattern (its non-ink pixels are white)
+   - Layer 2: cycle to it (hold Up + Crank), draw a character sprite (its non-ink pixels are transparent)
+   - Layer 3: cycle to it, draw an effect overlay
 3. Save the image
 
 **Test Steps**:
@@ -37,14 +37,14 @@
 | 4 | While still holding Up, rotate Crank once more | Layer indicator changes to "Layer 3 (Active)" |
 | 5 | While still holding Up, rotate Crank once more | Layer indicator changes to "Layer 1 (Active)" (wraparound) |
 | 6 | Release Up arrow, rotate Crank clockwise once | Frame indicator changes to "Frame 2" (layer cycling stops, frame cycling resumes) |
-| 7 | Hold Down arrow, rotate Crank twice counterclockwise | Layer cycles backward: Frame 2 Layer 1 → (no change, Frame 2 has only 1 layer) |
-| 8 | Release Down, verify Frame 1 and Layer 3 have separate state | Switch back to Frame 1 via Crank (normal frame cycle). Verify Layer 2 is now active (index preserved from Step 4) |
+| 7 | Hold Down arrow, rotate Crank twice counterclockwise | On Frame 2 (also 3 layers): active layer goes Layer 1 → Layer 3 → Layer 2 |
+| 8 | Release Down, rotate Crank back to Frame 1 | Frame 1's active layer is whatever it was last (Layer 3 from step 5); Frame 2 kept its own active layer (Layer 2) — the index is per-frame session state |
 
 **Acceptance Criteria**:
 - ✅ Layer cycling works forward (Up + Crank) and backward (Down + Crank)
 - ✅ Layer index wraps around (Layer 3 → Layer 1)
 - ✅ Layer cycling does not interfere with frame cycling (Crank alone)
-- ✅ Layer index preserved when switching frames (Frame 1 Layer 2 → Frame 2 Frame 1 → back to Frame 1 Layer 2)
+- ✅ Every frame always has the same 3 layers; the active index is preserved across frame switches
 
 ---
 
@@ -53,29 +53,31 @@
 **Goal**: Verify that transparent pixels can be placed, stored, and rendered distinctly.
 
 **Setup**:
-1. Open Test Scenario 1 image (Frame 1 ready)
-2. Enter Pixel View
-3. Current layer should be "Layer 1 (Background)"
+1. Open the Scenario 1 image, Frame 1
+2. Cycle to **Layer 2** (hold Up + Crank) — transparency only exists on Layers 2–3
+3. Enter Zoom View, then Pixel View on a Layer 2 tile
 
 **Test Steps**:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Position cursor at pixel (5, 5) in Pixel View | Cursor visible in 16×16 grid |
-| 2 | Press A-button | Black opaque pixel placed at (5, 5) |
-| 3 | Move cursor to (6, 5), press B-button | Pixel at (6, 5) appears with checkerboard pattern (transparent) |
-| 4 | Move cursor to (7, 5), press Y-button (delete) | Pixel at (7, 5) becomes empty (white/undrawn) |
-| 5 | Verify visual distinction: opaque (black) vs. transparent (checkerboard) vs. empty (white) | All three states clearly different |
-| 6 | Save image (trigger save flow) | Save completes, buildNumber incremented |
-| 7 | Close and reload image | Transparency states preserved: (5,5) opaque, (6,5) transparent, (7,5) empty |
-| 8 | Verify Pixel View shows same pattern as Step 5 | Transparency states persist through save/reload |
+| 1 | Cursor at pixel (5, 5) in Pixel View | Cursor visible in 16×16 grid |
+| 2 | Press A | Black ink pixel at (5, 5) |
+| 3 | Move to (6, 5), press B | Pixel (6, 5) shows the checkerboard pattern (transparent) |
+| 4 | Move to (5, 5), press A again | Pixel (5, 5) toggles back to transparent (Layer 2's non-ink state — the eraser) |
+| 5 | Verify visual distinction: ink (black) vs. transparent (checkerboard) | The two states are clearly different |
+| 6 | Zoom out to Tile View | Where Layer 2 is transparent, Layer 1 shows through |
+| 7 | Save, close, reload | Transparent pixels preserved; the Layer 2 tile round-trips distinctly from a white tile |
+
+Then repeat on **Layer 1**: B-press produces **white** (identical to the A-eraser) — Layer 1 has no transparent state.
 
 **Acceptance Criteria**:
-- ✅ A-press places opaque pixels
-- ✅ B-press places transparent pixels
-- ✅ Transparent pixels render with checkerboard (visual feedback)
-- ✅ Transparent pixels persist through save/reload
-- ✅ Backward compatibility: old image (v1.0) loads with all pixels as opaque
+- ✅ A places ink; A on an ink pixel erases to the layer's non-ink state
+- ✅ B places the layer's non-ink state — transparent on Layers 2–3, white on Layer 1
+- ✅ Transparent pixels render with checkerboard in Pixel View
+- ✅ Transparent pixels let lower layers show through in Tile View
+- ✅ Transparent tiles persist through save/reload, distinct from white tiles
+- ✅ Legacy images load with black/white pixels only (no transparency)
 
 ---
 
@@ -112,37 +114,35 @@
 
 ---
 
-## Test Scenario 4: Layer Management View (US4)
+## Test Scenario 4: Frame Management View (US4)
 
-**Goal**: Verify that the dedicated Management View allows layer deletion and frame-level organization.
+**Goal**: Verify that the Frame Management View lets the user reorder and delete frames.
 
 **Setup**:
-1. Create new image with 2 frames
-2. Frame 1: 4 layers (Background, Character, Effects, UI)
-3. Frame 2: 2 layers (Background, Character)
-4. Save image
+1. Create a new image with 4 frames; draw something distinct in each so they are tellable apart
+2. Save the image
 
 **Test Steps**:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | In Tile View (Frame 1), hold B and rotate Crank counterclockwise | Layer View appears, showing 4 layer entries (Background, Character, Effects, UI) |
-| 2 | Navigate down through layer entries using D-Pad | Cursor moves through all 4 layer entries |
-| 3 | Select "Effects" layer (A-press) | Layer is highlighted |
-| 4 | Press B to delete "Effects" layer | Layer View updates, now shows 3 entries (Background, Character, UI) |
-| 5 | Verify Tile View reflects layer deletion | Return to Tile View (release B), only 3 layers visible when cycling (Up + Crank) |
-| 6 | Re-enter Layer View (B + Crank backward), continue to Animation Layer View (B + Crank backward again) | Animation Layer View appears, showing 2 frame entries (Frame 1, Frame 2) |
-| 7 | Select Frame 1 entry, press A | Submenu shows 3 layers (Background, Character, UI) |
-| 8 | Delete "UI" layer from submenu | Layer removed from Frame 1 |
-| 9 | Return to Tile View, verify Frame 1 now has only 2 layers (Background, Character) | Cycling through layers shows only 2 |
-| 10 | Switch to Frame 2 (normal Crank), verify it still has 2 layers (Background, Character) — unaffected | Frame 2 independent |
+| 1 | In Tile View, hold B and rotate Crank counterclockwise | Frame Management View opens, listing Frame 1–4 in order |
+| 2 | D-Pad down to the Frame 3 entry, press A | Frame 3 is marked (visual indicator) |
+| 3 | Press Left | The marked frame moves one slot earlier — the list now reads 1, 3, 2, 4 |
+| 4 | Press Left again | List reads 3, 1, 2, 4 |
+| 5 | Press Left again | No-op — the marked frame is already first |
+| 6 | Move the cursor to the last entry, press A to mark it, press B | That frame is deleted; the list shrinks to 3 |
+| 7 | Delete two more frames | The 3rd deletion (down to 1 frame) is **rejected** — at least one frame remains |
+| 8 | Release B | Back in Tile View; the animation now plays in the reordered/shortened sequence; `currentFrame` is clamped into range |
+| 9 | Save and reload | The new frame order and count persist |
 
 **Acceptance Criteria**:
-- ✅ Layer View accessible via B + Crank backward in Tile View
-- ✅ Layers can be deleted via Layer View
-- ✅ Animation Layer View accessible via B + Crank backward from Layer View
-- ✅ Frame-level management allows per-frame layer deletion
-- ✅ Deletions persist through save/reload
+- ✅ Frame Management View accessible via one B + Crank-backward gesture in Tile View
+- ✅ A marks a frame; Left/Right move it (clamped at the ends)
+- ✅ B deletes the marked frame; deletion rejected when only 1 frame remains
+- ✅ Releasing B returns to Tile View with `currentFrame` clamped
+- ✅ Reorder / delete persist through save/reload
+- ✅ There is no Layer View — layers are fixed at 3 and not managed here
 
 ---
 
@@ -158,19 +158,18 @@
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Load Spec 009 image in Tile View | Image loads without error, displays as single layer |
-| 2 | Enter Layer View (B + Crank backward) | Shows 1 layer (auto-created "Layer 1") |
-| 3 | Enter Pixel View, check transparency states | All pixels appear opaque (no transparent pixels, no checkerboard) |
-| 4 | Save image | File is saved in v1.1 format with transparency array (all zeros) |
-| 5 | Reload image | Loads and renders identically to Step 1 |
-| 6 | Verify JSON version updated | JSON file now has "version": "1.1" |
+| 1 | Load a Spec 009 image in Tile View | Loads without error, renders identically |
+| 2 | Hold Up + Crank to cycle layers | Cycles Layer 1 → 2 → 3 → 1; Layer 1 holds the old content, Layers 2–3 are empty |
+| 3 | Enter Pixel View on Layer 1 | Pixels are ink / white only (no transparency on Layer 1) |
+| 4 | Save image | File is written in v1.1 format — one layer entry on disk (empty Layers 2–3 omitted) |
+| 5 | Reload image | Renders identically to Step 1; still 3 layers in the editor |
+| 6 | Verify JSON | `"version": "1.1"`, `frames[].layers` present, no `transparency` field |
 
 **Acceptance Criteria**:
-- ✅ Spec 009 images load without conversion dialog or error
-- ✅ Auto-upgrade to v1.1 (single opaque layer)
-- ✅ All pixels treated as opaque after upgrade
-- ✅ Save updates file version to v1.1
-- ✅ User sees no disruption (seamless upgrade)
+- ✅ Spec 009 images load without dialog or error
+- ✅ Auto-upgrade: old content → Layer 1; Layers 2–3 added empty (3 layers in editor)
+- ✅ Save writes v1.1; empty upper layers omitted from disk
+- ✅ User sees no disruption
 
 ---
 
@@ -179,21 +178,21 @@
 **Goal**: Verify that multiple layers render correctly in Tile View with proper stacking order.
 
 **Setup**:
-1. Create 3-layer frame
-2. Layer 1: Draw background pattern (opaque)
-3. Layer 2: Draw character sprite (with some transparent pixels)
-4. Layer 3: Draw effect overlay (transparent)
+1. Any frame (all frames have 3 layers)
+2. Layer 1: draw a background pattern (its non-ink pixels are white)
+3. Layer 2: draw a character sprite with some transparent pixels
+4. Layer 3: draw an effect overlay, mostly transparent
 
 **Test Steps**:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | View Tile View with all layers visible | All 3 layers composited, stacked correctly (Layer 1 bottom, Layer 3 top) |
-| 2 | Verify transparent pixels allow seeing layers below | Where Layer 2/3 have transparent pixels, Layer 1 shows through |
-| 3 | Cycle to Layer 1 as active (Up + Crank) | Layer 1 highlighted in indicator, still composited with others |
-| 4 | Draw in Zoom/Pixel View on Layer 1 | Only Layer 1 content changes; Layers 2 & 3 unchanged |
-| 5 | Cycle to Layer 2 as active | Indicator updates, Layer 2 highlighted |
-| 6 | Draw in Zoom/Pixel View on Layer 2 | Only Layer 2 content changes; Layers 1 & 3 unchanged |
+| 1 | Tile View | All 3 layers composited, Layer 1 bottom → Layer 3 top |
+| 2 | Check transparent regions | Where Layers 2/3 are transparent, the layer below shows through |
+| 3 | Cycle to Layer 1 (Up + Crank) | Indicator "L1/3 Layer 1"; still composited with the others |
+| 4 | Draw in Zoom/Pixel View | Only Layer 1 changes; Layers 2 & 3 untouched |
+| 5 | Cycle to Layer 2 | Indicator "L2/3 Layer 2" |
+| 6 | Draw in Zoom/Pixel View | Only Layer 2 changes; Layers 1 & 3 untouched |
 
 **Acceptance Criteria**:
 - ✅ Layers render in correct stacking order (0 bottom, N-1 top)
@@ -232,11 +231,11 @@ pdc Source "Hans Dither.pdx"
 ## Validation Checklist
 
 - [ ] **US1 (Pixel Shifting)**: Test Scenario 3 passes — shifts work, tiles recalculate, persist
-- [ ] **US2 (Transparency)**: Test Scenario 2 passes — transparent pixels placed/stored/rendered/persisted
-- [ ] **US3 (Layer Cycling)**: Test Scenario 1 passes — Crank cycling works, doesn't interfere with frames
-- [ ] **US4 (Management View)**: Test Scenario 4 passes — layer deletion, frame-level management
-- [ ] **Backward Compat**: Test Scenario 5 passes — v1.0 images load and auto-upgrade
-- [ ] **Compositing**: Test Scenario 6 passes — layers render correctly, editing isolated
+- [ ] **US2 (Transparency)**: Test Scenario 2 passes — B places the layer's non-ink state; transparent pixels stored/rendered/persisted on Layers 2–3
+- [ ] **US3 (Layer Cycling)**: Test Scenario 1 passes — Crank cycles the 3 fixed layers, doesn't interfere with frames
+- [ ] **US4 (Frame Management View)**: Test Scenario 4 passes — reorder + delete frames (min. 1), persists
+- [ ] **Backward Compat**: Test Scenario 5 passes — v1.0 images load as Layer 1 + two empty upper layers
+- [ ] **Compositing**: Test Scenario 6 passes — 3 layers render correctly, editing isolated to the active layer
 - [ ] **Gate 1 (Tests)**: `lua tests/headless_tests.lua` passes with "ALLE TESTS BESTANDEN"
 - [ ] **Gate 2 (Build)**: `pdc Source "Hans Dither.pdx"` succeeds, buildNumber incremented
 - [ ] **Round-Trip**: Save/reload tested in all scenarios — data persists exactly
@@ -247,12 +246,14 @@ pdc Source "Hans Dither.pdx"
 
 | Issue | Diagnosis | Resolution |
 |-------|-----------|-----------|
-| Layer View doesn't appear | B + Crank might not be bound correctly | Check Tile View key binding implementation |
-| Transparent pixels render as opaque | Transparency array not being read | Verify JSON load sets transparency state |
-| Pixel shift causes visual corruption | Tile recalculation incomplete | Debug tile pruning logic (Spec 009) |
-| Old images don't load | v1.0 → v1.1 auto-upgrade missing | Verify upgrade logic in Image:loadJSON() |
-| buildNumber not incremented | Manual step forgotten | Increment before each test run |
+| Frame Management View doesn't open | B + Crank-backward not bound in `EditorRoom.handleCrank` | Check the `zoomTickAccu <= -ZOOM_TICK_THRESHOLD` branch |
+| Transparent pixels render as white | Tile built without `kColorClear`, or `hashTile` not 3-class | Check `PixelRoom.buildTileImage` + `ImageStoreCodec.hashTile` |
+| Upper-layer eraser leaves opaque white | `writeActiveLayerPosition` not mapping white→absent on Layers 2–3 | Check `EditorRoom.writeActiveLayerPosition` |
+| Multi-layer edit lost on save | `imageData.frames` mutated directly instead of `frameLayers` | All edits must go through the active layer + `recompositeCell` |
+| Pixel shift causes visual corruption | Tile recalculation incomplete | Debug `LayerModel.shiftLayerContent` + layered prune |
+| Old images don't load | Structure-based v1.0 detection failed | Check `newLoadOperation`'s `frames[1].layers` test + pad-to-3 |
+| buildNumber not incremented | Manual step forgotten | Increment once per `pdc` run |
 
 ---
 
-**Status**: ✅ Quickstart scenarios complete — Ready for implementation tasks
+**Status**: ✅ Quickstart updated for the Third-Round fixed-3-layer clarification.

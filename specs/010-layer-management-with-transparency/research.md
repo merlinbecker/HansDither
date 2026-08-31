@@ -76,43 +76,31 @@ Current JSON schema (Spec 009):
 
 ---
 
-## R2: Pixel Transparency State Representation
+## R2: Pixel Transparency State Representation (revised — per-pixel, in the tile)
 
-**Question**: How should the three pixel states (opaque, transparent, empty) be encoded and rendered?
+**Question**: How is a transparent pixel encoded and rendered?
 
 **Research Summary**:
 
-Current Pixel View treats pixels as binary: drawn (opaque, black) vs. empty (white/undrawn).
+The early draft stored a per-cell `transparency` array (0/1/2) alongside `positions`. User clarification: transparency is **per pixel** and is only ever set in the Pixel View. A per-cell array cannot express "pixel (6,5) transparent, (5,5) ink in the same 16×16 cell", and `spec.md` also requires that two tiles with the same ink pattern but different transparency deduplicate separately — which only works if transparency is part of the tile.
 
-New requirement: Three states:
-1. **Opaque (drawn)**: Solid pixel, part of image, renders normally
-2. **Transparent**: Part of image but transparent, renders with checkerboard pattern in editor, exported as alpha=0
-3. **Empty**: Not drawn yet, skipped in rendering and export
-
-**Decision**: Use byte encoding in transparency array:
-- `0` = opaque (default for existing images)
-- `1` = transparent (user placed via B-press in Pixel View)
-- `2` = empty (not drawn, visual distinction from transparent)
+**Decision**: Transparency lives **per pixel, directly in the 16×16 tile bitmap**, as `gfx.kColorClear`.
+- A tile pixel is one of: black (ink), white, transparent (kColorClear).
+- `ImageStoreCodec.hashTile` and `imagesVisiblyEqual` compare **3 classes** (black / white / clear), so a white-background tile and a transparent-background tile with the same ink never collide.
+- There is **no** per-cell `transparency` array in the JSON. A layer is just `{layerIndex, name, positions[375], visible}`.
+- Per-layer non-ink state: Layer 1's non-ink pixels are **white**; Layers 2–3's non-ink pixels are **transparent**. The Pixel/Zoom/Tile edit paths take a per-layer "off state" and, on the upper layers, a whole white tile collapses to "absent" (position 0).
 
 **Pixel View Rendering**:
-- Opaque: Black pixel (existing behavior)
-- Transparent: Checkerboard pattern (visual feedback)
-- Empty: White/uncolored (existing behavior)
+- Ink: black fill (existing)
+- Transparent: checkerboard pattern (FR-011)
+- White: white cell (existing)
 
-**Storage**: Transparency array saved to JSON, loaded on image open. On backward-compatibility load (no transparency array), all pixels default to either opaque (0) or empty (2) based on whether they have content.
-
-**Rationale**:
-- Byte array is compact and fast to iterate
-- Checkerboard pattern is industry-standard for transparency (PNG editors, Photoshop, etc.)
-- No changes to tile/imagetable rendering (transparency is metadata, not pixel data)
-- Transparent pixels still participate in tile deduplication (can be shared across frames/layers)
+**Backward compatibility**: legacy tiles are only black/white, so the 3-class hash and comparison behave exactly as the old 2-class versions did — legacy images are unaffected.
 
 **Alternatives Rejected**:
-- **Single bit per pixel**: Would require bit-packing logic; harder to debug and extend
-- **Separate "alpha" layer**: Adds another layer per frame; increases complexity
-- **Overlay rendering**: Would require additional tilemap for alpha; performance impact
+- *Per-cell 0/1/2 transparency array*: cannot represent mixed-transparency cells; contradicts the "different transparency → different tile" dedup rule.
 
-**Evidence**: Playdate imagetable supports per-pixel color via setPixel() / getPixel(); transparency state is orthogonal metadata.
+**Evidence**: Playdate 1-bit images natively carry a transparency mask (`kColorClear`); the existing sheet-compose / slice pipeline already uses `kColorClear` backgrounds, so it preserves transparent pixels without change.
 
 ---
 
@@ -142,21 +130,21 @@ With layers, two approaches possible:
 - Pro: Simpler state management, faster rendering
 - Con: User can't see layer interaction/composition until export
 
-**Decision**: **Option A (Composite All Layers)**
+**Decision**: **Option A (Composite All Layers)** — implemented as a flat composite cache.
 
 **Rationale**:
-- Matches user expectations from traditional layer-based editors (Photoshop, GIMP, Aseprite)
-- Spec requirement (US3) emphasizes "view" layers in Tile View, implying visibility
-- Performance acceptable on Playdate (60 FPS target is achievable; see constraints review)
-- Allows visual feedback for layer organization (important for management view)
+- Matches user expectations from traditional layer-based editors
+- Spec requirement (US3) emphasizes seeing all layers in Tile View
+- Cheap: the composite is one flat 375-entry array per frame, rendered by the existing tilemap
 
-**Implementation**:
-- Tile View's `draw()` iterates all layers in index order
-- Each layer's tile positions are rendered via SDK `imagetable:drawTile()`
-- Only active layer's tiles are updated when user draws in Zoom/Pixel View
-- Transparency channel controls alpha blending (transparent pixels don't overwrite below)
+**Implementation** (as built):
+- `imageData.frameLayers[f]` (exactly 3 layers) is the source of truth; `imageData.frames[f]` is a derived flat array where, per cell, the topmost layer with a non-empty tile wins (`LayerModel.compositeToFlat`), else Layer 1's white tile.
+- The composite cache is regenerated after every layer mutation (draw, shift, clear, frame add/switch).
+- Only the active layer is edited (Zoom/Pixel edits and the Tile-View toggle all route through `writeActiveLayerPosition`).
+- Per-pixel transparency lives in the tile bitmap itself (kColorClear), so where an upper layer's tile has clear pixels the lower layers already show through when that tile is drawn.
+- **Layer-dependent non-ink colour**: on Layer 1 the "off" tile is the white base tile (index 1); on Layers 2–3 it is "absent" (index 0 → nothing drawn → transparent). `writeActiveLayerPosition` maps a white write to "absent" on the upper layers.
 
-**Evidence**: Playdate SDK supports layered rendering via multiple `imagetable:drawTile()` calls; no custom compositing engine needed.
+**Evidence**: the existing tilemap render path already draws a flat 375-entry array; no new compositing engine needed.
 
 ---
 
@@ -184,66 +172,46 @@ Scenario: Frame 1 has 3 layers, Frame 2 has 2 layers. User is on Frame 1, Layer 
 - Pro: Sophisticated; assumes consistent layer naming
 - Con: Requires layer IDs; complicates state management
 
-**Decision**: **Option B (Preserve Index with Wrap-Around)**
+**Decision**: **Option B (Preserve Index)** — trivially, since Third Round fixed every frame at exactly 3 layers.
 
 **Rationale**:
-- Matches animation software conventions (Aseprite, Clip Studio)
-- Minimizes user re-selection work (common workflow: edit Layer 2 across multiple frames)
-- Wrap-around is predictable: if Frame 2 only has 2 layers and user was on Layer 3, wrap to Layer 1
-- Spec resolution in clarification phase confirmed this choice
+- Every frame has all 3 layers, so a preserved index (1..3) always exists — no wrap is ever needed in practice.
+- A defensive `clampActive` to Layer 1 stays in the code for corrupt/legacy data only.
+- Minimizes user re-selection work (edit Layer 2 across multiple frames).
 
-**Evidence**: Existing Hans-Dither frame cycling uses index preservation; extending to layers is natural.
+**Evidence**: Existing Hans-Dither frame cycling uses index preservation; extending to the fixed 3 layers is natural.
 
 ---
 
-## R5: Management View Navigation Pattern
+## R5: Frame Management View Navigation (revised Third Round)
 
-**Question**: How should the view hierarchy (Tile View → Layer View → Animation Layer View) be accessed and navigated?
+**Question**: How is the Frame Management View reached and navigated? (There is no Layer View any more — layers are fixed.)
 
 **Research Summary**:
 
-Current navigation pattern (from SelectionRoom):
-- Directional controls (D-Pad) move cursor through list entries
-- A-press selects/confirms entry
-- B-press goes back/cancels
-- Crank rotates through entries (smooth, fast access)
+Existing list-navigation pattern (SelectionRoom): D-Pad moves the cursor, A confirms, B cancels/back.
 
-New requirement: Access layer/frame management from Tile View via B + Crank backward.
-
-**Design Decision**: Linear progressive navigation hierarchy
+**Design Decision**: One flat view, one entry gesture.
 
 ```
-Tile View
-  ↑ (B + Crank backward)
-  ↓ (continue B + Crank backward)
-Layer View (current frame's layers)
-  ↑ (continue B + Crank backward)
-  ↓ (release B, go back to Tile View)
-Animation Layer View (all frames + layers)
+Tile View  --(hold B + Crank counterclockwise)-->  Frame Management View
+Frame Management View  --(release B)-->  Tile View
 ```
 
-**Entry Point**: Tile View, hold B + rotate Crank counterclockwise once = enter Layer View
-
-**From Layer View**: 
-- D-Pad up/down = cycle through layers in current frame
-- A-press = select layer
-- B-press (while selected) = delete layer
-- Hold B + Crank counterclockwise = progress to Animation Layer View
-- Hold B + Crank clockwise = return to Tile View (if implemented) or just release B to cancel
-
-**From Animation Layer View**:
-- D-Pad = navigate frame entries
-- A-press on frame = enter submenu showing that frame's layers
-- (Submenu repeats Layer View pattern: select with A, delete with B)
-- Hold B + Crank clockwise = return to Layer View
+**In the Frame Management View**:
+- D-Pad Up/Down (or Left/Right) = move the list cursor between frame entries
+- A = mark the frame under the cursor
+- Left / Right (with a frame marked) = move the marked frame one slot earlier / later (clamped at the ends)
+- B (tap, with a frame marked) = delete the marked frame — rejected if only one frame remains
+- release B = return to Tile View; `currentFrame` is clamped into the new sequence
 
 **Rationale**:
-- Mirrors existing SelectionRoom pattern (proven UI, user already familiar)
-- Progressive depth allows incremental complexity (simple layer selection → advanced management)
-- No new UI paradigm required (reuses Room-based navigation)
-- B-hold + Crank is natural for "mode shift" (already used for layer cycling in US3)
+- One gesture in, one gesture out — no hierarchy, no "prevent loops" problem (FR-024 is satisfied by there being nowhere to loop).
+- Reuses the SelectionRoom list-navigation feel.
+- B + Crank-backward in Tile View is currently a no-op (`zoomTickAccu <= -ZOOM_TICK_THRESHOLD` — "outermost zoom, backward is a no-op"), so the gesture is free and does not touch the Contract CR-01 zoom chain.
+- B is overloaded in the view (tap = delete, hold = the gesture that got you here, release = exit) but each is a distinct event and the set is small.
 
-**Evidence**: Existing TileView/SelectionRoom navigation; design reuses proven patterns.
+**Evidence**: Existing EditorRoom `handleCrank` already reserves the B + backward-crank slot as an explicit no-op; SelectionRoom provides the list-UI precedent.
 
 ---
 
@@ -302,39 +270,20 @@ Current JSON (Spec 009) has no `layers` array:
 
 New JSON (this feature) includes `layers` array.
 
-**Decision**: Automatic upgrade on load
+**Decision**: Automatic upgrade on load, detected by **structure** not by the version field.
 
-**Algorithm**:
-1. On JSON load, check `version` field
-2. If version < "1.1", wrap old frame data into single default layer:
-   ```json
-   {
-     "version": "1.1",
-     "frames": [
-       {
-         "frameIndex": 0,
-         "duration": 100,
-         "layers": [
-           {
-             "layerIndex": 0,
-             "name": "Layer 1",
-             "positions": [...],  // copied from old "positions"
-             "transparency": [0, 0, 0, ...]  // all zeros (opaque)
-           }
-         ]
-       }
-     ]
-   }
-   ```
-3. Save upgraded structure when image is next saved (user won't notice; seamless upgrade)
+**Algorithm** (as built):
+1. On load, look at `frames[1]`. If it has a `.layers` table → v1.1 (nested). Otherwise → v1.0 (flat 375-entry array per frame).
+2. v1.0: each flat frame becomes `{duration, layers=[{layerIndex:0, name:"Layer 1", positions:<copied>, visible:true}]}`.
+3. **Every frame is then padded to exactly 3 layers** (Layers 2–3 = empty: all positions 0). No `transparency` array anywhere.
+4. Next save writes v1.1; empty Layers 2–3 are simply omitted (still 1 layer entry on disk for legacy art).
 
 **Rationale**:
-- Users can open old images without errors
-- Automatic upgrade means no "conversion" UI or manual steps
-- All old pixels treated as opaque (visual fidelity preserved)
-- Next save updates file to new version (gradual migration)
+- Structure-based detection is robust against a missing / wrong `version` field (FR-010).
+- Old tiles are black/white only, so the 3-class tile hash behaves identically — legacy images render unchanged.
+- Padding to 3 on load means the editor never has to special-case "this frame only has 1 layer".
 
-**Evidence**: Playdate SDK `playdate.json` module parses both old and new structures; custom version check is standard practice.
+**Evidence**: `playdate.json` parses both shapes; the codec already round-trips the flat form in the Spec 009 tests.
 
 ---
 
@@ -350,108 +299,66 @@ Constitution V (Testpflicht) requires:
 
 For this feature, focus on pure Lua logic (no simulator/device interaction):
 
-**New Test Section** (in tests/headless_tests.lua):
+**Headless coverage (as built / to build)** in `tests/headless_tests.lua`:
 
-```lua
-section("Layer Management & Transparency (Spec 010, US1-US4)")
+- **US1 Shift**: `LayerModel.shiftLayerContent` moves a known pixel by 1 in each direction; wrap from the right edge; `EditorRoom:shiftActiveLayer` leaves the base layer and other frames untouched; ZoomRoom B+arrow dispatches.
+- **US2 Transparency**: PixelRoom B-press paints the layer's off-state (white on Layer 1, kColorClear on Layers 2–3); 3-class `hashTile` separates white-bg and transparent-bg tiles; `setCurrentTile` reads the three classes back.
+- **US3 Layer Cycling**: Up/Down + 360° Crank cycles the 3 layers with wrap; Crank alone still cycles frames; the active index is preserved across frame switches.
+- **US3 fixed-3**: `LayerModel` always yields exactly 3 layers; load pads to 3; save omits empty Layers 2–3; a v1.0 flat image loads as 3 layers.
+- **Editing model**: an edit on Layer 2 does not touch Layer 1; the A-press eraser on an upper layer returns the cell to "absent" (0), not opaque white; round-trips through save/reload.
+- **US4 Frame Management**: reorder moves a frame one slot (clamped at ends); delete removes it (rejected at 1 frame); `currentFrame` clamps on return; reorder/delete persist through save/reload.
 
--- US1: Pixel Shifting
-test("Pixel shift: horizontal shift preserves content", function() 
-  -- Load image, shift right 1px, verify all pixels shifted right
-end)
-
-test("Pixel shift: tile recalculation after shift", function()
-  -- Shift content, verify tiles recalculated, content visually identical
-end)
-
--- US2: Transparency
-test("Transparency: place transparent pixel in Pixel View", function()
-  -- Set pixel transparency state to 1, verify round-trip save/load
-end)
-
-test("Transparency: backward compat (old image loads as opaque)", function()
-  -- Load v1.0 JSON (no transparency), verify all pixels state = 0
-end)
-
--- US3: Layer Cycling
-test("Layer cycling: switch layers via Crank", function()
-  -- Create frame with 3 layers, cycle forward/backward, verify active layer
-end)
-
-test("Layer cycling: preserve layer index on frame switch", function()
-  -- Frame 1 (3 layers) → Frame 2 (2 layers), verify layer wrapping
-end)
-
--- US4: Management View
-test("Layer deletion: remove layer from current frame", function()
-  -- Create 3 layers, delete Layer 2, verify only 2 remain
-end)
-```
-
-**Rationale**:
-- Headless tests catch API misuse before simulator run
-- Focus on state management (layers, transparency) not rendering
-- Reuse ImageStoreCodec test patterns (already proven)
-- Constitution V blockage: all tests must pass before code is committed
-
-**Evidence**: Spec 009 established headless test pattern; this feature extends same pattern.
+**Rationale**: headless tests catch SDK-API misuse and state-management bugs before the simulator; pixel-through-PDI round-trips (`image:draw` is a no-op in the mock) are verified manually in the simulator instead.
 
 ---
 
-## R9: Maximum Layers per Frame (3-Layer Hard Limit) — NEW
+## R9: Layer Count — Fixed Structure of Exactly 3 (revised Third Round)
 
-**Question**: Should the number of layers per frame be unbounded or constrained? What are the implications for backward compatibility, performance, and simplicity?
+**Question**: Should the number of layers per frame be user-modifiable at all?
 
 **Research Summary**:
 
-Initial design had no hard limit (assume 1–10 typical). User clarification (Session 2026-08-31) introduced a **fixed constraint: exactly 3 layers maximum per frame**.
+Second Round set a *maximum* of 3 layers (Layer 1 mandatory, 2–3 optional, add/delete via a Layer View). Third Round (2026-08-31) tightened this: layers are a **fixed structure of exactly 3 per frame**, like the hard cap of 12 animation frames — there is no gesture and no UI to add or remove a layer.
 
-**Decision**: **Implement 3-layer hard limit per frame**
-- Layer 1 (layerIndex 0): Mandatory, always present, cannot be deleted
-- Layers 2–3 (layerIndex 1–2): Optional, can be added/deleted per frame  
-- System **prevents creation** of layerIndex ≥ 3
-- All frames support 1–3 layers (min 1 for backward compat, max 3 for new images)
+**Decision**: **Every frame has exactly 3 layers, always.**
+- Layer 1 (index 0): bottom/base. Its non-ink pixels are **white** (Layer 1's background).
+- Layers 2–3 (index 1–2): stacked above. Their non-ink pixels are **transparent** (kColorClear) so lower layers show through.
+- No add, no delete. The layer count is not part of the editing model — it is a constant.
+- An entirely empty Layer 2 or 3 is **omitted from the saved JSON** and reconstituted on load; single-layer artwork stays compact on disk.
 
 **Rationale**:
-1. **Backward Compatibility**: Old 1-layer images auto-upgrade to Layer 1 on load; no data loss or migration hassle
-2. **Performance Predictability**: Max resource usage is bounded (Playdate has limited RAM); 3 layers × 375 positions × 2 bytes = 2.25 KB per frame, 12 frames = 27 KB total metadata (negligible)
-3. **Simplicity (Constitution IV)**: Fixed limit simplifies state machine (no dynamic scaling, no max-layer overflow handling)
-4. **Transparency Critical for Layers 2–3**: With fixed 3-layer max, transparency (US2) becomes essential for proper compositing (Layers 2–3 need alpha for rendering order)
+1. **Simplicity (Constitution IV)**: no add/delete state machine, no active-layer-was-deleted handling, no Layer View. `activeLayer` is a plain 1..3 cursor.
+2. **Backward Compatibility**: a legacy flat image becomes Layer 1 + two empty upper layers; the save still writes a single layer entry while 2–3 stay empty.
+3. **Predictability**: fixed 3 × 375 tile-index positions per frame; frame switching never changes the layer count, so the active index always exists.
+4. **Matches the 12-frame precedent**: hard, simple limits are explicitly encouraged (Constitution IV) and already used for frames.
 
-**Alternatives Considered**:
-- **Unbounded layers**: More flexible, but performance unpredictable on Playdate; requires dynamic validation; no clear max
-- **5+ layers**: Richer compositions, but exceeds typical pixel art workflows and complicates UI (cycling would be tedious)
-- **2-layer limit**: Too restrictive; 3 is industry standard (background, character, effects)
-
-**Evidence**: 
-- Animation software (Aseprite, Piskel) commonly supports 3–5 layer tiers for indie workflows
-- Playdate's resource constraints (64 MB RAM, single-core) favor bounded limits
-- User explicitly requested "3 Ebenen" (3 layers) in German clarification
+**Alternatives Rejected**:
+- *1–3 optional layers with add/delete (Second Round)*: needs a Layer View, delete-active-layer handling, and a "how do you create Layer 2" gesture the spec never defined — more UI and state for no clear workflow gain.
 
 **Implementation Impact**:
-- **Data Model**: Layer validation now enforces `layerIndex ∈ {0, 1, 2}` per frame
-- **Storage Format**: No change to JSON/PDI (schema already supports it; just bounded)
-- **UI**: Layer cycling (Crank) has predictable max (Layer 1 → 2 → 3 → wrap)
-- **Tests**: Verify layer count never exceeds 3 (constraint validation test)
+- **Data Model**: `LayerModel` always builds/validates exactly 3 layers; `addLayer`/`deleteLayer` are removed.
+- **Storage Format**: on save, trailing empty upper layers are dropped (1–3 layer entries on disk); on load, every frame is padded back to 3.
+- **Pixel editing**: the non-ink ("eraser" / B-press) result is white on Layer 1, transparent on Layers 2–3 — the Pixel/Zoom/Tile edit paths take a per-layer "off state".
+- **US4**: no Layer View. US4 becomes a **Frame Management View** (reorder + delete frames, min. 1).
 
-**Status**: ✅ Clarified and documented (Spec 010 Clarifications, Session 2 Round 2)
+**Status**: ✅ Clarified (Spec 010 Clarifications, Third Round). Supersedes the Second-Round "1–3 optional" model.
 
 ---
 
 ## Summary Table (Updated)
 
-| Research Item | Decision | Confidence | Next Step |
-|---------------|----------|------------|-----------|
-| R1: Storage Format | Extend JSON with layers + transparency array | HIGH | Data model (Phase 1) |
-| R2: Transparency State | 3-byte encoding (opaque=0, transparent=1, empty=2) | HIGH | Pixel model (Phase 1) |
-| R3: Layer Rendering | Composite all layers in Tile View (stack) | HIGH | Rendering pipeline (Phase 1) |
-| R4: Frame Switching | Preserve layer index with wrap-around | HIGH | Layer state machine (Phase 1) |
-| R5: Management View | Linear progressive hierarchy + SelectionRoom pattern | HIGH | View/Room design (Phase 1) |
-| R6: Pixel Shifting | Buffer → shift → retile via Spec 009 | HIGH | Algorithm (Phase 2) |
-| R7: Backward Compat | Automatic upgrade on load, v1.0 → v1.1 | HIGH | Load/save logic (Phase 2) |
-| R8: Tests | Headless test section + Constitution V gates | HIGH | Test cases (Phase 2) |
-| **R9: Layer Limit** | **3-layer hard max per frame (NEW)** | **HIGH** | **Data model, Frame validation (Phase 1)** |
+| Research Item | Decision (current) |
+|---------------|--------------------|
+| R1: Storage Format | JSON v1.1: `frames[].layers[].{layerIndex,name,positions[375],visible}`; **no** transparency array |
+| R2: Transparency State | Per-pixel `kColorClear` in the tile; 3-class tile hash (black/white/clear) |
+| R3: Layer Rendering | Composite all 3 layers into a flat cache; topmost non-empty cell wins |
+| R4: Frame Switching | Preserve active layer index (all frames have 3 layers, so it always exists) |
+| R5: Frame Management View | One flat view; enter with B + Crank-backward from Tile View, exit on B release |
+| R6: Pixel Shifting | Decode layer → 400×240 buffer → shift 1px (wrap) → re-tile all 375 cells |
+| R7: Backward Compat | Structure-based v1.0/v1.1 detection; pad every frame to 3 layers on load |
+| R8: Tests | Headless section per user story + Constitution V gates |
+| **R9: Layer Count** | **Exactly 3 layers per frame, always — no add/delete (Third Round)** |
 
 ---
 
-**Status**: ✅ Research complete — All decisions documented (including R9 3-layer constraint), ready for Phase 1 (data-model.md, contracts/, quickstart.md)
+**Status**: ✅ Research complete — updated for the Third-Round fixed-3-layer clarification.

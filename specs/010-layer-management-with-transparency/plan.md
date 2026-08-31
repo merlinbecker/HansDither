@@ -8,13 +8,16 @@
 
 ## Summary
 
-Hans-Dither gains three complementary editing capabilities:
+Hans-Dither gains four editing capabilities:
 
-1. **Precise Pixel Shifting (US1, P1)**: Hold B + arrow keys to shift drawn content pixel-by-pixel in Zoom View, with automatic tile recalculation
-2. **Transparency Support (US2, P1)**: Place transparent pixels in Pixel View via B-press, stored with full alpha channel support
-3. **Layer Management (US3/US4, P1/P2)**: Per-frame layers with Crank cycling, plus dedicated management view for organizing and deleting layers
+1. **Precise Pixel Shifting (US1, P1)**: hold B + arrow keys in Zoom View to shift the active layer's content 1 pixel at a time, with automatic tile recalculation.
+2. **Transparency Support (US2, P1)**: per-pixel transparency stored as `kColorClear` in the tile bitmap. The non-ink pixel state is **white on Layer 1**, **transparent on Layers 2–3**.
+3. **Layer Cycling (US3, P1)**: every frame has a **fixed structure of exactly 3 layers** (no add/delete, like the 12-frame cap). Up/Down + Crank cycles the active layer; Crank alone still cycles frames.
+4. **Frame Management View (US4, P2)**: hold B + Crank backward in Tile View to open a list of all frames; reorder frames and delete frames (min. 1). No Layer View — layers are fixed.
 
-All features leverage existing Playdate SDK capabilities (SDK-First, Constitution I) and extend the proven Room-based navigation and PDI-based storage model (Constitutions II–IV).
+All features reuse existing SDK capabilities (SDK-First, Constitution I) and the proven Room-based navigation and PDI storage model (Constitutions II–IV).
+
+> **Third-Round clarification (2026-08-31)** replaced the earlier "1–3 optional layers with add/delete" model. Layers are now a constant of 3; empty upper layers are omitted on disk; US4 manages frames, not layers.
 
 ---
 
@@ -48,10 +51,10 @@ All features leverage existing Playdate SDK capabilities (SDK-First, Constitutio
 - Backward compatibility: existing images (pre-transparency) must load without errors
 
 **Scale/Scope**: 
-- **Max layers per frame**: FIXED at 3 layers (Layer 1 mandatory + optional Layer 2–3) per frame — hard architectural limit for backward compatibility and performance predictability
-- Max frames: already capped at 12 (Constitution IV, YAGNI)
-- Image resolution: 400×240 pixels (standard), 25×15 tiles = 375 positions per frame
-- **Backward Compatibility**: Legacy 1-layer images auto-upgrade to Layer 1 on load (no data loss)
+- **Layers per frame**: FIXED at **exactly 3, always** — a constant, not a maximum. No add/delete. Empty upper layers are omitted on disk and rebuilt on load.
+- Max frames: capped at 12 (Constitution IV, YAGNI); reorderable + deletable via US4 (min. 1)
+- Image resolution: 400×240 pixels, 25×15 tiles = 375 tile positions per layer per frame
+- **Backward Compatibility**: legacy flat images load as Layer 1 + two empty upper layers (no data loss)
 
 ---
 
@@ -73,11 +76,11 @@ All features leverage existing Playdate SDK capabilities (SDK-First, Constitutio
 
 ### ⚠️ Principle II: Native Formats & PDI
 
-**Status**: Requires Clarification → Resolved
+**Status**: Resolved
 
-**Decision**: Extend JSON metadata to include `layers` array per frame + add transparency state to pixel representation. PDI format remains unchanged (layers are logical, not physical separation). Spec 009 tile deduplication still applies per-layer.
+**Decision**: JSON metadata carries `frames[].layers[]` (1–3 on disk, 3 in memory). Transparency is **not** metadata — it is a `kColorClear` pixel inside the PDI tile, deduplicated by a 3-class tile hash (black/white/clear). PDI structure is unchanged; the sheet-compose/slice pipeline already preserves `kColorClear`.
 
-**Rationale**: Maintains compatibility with Spec 009, uses native SDK JSON serialization, requires no custom parsers.
+**Rationale**: no custom parser, no side arrays; transparency rides the native 1-bit mask; Spec 009 dedup + pruning still apply (globally across all layers).
 
 ---
 
@@ -98,11 +101,11 @@ All features leverage existing Playdate SDK capabilities (SDK-First, Constitutio
 **Status**: PASS
 
 **Justification**:
-- Layers stored per-frame (not globally), simplifying state management
-- No undo/redo system (out of scope)
-- No layer blend modes, opacity gradients, or advanced effects
-- Management view mirrors existing SelectionRoom pattern (no new UI paradigm)
-- Pixel shifting is single-direction (no rotation/flip)
+- Layers are a fixed structure of 3 (like the 12-frame cap) — no add/delete state machine, no Layer View
+- Layers stored per-frame; frame switching never changes the layer count
+- No undo/redo, no blend modes / opacity gradients
+- Frame Management View mirrors the SelectionRoom list pattern (no new UI paradigm)
+- Pixel shifting is single-direction, 1px per press (no rotation/flip)
 
 ---
 
@@ -139,26 +142,21 @@ specs/010-layer-management-with-transparency/
 ### Source Code (Playdate Lua project)
 
 ```text
-Source/
-├── Rooms/
-│   ├── TileView.lua          # MODIFY: add layer cycling Crank handler
-│   ├── ZoomView.lua          # MODIFY: add pixel shifting (B + arrows)
-│   ├── PixelView.lua         # MODIFY: add transparency (B-press)
-│   ├── LayerView.lua         # NEW: layer management view
-│   └── AnimationLayerView.lua # NEW: frame-level layer management
-├── Models/
-│   ├── ImageStore.lua        # MODIFY: add layer support
-│   ├── Layer.lua             # NEW: layer data structure
-│   └── PixelTransparency.lua # NEW: transparency state encoding
-├── ImageStoreCodec.lua       # MODIFY: extend for transparency + layers
-└── [existing modules]
+Source/                          # flat — there is NO Rooms/ or Models/ dir
+├── EditorRoom.lua               # "Tile View": layer cycling, composite cache, shift entry, B+Crank-back → US4
+├── ZoomRoom.lua                 # "Zoom View": B + arrows → shift active layer
+├── PixelRoom.lua                # "Pixel View": 3-state grid, layer-dependent off-state, B = transparent
+├── FrameManagementView.lua      # NEW (US4): list/reorder/delete frames
+├── LayerModel.lua               # NEW: plain-table frame-layer model (always 3), compositing, shift
+├── PixelTransparency.lua        # NEW: 3-code pixel state ↔ gfx colours
+├── ImageStore.lua               # MODIFY: createImage emits 3-layer frameLayers
+├── ImageStoreCodec.lua          # MODIFY: v1.1 save/load, pad-to-3, 3-class hash, layered prune
+└── main.lua                     # MODIFY: import + wire FrameManagementView
 
-tests/
-├── headless_tests.lua        # MODIFY: add layer + transparency tests
-└── layer_tests.lua           # NEW (optional): focused layer unit tests
+tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 ```
 
-**Structure Decision**: Single Playdate Lua project. Existing Room architecture extended; new dedicated Rooms added for management. Tests integrated into existing headless suite.
+**Structure Decision**: single Playdate Lua project, flat `Source/`. The three editing rooms are threaded through the active layer; one new room (`FrameManagementView`) is added. The plan's earlier `Source/Rooms/` and `Source/Models/` paths do not exist — see `tasks.md` "Implementation Notes".
 
 ---
 
@@ -166,11 +164,11 @@ tests/
 
 | Design Point | Rationale | Alternative Rejected |
 |--------------|-----------|----------------------|
-| Per-frame layers | Each frame may have different layer count | Global layers require frame ID mapping; more state |
-| Transparency as pixel state | Binary transparent/opaque sufficient for pixel art | Blend modes add complexity without user request |
-| Dedicated Management View | 10+ layers in Crank UI ergonomically poor | Inline control inadequate for reordering/deletion |
-| Layer index preservation | Reduces re-selection; consistent with animation UI | Resetting to Layer 1 disrupts workflow |
-| Management View submenu | Mirrors SelectionRoom navigation; proven pattern | Inline reordering adds interaction complexity |
+| Fixed 3 layers per frame | No add/delete state machine; matches 12-frame cap | 1–3 optional layers → needs Layer View + undefined "add layer" gesture |
+| Transparency in the tile bitmap (`kColorClear`) | Native 1-bit mask; per-pixel; dedup separates variants | Per-cell 0/1/2 array → can't do mixed-transparency cells |
+| Layer-dependent off-state (white / transparent) | User's mental model: Layer 1 has a white bg, upper layers see through | Uniform "empty" → upper layers can't see through, or Layer 1 shows app bg |
+| Flat composite cache (`imageData.frames`) | Existing tilemap draws a flat 375-array; cheap | Compositing engine / multi-tilemap → complexity + perf cost |
+| US4 = Frame Management View | Frames need reorder/delete for a real animation; layers don't | Layer management view → nothing to manage |
 
 ---
 

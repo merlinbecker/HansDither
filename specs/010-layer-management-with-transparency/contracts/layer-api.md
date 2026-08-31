@@ -1,173 +1,106 @@
-# Contract: Layer API
+# Contract: Layer & Frame API
 
 **Feature**: `specs/010-layer-management-with-transparency/`
 
-**Defines**: Public API surface for Layer entity and layer management operations
+**Updated**: 2026-08-31 (Third Round — fixed 3 layers, no add/delete; US4 = Frame Management View)
+
+Adapted to the real (flat) codebase: there is no `Source/Models/`. Helpers live in `Source/LayerModel.lua` (global `LayerModel`, plain-table model) and `Source/PixelTransparency.lua`. Rooms are `EditorRoom` (Tile View), `ZoomRoom` (Zoom View), `PixelRoom` (Pixel View), plus the new `FrameManagementView`.
 
 ---
 
-## Layer API
-
-### Layer.new(layerIndex, name, positions, transparency)
-
-**Signature**: `(number, string, array, array) → Layer`
-
-**Input**:
-- `layerIndex` (number): Zero-based position in frame
-- `name` (string): User-facing layer name
-- `positions` (array<number>): 375 tile indices
-- `transparency` (array<number>): 375 transparency states (0/1/2)
-
-**Output**: Layer object with getters/setters
-
-**Preconditions**:
-- `layerIndex >= 0`
-- `name` is non-empty, max 32 characters
-- `#positions == 375`, `#transparency == 375`
-- All transparency values in [0, 1, 2]
-
-**Postconditions**: Layer ready for use (not yet assigned to Frame)
-
----
-
-### Layer:getPositions() → array<number>
-
-**Output**: Copy of positions array (375 entries)
-
-**Contract**: Read-only access to tile indices
-
----
-
-### Layer:setPosition(index, tileIndex, transparency)
-
-**Input**:
-- `index` (number): 0–374
-- `tileIndex` (number): Tile index (0 = empty, 1..N = tile)
-- `transparency` (number): 0/1/2
-
-**Effect**: Position updated, layer marked dirty
-
----
-
-### Layer:getTransparencyAt(index) → number
-
-**Output**: Transparency state at position (0/1/2)
-
----
-
-### Layer:shift(direction) → void
-
-**Input**: `direction` (string): "up" | "down" | "left" | "right"
-
-**Effect**: Shift all pixels in layer by 1 pixel; recalculate tiles (US1 feature)
-
----
-
-## Frame API Extensions
-
-### Frame:addLayer(layerName) → Layer
-
-**Input**: `layerName` (string, max 32 chars)
-
-**Output**: New empty Layer
-
-**Effect**: Appends layer to frame's layer list
-
----
-
-### Frame:deleteLayer(layerIndex) → void
-
-**Precondition**: Frame has > 1 layer
-
-**Effect**: Remove layer, re-index layers, adjust active layer if needed
-
----
-
-### Frame:getLayerCount() → number
-
----
-
-### Frame:getLayer(layerIndex) → Layer
-
----
-
-### Frame:setActiveLayer(layerIndex) → void
-
----
-
-### Frame:getActiveLayer() → Layer
-
----
-
-## Transparency Helpers
-
-### Transparency.encode(state) → number
-**Input**: "opaque" | "transparent" | "empty"  
-**Output**: 0 | 1 | 2
-
-### Transparency.decode(byte) → string
-**Input**: 0 | 1 | 2  
-**Output**: "opaque" | "transparent" | "empty"
-
-### Transparency.isTransparent(byte) → boolean
-**Output**: True if byte == 1
-
----
-
-## Image Load/Save
-
-### Image:loadJSON(filePath) → Image
-
-**Effect**: 
-- Reads JSON (v1.0 or v1.1)
-- Auto-upgrades v1.0 to v1.1 (single opaque layer)
-- Returns Image with frames + layers
-
-**Contract**: Spec 010 backward compatibility
-
----
-
-### Image:saveJSON(filePath) → void
-
-**Effect**: Write frames + layers to JSON v1.1
-
----
-
-## Management Views
-
-### LayerView.new(frame, callback) → LayerView
-
-**Output**: Room-like object with `draw()`, `update()` methods
-
----
-
-### LayerView:getSelectedLayer() → Layer
-
----
-
-### LayerView:deleteSelectedLayer() → void
-
----
-
-## Test Validation
-
-**Headless Tests** (Constitution V):
+## Data shape
 
 ```lua
-test("Layer API: create and access", function()
-  local layer = Layer.new(0, "Test", positions, transparency)
-  assert(#layer:getPositions() == 375)
-end)
-
-test("Frame API: manage layers", function()
-  local frame = Frame.new(0, 100)
-  frame:addLayer("Layer 2")
-  assert(frame:getLayerCount() == 2)
-  frame:deleteLayer(1)
-  assert(frame:getLayerCount() == 1)
-end)
+-- frame-layer entry (runtime, 1-indexed layers[1..3])
+entry = {
+  duration = 100,
+  layers = {
+    [1] = { layerIndex = 0, name = "Layer 1", positions = {375 ints, all >= 1}, visible = true },
+    [2] = { layerIndex = 1, name = "Layer 2", positions = {375 ints, 0 = absent},  visible = true },
+    [3] = { layerIndex = 2, name = "Layer 3", positions = {375 ints, 0 = absent},  visible = true },
+  }
+}
 ```
+
+No `transparency` array. Transparent pixels are `kColorClear` inside the tiles referenced by `positions`.
 
 ---
 
-**Status**: ✅ Layer API contract defined
+## LayerModel
+
+| Function | Contract |
+|----------|----------|
+| `LayerModel.LAYER_COUNT` | `3` (constant). |
+| `LayerModel.newLayer(index0, name)` | Layer 1 → positions all `1`; Layers 2–3 → all `0`. |
+| `LayerModel.newFrameLayersFromFlat(flat, duration)` | Wraps a flat 375-array as Layer 1, pads Layers 2–3 empty → entry with **exactly 3** layers. |
+| `LayerModel.cloneFrameLayers(entry)` | Deep copy (all 3 layers). |
+| `LayerModel.padTo3(entry)` | Ensures exactly 3 layers (adds empty upper layers, trims/renumbers). |
+| `LayerModel.validate(entry)` | `true` iff exactly 3 layers, `layerIndex` 0..2, each `positions` has 375 non-negative ints, Layer 1 has no `0`. |
+| `LayerModel.compositeToFlat(entry)` | 375-array; per cell the topmost layer with `positions[c] ~= 0` wins, else `1`. |
+| `LayerModel.compositeToTiles(entry, getTile, registerTile)` | Like `compositeToFlat` but merges per-pixel where >1 layer contributes at a cell (registers merged tiles). |
+| `LayerModel.clampActive(entry, i)` | Returns `i` if `1 <= i <= 3`, else `1`. |
+| `LayerModel.cycleActive(entry, i, delta)` | Wraps in `1..3`. |
+| `LayerModel.shiftLayerContent(entry, active1, dir, getTile, registerTile)` | Shifts the layer's 400×240 pixel content by 1px (wrap), rebuilds all 375 tiles; upper-layer all-clear tiles collapse to `0`. Returns `true` on success. |
+
+**Removed**: `addLayer`, `deleteLayer` (layers are a fixed structure).
+
+---
+
+## PixelTransparency
+
+| Function | Contract |
+|----------|----------|
+| `OPAQUE=0`, `TRANSPARENT=1`, `EMPTY=2` | Internal 3-code pixel state. |
+| `encode(state) / decode(byte)` | `"opaque"/"transparent"/"empty"` ↔ `0/1/2`. |
+| `isTransparent / isOpaque / isEmpty / sanitize` | Predicates; `sanitize` clamps to `{0,1,2}` (fallback opaque). |
+| `fromColor(c) / toColor(b)` | `black↔OPAQUE`, `clear↔TRANSPARENT`, `white↔EMPTY`. |
+| `sampleState(image, x, y)` | 3-code state of a tile pixel. |
+
+Per-layer **off state**: Layer 1 → `EMPTY` (renders white); Layers 2–3 → `TRANSPARENT` (renders `kColorClear`). The Pixel/Zoom/Tile edit paths pass this to the room.
+
+---
+
+## EditorRoom (Tile View)
+
+| Method | Contract |
+|--------|----------|
+| `EditorRoom:getImageData()` | `{id, name, imagetable, frames (flat composite cache), frameLayers (3 layers/frame), activeLayer (1..3), hashIndex}`. |
+| `EditorRoom:getActiveLayerInfo()` | `{index, count=3, name}` for the HUD indicator (FR-015). |
+| `EditorRoom:shiftActiveLayer(dir)` | US1 entry point; shifts + re-composites; returns `true` on success. |
+| `EditorRoom:currentZoomContext()` | Fresh 3×3 context at the cursor (for ZoomRoom after a shift). |
+| Up/Down held + 360° Crank | Cycles `activeLayer` (FR-013/014/017); Crank alone still cycles frames (FR-016). |
+| B held + Crank **backward** | Opens the Frame Management View (FR-018). |
+
+Edits (`setCell`, `applyTileEdits`) route through `writeActiveLayerPosition`: on Layers 2–3 a write of the white tile `1` becomes `0` (absent), so the eraser stays a see-through eraser.
+
+---
+
+## FrameManagementView (US4)
+
+| Method / Input | Contract |
+|----------------|----------|
+| `FrameManagementView:init(switchRoom, editorRoom)` | Wiring. |
+| `FrameManagementView:setImageData(imageData)` | Receives the live `imageData` from EditorRoom on entry. |
+| D-Pad Up/Down | Move the list cursor over frame entries. |
+| A | Mark the frame under the cursor. |
+| Left / Right (frame marked) | Move the marked frame one slot earlier / later; clamped at the ends; `frameLayers` and the `frames` cache move together. |
+| B tap (frame marked) | Delete the marked frame; **rejected if only 1 frame remains**. |
+| B released | `switchRoom(editorRoom)`; `currentFrame` clamped into the new sequence. |
+
+No Layer View, no per-frame layer submenu (FR-023).
+
+---
+
+## Storage (ImageStoreCodec)
+
+| Function | Contract |
+|----------|----------|
+| `newSaveOperation(imageData)` | Prefers `imageData.frameLayers`; writes v1.1 via `createFramesTableV11`. Empty Layers 2–3 omitted. Preview + frame count from the flat composite. |
+| `newLoadOperation(id)` | Structure-detects v1.0/v1.1; upgrades flat → Layer 1; **pads every frame to 3 layers**; returns `frames` (composite) + `frameLayers` + `activeLayer=1`. |
+| `createFramesTableV11(name, frameLayers, tileCount)` | v1.1 JSON; each frame `{frameIndex, duration, layers[1..3, empty upper omitted]}`. |
+| `pruneUnusedTilesLayered(imagetable, frameLayers, tileCount)` | Global prune across all layers of all frames; `(newImagetable, newFrameLayers, newCount)`. |
+| `hashTile` / `imagesVisiblyEqual` | 3-class (black / white / clear). |
+
+---
+
+**Status**: ✅ Updated for Third-Round clarification.

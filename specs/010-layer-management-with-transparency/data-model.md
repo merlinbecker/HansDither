@@ -10,105 +10,90 @@
 
 ## Overview
 
-This data model extends Spec 009's storage format to include per-frame layers and pixel transparency metadata. All entities are stored in JSON (frame-level metadata) + PDI (deduplicated tile sheet, unchanged).
+This data model extends Spec 009's storage format with a **fixed 3-layer structure per frame**. Per-pixel transparency is **not** stored as metadata — it lives directly in the 16×16 tile bitmap as `gfx.kColorClear` and is deduplicated by a 3-class tile hash (black / white / clear). All frame/layer structure is stored in JSON; the PDI tile sheet is unchanged.
+
+> **Third-Round clarification (2026-08-31):** every frame has **exactly 3 layers, always** — no add/delete. Layer 1's non-ink pixels are white; Layers 2–3's are transparent. There is no per-cell `transparency` array. An empty Layer 2/3 is omitted from the saved file and rebuilt on load. US4 is a Frame Management View (reorder + delete frames).
 
 ---
 
 ## Entity: Layer
 
-**What it represents**: A drawable canvas within a frame, containing pixel positions and transparency states.
+**What it represents**: One of a frame's **three fixed** drawable canvases.
 
 **Attributes**:
-- `layerIndex` (number): Zero-based layer position within frame (0 = bottom, N-1 = top)
-- `name` (string): User-friendly layer name (e.g., "Background", "Character", "Effects")
-- `positions` (array<number>): 375 integers representing tile indices at each frame position (25×15 grid)
-  - Range: `0` = empty position, `1..N` = tile index in imagetable
-  - Invariant: Must have exactly 375 entries (no exceptions)
-  - Relationship: Each position references a tile from the shared PDI imagetable
-- `transparency` (array<number>): 375 bytes representing per-position transparency state
-  - `0` = opaque (drawn, opaque pixel)
-  - `1` = transparent (drawn, transparent pixel)
-  - `2` = empty (not drawn, reserved/unset)
-  - Invariant: Must have exactly 375 entries matching `positions` array length
-  - Relationship: Controls rendering alpha for corresponding position; metadata only (not part of tile data)
-- `visible` (boolean, optional): Whether layer is rendered. Default: `true`. Used by management view.
+- `layerIndex` (number): stacking slot, `0` = bottom/base, `1`–`2` = above. Always exactly {0, 1, 2} per frame.
+- `name` (string): "Layer 1" / "Layer 2" / "Layer 3" by default.
+- `positions` (array<number>): 375 tile indices (25×15 grid).
+  - `0` = **absent** (this layer contributes nothing at this cell — lower layers show through). Only Layers 2–3 use `0`.
+  - `1` = the white base tile (Layer 1's "off" state).
+  - `1..N` = a tile in the shared PDI imagetable. That tile may itself contain `kColorClear` (transparent) pixels.
+  - Invariant: exactly 375 entries.
+- `visible` (boolean, optional): default `true`. (Reserved; no UI toggles it in this spec.)
+
+There is **no `transparency` array.** Per-pixel transparency is a property of the referenced tile (a `kColorClear` pixel), not of the layer.
 
 **Relationships**:
-- **Frame**: Layer belongs to exactly one Frame (parent-child)
-- **ImageTable (PDI)**: Layer's positions reference tiles from shared imagetable (N-to-1 relationship)
+- **Frame**: exactly one Frame has exactly three Layers.
+- **ImageTable (PDI)**: non-zero positions reference shared tiles (N-to-1).
 
 **Validation Rules**:
-- Layer name must be non-empty string, max 32 characters
-- `layerIndex` must be unique within frame (0 ≤ index < frame.layer_count)
-- `positions` and `transparency` arrays must be exactly 375 elements
-- Transparency value must be in range [0, 1, 2]
-- Position value must be in range [0, tile_count] where tile_count is max index in imagetable
+- `positions` is exactly 375 non-negative integers.
+- Layer 1 (`layerIndex 0`): every position ≥ 1 (no `absent`).
+- Layers 2–3: positions in `0 .. tile_count`.
+- A frame has exactly three layers with `layerIndex` 0, 1, 2 in order.
 
 **State Transitions**:
-- **Created**: Layer initialized with empty positions (all 0) and empty transparency (all 2)
-- **Edited**: User draws in Pixel View or shifts content in Zoom View → positions and transparency updated
-- **Active**: When user holds Up/Down + Crank to cycle → this layer is highlighted in Tile View, editable in Zoom/Pixel
-- **Deleted**: User confirms delete in Management View → layer removed from frame, layer indices below adjusted
+- **Created**: Layer 1 = all `1` (white); Layers 2–3 = all `0` (absent/empty).
+- **Edited**: only the *active* layer changes. On Layer 1 the eraser writes `1` (white); on Layers 2–3 it writes `0` (absent). A pixel-level transparent write produces a tile with `kColorClear` pixels.
+- **Active**: selected via Up/Down + Crank; highlighted in the Tile View HUD; the only editable layer in Zoom/Pixel.
+- *(No "Deleted" transition — layers cannot be deleted.)*
 
 ---
 
 ## Entity: Pixel
 
-**What it represents**: A single drawable unit in Pixel View (16×16 grid of pixels per tile).
+**What it represents**: A single pixel of a 16×16 tile, edited in Pixel View.
 
 **Attributes**:
-- `x` (number): Horizontal position within 16×16 pixel grid (0–15)
-- `y` (number): Vertical position within 16×16 pixel grid (0–15)
-- `color` (number): Playdate color (0 = black, 1 = white, from SDK)
-- `transparency` (number): State of this pixel
-  - `0` = opaque (user drew with A-press)
-  - `1` = transparent (user drew with B-press)
-  - `2` = empty (not drawn)
+- `x`, `y` (number): position in the 16×16 grid (0–15)
+- `state` (enum): `ink` (black), or the layer's non-ink state — `white` on Layer 1, `transparent` (`kColorClear`) on Layers 2–3
+
+Internally the editor tracks three codes (`PixelTransparency`: `OPAQUE=0`, `TRANSPARENT=1`, `EMPTY=2`) so the same grid model serves both layer kinds; per layer only two of them are reachable.
 
 **Relationships**:
-- **Tile**: Collection of 256 pixels (16×16) forms one Tile
-- **Layer**: Pixels belong to one layer (via parent tile)
+- **Tile**: 256 pixels form one Tile; the tile bitmap *is* the storage (no side array).
+- **Layer**: a tile belongs to the active layer.
 
-**Validation Rules**:
-- `x` and `y` must be in range [0, 15]
-- `color` must be 0 or 1 (Playdate native colors)
-- `transparency` must be in range [0, 1, 2]
-
-**State Transitions**:
-- **Empty** (transparency = 2): Initial state, not drawn
-- **Opaque** (transparency = 0): User presses A in Pixel View → becomes opaque, color set to black
-- **Transparent** (transparency = 1): User presses B in Pixel View → becomes transparent, color irrelevant
-- **Erased**: User presses Y/delete in Pixel View → returns to Empty (transparency = 2)
+**State Transitions** (Pixel View):
+- **A-press**: toggles `ink` ↔ the layer's non-ink state (eraser behaviour, Spec 008)
+- **B-press**: sets the layer's non-ink state (white on Layer 1, transparent on Layers 2–3)
+- There is **no Y button** on Playdate hardware; "empty from transparent" is A (→ ink) then A (→ non-ink)
 
 ---
 
 ## Entity: Frame
 
-**What it represents**: A single animation frame, containing one or more layers.
+**What it represents**: A single animation frame with exactly three layers.
 
 **Attributes**:
-- `frameIndex` (number): Zero-based frame position in animation (0 ≤ index < 12)
-- `duration` (number): Display duration in milliseconds (default: 100 ms)
-- `layers` (array<Layer>): All layers in this frame, ordered by layerIndex (0 = bottom, N-1 = top)
+- `frameIndex` (number): position in the animation sequence (0-based on disk). Reorderable / deletable via the Frame Management View.
+- `duration` (number): display duration in ms (default 100).
+- `layers` (array<Layer>): **exactly 3** in memory, ordered by `layerIndex` 0→2.
 
 **Relationships**:
-- **Image**: Frame belongs to exactly one Image (N-to-1 relationship)
-- **Layer**: Frame contains 1..N layers (1-to-N relationship)
-- **ActiveLayer**: Reference to the currently editable Layer (always exists, stored in EditorState)
+- **Image**: an Image has 1–12 Frames in order.
+- **Layer**: a Frame has exactly 3 Layers.
+- **ActiveLayer**: a session-only 1..3 index held by the editor (not persisted).
 
 **Validation Rules**:
-- `frameIndex` must be unique within image (0 ≤ index < frame_count, max 12 per Constitution IV)
-- `duration` must be positive integer (> 0)
-- **`layers` array must have exactly 1–3 layers per frame** (HARD LIMIT, updated per Clarifications):
-  - Layer at layerIndex 0 is MANDATORY (base layer, always exists)
-  - Layers at layerIndex 1 and 2 are OPTIONAL
-  - System MUST prevent creation of layerIndex ≥ 3
-  - Total: min 1 layer (legacy images), max 3 layers (new images)
+- `duration` > 0.
+- Exactly 3 layers in memory (`layerIndex` 0, 1, 2). On disk a frame may carry **1–3** layer entries; missing upper layers are empty and are re-added on load.
+- Image frame count 1–12.
 
 **State Transitions**:
-- **Created**: Frame initialized with single default Layer (Layer 1)
-- **Active**: When user is viewing/editing this frame (selected via Crank in Tile View)
-- **Animated**: When frame cycle is running (cycling through frames via Crank without Up/Down held)
+- **Created**: Layer 1 = white, Layers 2–3 = empty.
+- **Active**: selected via Crank in Tile View.
+- **Reordered / Deleted**: via the Frame Management View (min. 1 frame remains).
 
 ---
 
@@ -120,264 +105,130 @@ This data model extends Spec 009's storage format to include per-frame layers an
 - `tileCount` (number): Total tiles in imagetable (stored in PDI, referenced here for validation)
 
 **Relationships**:
-- **PDI File**: External imagetable file containing deduplicated tiles (referenced by all positions)
-- **JSON File**: This metadata (frames, layers, transparency) stored here
+- **PDI File**: external imagetable of deduplicated 16×16 tiles (referenced by every non-zero position). Tiles carry ink/white/clear pixels.
+- **JSON File**: `version`, `tileCount`, `frames[].{frameIndex, duration, layers[]}`.
 
 **Validation Rules**:
-- `version` must be "1.1" (or auto-upgraded from "1.0")
-- `frames` must have 1–12 entries
-- All frames must have unique, consecutive frameIndex values
-- Total pixel memory: (frame_count × layer_count × 375 × 2 bytes) = manageable on Playdate (12 frames × 3 layers × 750 bytes = ~27 KB)
+- `version` "1.1" (or number `1` / `"1.0"` / absent → treated as v1.0 and upgraded).
+- 1–12 frames, in sequence order.
+- Metadata size: 12 frames × 3 layers × 375 tile indices ≈ negligible.
 
 ---
 
 ## Storage Format
 
-### JSON Schema (Spec 009 + Layer Extension)
+### JSON Schema v1.1
 
 ```json
 {
   "version": "1.1",
+  "tileCount": 24,
   "frames": [
     {
       "frameIndex": 0,
       "duration": 100,
       "layers": [
-        {
-          "layerIndex": 0,
-          "name": "Background",
-          "positions": [1, 1, 2, 2, 3, 3, ...],  // 375 entries
-          "transparency": [0, 0, 0, 0, 0, 0, ...], // 375 entries
-          "visible": true
-        },
-        {
-          "layerIndex": 1,
-          "name": "Character",
-          "positions": [0, 0, 5, 6, 0, 0, ...],  // 375 entries
-          "transparency": [2, 2, 0, 0, 2, 2, ...]  // 375 entries
-        }
-      ]
-    },
-    {
-      "frameIndex": 1,
-      "duration": 100,
-      "layers": [
-        {
-          "layerIndex": 0,
-          "name": "Background",
-          "positions": [1, 1, 2, 2, ...],
-          "transparency": [0, 0, 0, 0, ...]
-        }
+        { "layerIndex": 0, "name": "Layer 1", "positions": [1, 1, 2, 2, ...], "visible": true },
+        { "layerIndex": 1, "name": "Layer 2", "positions": [0, 0, 5, 6, ...], "visible": true }
       ]
     }
   ]
 }
 ```
 
-### Backward Compatibility (v1.0 → v1.1 Upgrade)
+- `layers` carries **1–3 entries**. A fully-empty Layer 2 or 3 (all positions `0`) is **omitted**; the loader pads every frame back to exactly 3 layers.
+- No `transparency` field. Transparent pixels are `kColorClear` inside the tiles referenced by `positions`.
 
-Old format (Spec 009):
-```json
-{
-  "version": "1.0",
-  "frames": [
-    {
-      "frameIndex": 0,
-      "positions": [1, 1, 2, 2, ...],
-      "duration": 100
-    }
-  ]
-}
-```
+### Backward Compatibility (v1.0 → v1.1)
 
-**Automatic Upgrade on Load**:
-```json
-{
-  "version": "1.1",
-  "frames": [
-    {
-      "frameIndex": 0,
-      "duration": 100,
-      "layers": [
-        {
-          "layerIndex": 0,
-          "name": "Layer 1",
-          "positions": [1, 1, 2, 2, ...],  // copied from old "positions"
-          "transparency": [0, 0, 0, 0, ...]  // all zeros (opaque)
-        }
-      ]
-    }
-  ]
-}
-```
+Old (Spec 009): `frames` is an array of flat 375-entry arrays, or of `{frameIndex, positions, duration}`. Detected by `frames[1]` **not** having a `.layers` table.
 
-**Rationale**: Users don't notice conversion; next save updates file version automatically.
+On load: each flat frame becomes `{duration, layers:[{layerIndex:0, name:"Layer 1", positions:<copied>, visible:true}]}`, then **padded to 3 layers** (Layers 2–3 all `0`). Next save writes v1.1 (still one layer entry on disk).
 
 ---
 
 ## PDI Format (Unchanged from Spec 009)
 
-**File**: `{base}.pdi` (where `base` is client_image_id or UUID per Spec 009)
+Deduplicated 16×16 tile imagetable. **New**: tiles may contain `kColorClear` pixels; `ImageStoreCodec.hashTile` / `imagesVisiblyEqual` classify each pixel as black / white / clear so transparency-bearing tiles dedupe separately from their opaque lookalikes. The sheet-compose / slice pipeline already uses `kColorClear` backgrounds and preserves transparent pixels unchanged.
 
-**Contents**: Deduplicated tile imagetable (16×16 pixel tiles, indexed)
-
-**Relationship to Layer Model**:
-- All layers reference the same PDI imagetable
-- Tile indices in `Layer.positions` point into this imagetable
-- Tiles are deduplicated across all frames and layers (Spec 009 pruning applies per-layer)
-
-**No changes** to PDI structure (layers are logical, not physical separation).
+Pruning (`pruneUnusedTilesLayered`) runs **globally across all layers of all frames** — a tile referenced by any (frame, layer) is kept.
 
 ---
 
 ## State Machine: Active Layer During Editing
 
-**Current Frame State**:
-```
-Frame {
-  activeLayerIndex: 0,  // User is editing this layer
-  layers: [
-    Layer 1 (Background),
-    Layer 2 (Character) <- activeLayerIndex = 1
-  ]
-}
-```
+**Runtime state**: the editor holds a single `activeLayer` (1..3), clamped to the frame's 3 layers. It is **not** persisted.
 
 **Transitions**:
 
-1. **Crank + Up pressed**: `activeLayerIndex = (activeLayerIndex + 1) % layer_count`
-   - Cycle forward: Layer 1 → Layer 2 → Layer 3 → Layer 1 (max 3 layers, wraparound guaranteed)
-
-2. **Crank + Down pressed**: `activeLayerIndex = (activeLayerIndex - 1 + layer_count) % layer_count`
-   - Cycle backward: Layer 1 → Layer 3 → Layer 2 → Layer 1 (max 3 layers, wraparound guaranteed)
-
-3. **Frame switch** (Crank without Up/Down):
-   - Preserve `activeLayerIndex` if it exists in new frame
-   - If `activeLayerIndex >= newFrame.layer_count`, set to 0 (wrap-around per research.md R4, ensures max 3 is never exceeded)
-
-4. **Layer deleted** (Management View):
-   - Layer 1 cannot be deleted (error/prevent in UI)
-   - If Layer 2 or 3 is deleted and is active, switch to activeLayerIndex - 1 (or Layer 1 if last remaining)
-   - Adjust all remaining layers' `layerIndex` values to fill gap (0, 1, 2 remain consecutive)
+1. **Up held + 360° Crank**: `activeLayer = activeLayer % 3 + 1` (forward, Layer 1→2→3→1).
+2. **Down held + 360° Crank**: `activeLayer = (activeLayer + 1) % 3 + 1` (backward, Layer 1→3→2→1).
+3. **Frame switch** (Crank, no Up/Down): `activeLayer` unchanged — every frame has all 3 layers. A defensive `clampActive` to Layer 1 only fires on corrupt data.
+4. *(No "layer deleted" transition.)*
 
 ---
 
 ## Key Invariants
 
-**Must Always Hold**:
+1. **Fixed Layer Count**: every frame in memory has exactly 3 layers, `layerIndex` 0, 1, 2.
+2. **Position Array**: every layer's `positions` has exactly 375 entries.
+3. **Layer 1 Opacity**: Layer 1's positions are all ≥ 1 (never `0`/absent).
+4. **Tile Validity**: every non-zero position references a valid imagetable index.
+5. **Frame Count**: 1–12 frames, kept in sequence order.
+6. **No transparency array**: transparency is only ever a `kColorClear` pixel inside a tile.
 
-1. **Layer Completeness**: Every frame has at least 1 layer
-2. **Position Array**: Every layer's `positions` array has exactly 375 entries
-3. **Transparency Array**: Every layer's `transparency` array has exactly 375 entries, matching `positions` length
-4. **Layer Index Uniqueness**: All layers in a frame have unique `layerIndex` values (0, 1, 2, ...)
-5. **Tile Validity**: All non-zero positions in any layer reference valid tile indices in imagetable
-6. **Frame Index Uniqueness**: All frames have unique `frameIndex` values (0, 1, 2, ..., up to 12)
-
-**Verification** (Constitution III—arc42 & testing):
-- Data model invariants tested in headless tests (R8)
-- Load/save functions validate all invariants on round-trip
-- arc42 Chapter 7 documents data structure integrity checks
+**Verification**: headless tests + save/load round-trip; arc42 ch. 8 documents the integrity checks.
 
 ---
 
 ## Example: Three-Layer Frame
 
-**Visual**:
 ```
-Layer 3 (Effects): Particles, overlays
-  positions: [0, 0, 10, 0, 0, 0, ...]
-  transparency: [2, 2, 0, 2, 2, 2, ...]
-  
-Layer 2 (Character): Main sprite
-  positions: [0, 5, 6, 7, 0, 0, ...]
-  transparency: [2, 0, 0, 0, 2, 2, ...]
-  
-Layer 1 (Background): Static tiles
-  positions: [1, 1, 2, 2, 1, 1, ...]
-  transparency: [0, 0, 0, 0, 0, 0, ...]
+Layer 3: positions [0, 0, 10, 0, 0, ...]   (mostly absent)
+Layer 2: positions [0, 5,  6, 7, 0, ...]
+Layer 1: positions [1, 1,  2, 2, 1, ...]   (never 0)
 ```
 
-**Rendered** (Tile View, all layers composited):
-- Position (0,0): Layer 1 tile 1 (opaque) — shown
-- Position (0,1): Layers 1&2 → Layer 2 tile 5 (opaque) overwrites Layer 1 tile 1 — shown as Layer 2
-- Position (0,2): Layers 1,2,3 → Layer 3 tile 10 (opaque) overwrites below — shown as Layer 3
-- Position (0,3): Layers 1&3 → Layer 3 empty, Layer 1 tile 2 (opaque) — shown as Layer 1
+**Composited (flat cache)** — per cell, the topmost layer with a non-zero position wins:
+- cell 0: only Layer 1 → tile 1
+- cell 1: Layer 2 → tile 5
+- cell 2: Layer 3 → tile 10
+- cell 3: Layer 2 → tile 7 (Layer 3 absent here)
 
-**Edited** (Zoom/Pixel View, active layer only):
-- If active layer = Layer 2 (Character), user only sees and edits positions where Layer 2 has content (indices 1–3 in above example)
+A tile referenced by an upper layer may itself contain `kColorClear` pixels; where it does, the composited tile is a **merged** tile (upper non-clear pixels over the lower layer) with its own deduplicated index. Cells where only one layer contributes keep that layer's tile index unchanged.
+
+**Edited** (Zoom/Pixel View): only `activeLayer`'s positions change; the flat cache is regenerated per edited cell.
 
 ---
 
 ## Migration Example: Spec 009 → Spec 010
 
-**Input** (Spec 009 JSON):
-```json
-{
-  "version": "1.0",
-  "frames": [
-    {
-      "frameIndex": 0,
-      "positions": [1, 1, 2, 2, 3, 3, ...],
-      "duration": 100
-    }
+**Input** (Spec 009, flat): `{ "version": 1, "tileCount": 3, "frames": [ [1,1,2,2,3,...] ] }`
+
+**In memory after load**:
+```
+Frame 0 {
+  duration 100,
+  layers: [
+    { layerIndex 0, "Layer 1", positions [1,1,2,2,3,...] },   // from the flat array
+    { layerIndex 1, "Layer 2", positions [0,0,0,...] },        // padded, empty
+    { layerIndex 2, "Layer 3", positions [0,0,0,...] },        // padded, empty
   ]
 }
 ```
 
-**Output** (after auto-upgrade on load):
-```json
-{
-  "version": "1.1",
-  "frames": [
-    {
-      "frameIndex": 0,
-      "duration": 100,
-      "layers": [
-        {
-          "layerIndex": 0,
-          "name": "Layer 1",
-          "positions": [1, 1, 2, 2, 3, 3, ...],
-          "transparency": [0, 0, 0, 0, 0, 0, ...]
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Behavior**: User opens image → sees it unchanged (all opaque pixels) → can now add layers and transparency → next save updates file to v1.1
+**Next save** writes v1.1 with a single layer entry (empty Layers 2–3 omitted). User sees no change.
 
 ---
 
-## Testing Validation
+## Testing Validation (headless)
 
-**Headless Tests** (Constitution V):
-
-```lua
--- Data Model Invariants
-test("Frame invariant: every frame has at least 1 layer", function()
-  -- create frame, verify layer_count >= 1
-end)
-
-test("Layer invariant: positions and transparency arrays are 375 entries", function()
-  -- create layer, verify #positions == 375 and #transparency == 375
-end)
-
-test("Transparency value range: [0, 1, 2]", function()
-  -- iterate all transparency values, verify in valid range
-end)
-
--- Round-Trip (Save → Load)
-test("Save v1.1 and load: layer structure preserved", function()
-  -- create 3-layer frame, save, load, verify all layers + transparency states intact
-end)
-
--- Backward Compatibility
-test("Load v1.0 JSON: auto-upgrade to v1.1 with opaque transparency", function()
-  -- load old format, verify upgraded, all transparency = 0
-end)
-```
+- `LayerModel` always yields exactly 3 layers; `validate` rejects ≠ 3.
+- Save/load round-trip: layer positions + frame order + duration preserved; empty upper layers omitted on disk and rebuilt on load.
+- v1.0 flat load → 3 layers, Layer 1 from the flat array, 2–3 empty.
+- 3-class `hashTile`: white-bg vs. transparent-bg tiles hash differently; legacy black/white tiles unchanged.
+- Frame reorder / delete round-trips; delete rejected at 1 frame.
 
 ---
 
-**Status**: ✅ Data model complete — Ready for contract definition and quickstart scenarios
+**Status**: ✅ Data model updated for the Third-Round fixed-3-layer clarification.
