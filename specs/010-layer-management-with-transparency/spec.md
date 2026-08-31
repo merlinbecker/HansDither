@@ -127,7 +127,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 - **Fixed Layer Count**: Every frame has exactly 3 layers, always. There is no gesture or UI to add or remove a layer (Clarifications, Third Round)
 - **B + D-Pad vs. cursor / stroke**: While B is held the D-Pad switches layer/frame and does **not** move the tile cursor; a short B-tap with no D-Pad or Crank in between is still the eyedropper. If B is pressed *after* a direction key is already held, the cursor freezes rather than fighting the navigation
 - **Tile Picker with one tile**: If the image references only tile 1, the picker still opens but every step resolves to "no selection"; nothing crashes
-- **Tile Picker & session tiles**: The picker lists tiles referenced across all frames' composite caches, not `imagetable:getLength()` — orphaned session tiles (appended by edits, pruned only on save) are skipped
+- **Tile Picker & session tiles**: The picker lists tiles referenced across all frames' **layer positions** (not `imagetable:getLength()`, and not the flat composite cache) — orphaned session tiles (appended by edits, pruned only on save) are skipped, while a tile that only exists on a covered layer stays selectable
 - **Deleting the Last Frame**: The Frame Management View rejects deleting a frame when only one frame remains
 - **Reordering at the Ends**: Moving the first frame Left, or the last frame Right, is a no-op (clamped)
 
@@ -169,7 +169,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 **Tile Picker & Eyedropper Feedback (US5)**
 
 - **FR-025**: Turning the Crank in Tile View **without B held** MUST open a tile-picker overlay (a filmstrip of the tiles actually referenced in the image) and set it as the active drawing tile; each ~30° of net rotation moves the selection one tile further, wrapping at the list ends. The overlay auto-hides ~1.5 s after the last rotation
-- **FR-026**: The tile picker MUST iterate only tiles actually referenced by the image (as `buildPauseMenuImage` does), never raw imagetable slots; selecting tile index 1 (white) MUST mean "no selection" (toggle mode), consistent with the eyedropper
+- **FR-026**: The tile picker MUST iterate only tiles actually referenced by the image — scanning the **layer positions** (`frameLayers[*].layers[*].positions`, skipping `0`), not the flat composite cache and not raw imagetable slots. (The composite cache keeps only the topmost tile per cell, so a tile that lives solely on a covered layer would drop out of the list and could vanish mid-session when a higher layer covers its cell.) Index 1 (white) is always in the list and MUST mean "no selection" (toggle mode), consistent with the eyedropper
 - **FR-027**: When the eyedropper (short B-tap on a tile) fires, the Bauchbinde MUST briefly show **"Tile N picked"** (the tile's index) for ~1.5 s, then revert to the frame/layer label
 
 **Frame Management View (US4)**

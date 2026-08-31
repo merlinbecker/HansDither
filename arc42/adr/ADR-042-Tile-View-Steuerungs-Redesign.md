@@ -61,13 +61,20 @@ Der Test auf echter Hardware zeigte drei Probleme:
   `getCrankChange()` + `crankAccumDegrees`-Akkumulator mit **Sub-360°-
   Schwelle** (`PICKER_DEGREES_PER_TILE = 30`). CR-01 bleibt gewahrt, da
   If/Else.
-- `referencedTileIndices()` scannt `imageData.frames` (die flachen
-  Composite-Caches) wie `EditorRoom:buildPauseMenuImage` (CR-06) — **nicht**
-  `imagetable:getLength()`. Sitzungs-Edits haengen neue Tiles an und
-  verwaisen alte; erst das Speichern (`pruneUnusedTilesLayered`) raeumt
-  auf. Index 1 (Weiss) ist immer referenziert → „keine Auswahl“
-  (`activeTile = nil`, Toggle-Modus) ist stets erreichbar, konsistent zur
-  Pipette.
+- `referencedTileIndices()` scannt die **Ebenen-Positionen**
+  (`frameLayers[*].layers[*].positions`, `0` uebersprungen) — **nicht** den
+  flachen Composite-Cache `imageData.frames` und **nicht**
+  `imagetable:getLength()`. Der Composite-Cache behaelt je Zelle nur die
+  oberste Kachel (`compositeToFlat`); eine Kachel, die nur auf einer
+  verdeckten Ebene liegt, fiele daraus heraus und koennte mitten in der
+  Sitzung verschwinden, sobald eine hoehere Ebene die Zelle abdeckt.
+  `imagetable:getLength()` ist ebenfalls falsch (Sitzungs-Edits haengen
+  neue Tiles an und verwaisen alte; erst das Speichern
+  `pruneUnusedTilesLayered` raeumt auf). Index 1 (Weiss) ist immer in der
+  Liste → „keine Auswahl“ (`activeTile = nil`, Toggle-Modus) stets
+  erreichbar, konsistent zur Pipette. (`buildPauseMenuImage` scannt bewusst
+  den Composite-Cache — es zeigt eine Vorschau des *Dargestellten*; der
+  Picker braucht das *Auswaehlbare*.)
 - **`bNavConsumed`** wird in `bDpadNav()` gesetzt und **nur** in
   `BButtonDown`/`BButtonUp` zurueckgesetzt — nie aus dem Live-Tastenzustand
   beim Release abgeleitet (der Nutzer kann die Richtungstaste vor B

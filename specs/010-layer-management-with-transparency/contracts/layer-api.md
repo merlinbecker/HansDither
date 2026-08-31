@@ -70,7 +70,7 @@ Per-layer **off state**: Layer 1 → `EMPTY` (renders white); Layers 2–3 → `
 | `EditorRoom:currentZoomContext()` | Fresh 3×3 context at the cursor (for ZoomRoom after a shift). |
 | **B held + Up / Down** | Cycles `activeLayer` +1 / -1 with wrap (FR-013/014/017). Single press = single step. |
 | **B held + Left / Right** | Steps the animation frame prev / next (FR-016); **B + Right on the last frame** appends a new frame (deep copy). |
-| **Crank, no B** | Opens the tile picker: `referencedTileIndices()` (referenced tiles only, like `buildPauseMenuImage`) stepped ~1 per 30° with wraparound; sets `activeTile` (index 1 → `nil`); overlay auto-hides ~1.5 s after the last turn (FR-025/026). |
+| **Crank, no B** | Opens the tile picker: `referencedTileIndices()` scans the **layer positions** (`frameLayers[*].layers[*].positions`, skipping `0`) — not the composite cache, so covered-layer tiles stay reachable — stepped ~1 per 30° with wraparound; sets `activeTile` (index 1 → `nil`); overlay auto-hides ~1.5 s after the last turn (FR-025/026). |
 | Short **B-tap** | Eyedropper; `pipette()` sets `activeTile` and shows "Tile N picked" in the Bauchbinde for ~1.5 s (FR-027). Suppressed if B was used for zoom (`bUsedForZoom`) or B + D-Pad nav (`bNavConsumed`). |
 | B held + Crank **backward** | Opens the Frame Management View (FR-018) — unchanged by the Fourth-Round redesign. |
 

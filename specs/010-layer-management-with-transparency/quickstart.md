@@ -224,7 +224,8 @@ Then repeat on **Layer 1**: B-press produces **white** (identical to the A-erase
 
 **Acceptance Criteria**:
 - ✅ Crank (no B) opens the tile picker and cycles the referenced tiles with wraparound
-- ✅ The picker never shows orphaned session tiles (only tiles referenced across frames)
+- ✅ The picker never shows orphaned session tiles (only tiles referenced in the layer positions)
+- ✅ A tile that exists only on a layer covered by a higher layer is still reachable in the picker (and does not disappear when the higher layer covers its cell)
 - ✅ Overlay auto-hides ~1.5 s after the last rotation; the selection persists as the active tile
 - ✅ Eyedropper shows "Tile N picked" for ~1.5 s
 - ✅ A B-release that followed a B + D-Pad navigation does not fire the eyedropper
@@ -279,7 +280,7 @@ pdc Source "Hans Dither.pdx"
 | Frame Management View doesn't open | B + Crank-backward not bound in `EditorRoom.handleCrank` | Check the `zoomTickAccu <= -ZOOM_TICK_THRESHOLD` branch (B-held branch) |
 | B + Up/Down or B + Left/Right doesn't switch layer/frame | `*ButtonDown` handler not checking `buttonIsPressed(kButtonB)` before `startMove` | Check `EditorRoom:inputHandler` — B-held routes to `bDpadNav` |
 | Crank does nothing / no tile-picker overlay | no-B branch of `handleCrank` not accumulating into `crankAccumDegrees`, or `pickerVisible` never set | Check `handleCrank` else-branch + `drawTilePickerOverlay` gate in `draw()` |
-| Tile picker cycles through blank/garbage tiles | iterating `imagetable:getLength()` instead of referenced indices | `referencedTileIndices()` must scan `imageData.frames` like `buildPauseMenuImage` (CR-06) |
+| Tile picker cycles through blank/garbage tiles, or a drawn tile is unreachable | iterating `imagetable:getLength()`, or scanning the flat composite cache (drops covered-layer tiles) | `referencedTileIndices()` must scan `frameLayers[*].layers[*].positions` (skip `0`), keeping index 1 |
 | B-tap after B + D-Pad also picks a tile | `bNavConsumed` not latched in `bDpadNav`, or derived from live button state | Set it inside `bDpadNav`; clear only in `BButtonDown`/`BButtonUp` |
 | "Tile N picked" never disappears | no timeout-transition redraw for `pickMessage` | Mirror the `bauchbindeVisible` pattern in `update()` |
 | Transparent pixels render as white | Tile built without `kColorClear`, or `hashTile` not 3-class | Check `PixelRoom.buildTileImage` + `ImageStoreCodec.hashTile` |
