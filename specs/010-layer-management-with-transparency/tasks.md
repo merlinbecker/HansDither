@@ -52,7 +52,7 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
   Edit auf Ebene 2 → Save → Reload → Edit auf Ebene 2, Ebene 1 unberührt.
 - **Phase 4** (T016–T024, US2 Transparenz in PixelRoom) ✅ — buildNumber 15 → 16.
 - **Phase 5** (T025–T032, US3 Layer-Cycling in EditorRoom) ✅ — buildNumber 16 → 17.
-- **Phase 3** (T010–T015, US1 Pixel-Shift in ZoomRoom) — offen.
+- **Phase 3** (T010–T015, US1 Pixel-Shift in ZoomRoom) ✅ — buildNumber 17 → 18.
 - **Phase 6** (T033–T043, US4 Management-Views) — offen.
 - **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
 
@@ -148,23 +148,23 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 ### Control Binding (Zoom View)
 
-- [ ] T010 [US1] Modify ZoomView.update() to detect B-press + arrow key combination. When B held and directional key pressed (Up/Down/Left/Right), call Layer:shift(direction). File path: `Source/Rooms/ZoomView.lua`
+- [X] T010 [US1] `ZoomRoom:inputHandler` — Pfeil-`*ButtonDown` prüft `playdate.buttonIsPressed(kButtonB)`: mit B → `shiftActiveLayerContent(direction)` (statt Cursorbewegung), ohne B → `startDirectionHold` (unverändert). Ein Shift je Tastendruck (kein Auto-Repeat). File: `Source/ZoomRoom.lua`
 
-- [ ] T011 [US1] Implement visual feedback during shift: display indicator "Shifting..." or highlight active layer in HUD. Maintain framerate (60 FPS). File path: `Source/Rooms/ZoomView.lua`
+- [X] T011 [US1] Visuelles Feedback: nach dem Shift `needsRedraw`/`backgroundDirty` → das Zoomraster wird sofort mit dem verschobenen Inhalt neu gezeichnet (frischer Kontext via `EditorRoom:currentZoomContext()`). Der Ebenen-Indikator (FR-015, Phase 5) zeigt weiterhin die aktive Ebene. Ein dedizierter „Shifting…“-Text wäre bei einer 1-Frame-Operation nicht sichtbar — weggelassen. 60-FPS-Profiling → T054.
 
 ### Pixel Shifting Algorithm
 
-- [ ] T012 [US1] Implement Layer:shift(direction) method in `Source/Models/Layer.lua`. Algorithm: (1) Extract all pixels from current layer positions + transparency, (2) Shift pixel buffer by 1 pixel in direction (wrap or clamp at boundaries per spec), (3) Re-tile via ImageStoreCodec.pruneUnusedTiles(layerIndex), (4) Update layer.positions + layer.transparency with new tile indices + transparency states. File path: `Source/Models/Layer.lua`
+- [X] T012 [US1] ~~`Layer:shift` in `Source/Models/Layer.lua`~~ → **`LayerModel.shiftLayerContent(entry, active1, direction, getTile, registerTile)`**. Algorithmus: (1) 400×240-Pixelraster der Ebene aus den 375 Tiles als 3-Zustands-Codes dekodieren, (2) um 1 Pixel verschieben (**Wrap-Around** — nur so kein Datenverlust, spec.md Edge Case), (3) alle 375 Tiles neu bauen, (4) `layer.positions` neu setzen (Dedup über den vom EditorRoom injizierten `registerTile`). `EditorRoom:shiftActiveLayer` ist der Einstieg (kennt `imageData`/`activeLayer`/`imagetable`/`hashIndex`). File: `Source/LayerModel.lua` + `Source/EditorRoom.lua`
 
-- [ ] T013 [US1] Handle shift edge cases in Layer:shift(): (a) Wraparound behavior at tile boundaries, (b) Clamping to prevent out-of-bounds, (c) Preserve tile references when content shifts within a single tile, (d) Degenerate case: empty layer (no shift needed, return unchanged). File path: `Source/Models/Layer.lua`
+- [X] T013 [US1] Edge Cases in `shiftLayerContent`: (a) Wrap an Tile-Grenzen (Pixel wandern zwischen Zellen), (b) Modulo `% width`/`% height` verhindert Out-of-bounds, (c) In-Zell-Verschiebung erzeugt ein neues, dedupliziertes Tile, (d) leere/„absent“ obere Ebene: komplett transparent verschoben → Tiles fallen wieder auf `ABSENT` (0) zurück. File: `Source/LayerModel.lua`
 
 ### Persistence & Verification
 
-- [ ] T014 [P] [US1] Add test case to `tests/headless_tests.lua` section "ImageStoreCodec: Pixel Shifting (Spec 010, US1)": Create 3-layer frame, draw content in Layer 1, call Layer:shift("up"), verify all pixels moved up 1px, verify tiles recalculated, verify other layers unchanged. Test both directions (up, down, left, right)
+- [X] T014 [P] [US1] `tests/headless_tests.lua` „LayerModel: shiftLayerContent verschiebt den Pixelinhalt um 1 Pixel“ (right/left/down + Wrap vom rechten Rand) und „EditorRoom: shiftActiveLayer wirkt nur auf die aktive Ebene + aktuellen Frame“ (Basisebene + Frame 2 unverändert, FR-004) + „ZoomRoom: B + Pfeiltaste löst den Shift aus“.
 
-- [ ] T015 [P] [US1] Add round-trip test: shift content → save image → reload → verify shift persists, pixel positions identical to pre-save state. Test via ImageStore:saveJSON() + loadJSON()
+- [X] T015 [P] [US1] `tests/headless_tests.lua`: Save+Reload nach Shift — Ebenenstruktur (2 Ebenen, 375 Positionen, Basisebene unverändert) bleibt erhalten. **Pixel-genaue** Shift-Persistenz über den PDI-Sheet ist im Headless-Mock nicht prüfbar (`image:draw` ist überall No-op — gilt für alle Tests dieser Datei) → Simulator T058.
 
-**Checkpoint**: US1 complete when all tests pass + pdc build succeeds + buildNumber incremented
+**Checkpoint**: US1 ✅ — headless-Tests grün; buildNumber 17 → 18; pdc grün. Commit folgt.
 
 ---
 

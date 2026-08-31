@@ -329,6 +329,26 @@ local function commitAndReturnToEditor()
     switchRoomFunction(editorRoom)
 end
 
+-- Spec 010 US1 (FR-001..005): B + Pfeiltaste verschiebt den Inhalt der AKTIVEN
+-- Ebene um genau 1 nativen Pixel; der EditorRoom baut daraufhin alle Tiles der
+-- Ebene neu auf. Vorher werden offene Zell-Edits des Zoomrasters committet,
+-- danach wird der 3x3-Kontext frisch geholt (jedes Tile kann sich geaendert
+-- haben). Nur der aktuelle Frame ist betroffen (FR-004).
+local function shiftActiveLayerContent(direction)
+    if not (editorRoom and editorRoom.shiftActiveLayer) then return end
+    local edits = collectEdits()
+    if #edits > 0 and editorRoom.applyTileEdits then
+        editorRoom:applyTileEdits(edits)
+    end
+    if editorRoom:shiftActiveLayer(direction) then
+        if editorRoom.currentZoomContext then
+            ZoomRoom:setFromEditorContext(editorRoom:currentZoomContext())
+        end
+        needsRedraw = true
+        backgroundDirty = true
+    end
+end
+
 -- Pencil-Strich: Der A-Druck bestimmt den Malwert des ganzen Strichs —
 -- Zelle war schwarz -> Strich malt Weiß (Radierer), sonst Schwarz.
 -- Bewegungen mit gehaltenem A malen denselben Wert weiter.
@@ -586,25 +606,35 @@ function ZoomRoom:update()
     playdate.timer.updateTimers()
 end
 
+-- Pfeil-Down-Handler: mit gehaltenem B verschiebt die Pfeiltaste den
+-- Ebeneninhalt um 1 Pixel (US1, FR-001), sonst bewegt sie den Cursor.
+local function arrowDown(direction)
+    if playdate.buttonIsPressed(playdate.kButtonB) then
+        shiftActiveLayerContent(direction)
+    else
+        startDirectionHold(direction)
+    end
+end
+
 function ZoomRoom:inputHandler()
     return {
         upButtonDown = function()
-            startDirectionHold("up")
+            arrowDown("up")
         end,
         upButtonUp = function()
             stopDirectionHold("up")
         end,
         downButtonDown = function()
-            startDirectionHold("down")
+            arrowDown("down")
         end,
         downButtonUp = function()
             stopDirectionHold("down")
         end,
         leftButtonDown = function()
-            startDirectionHold("left")
+            arrowDown("left")
         end,
         rightButtonDown = function()
-            startDirectionHold("right")
+            arrowDown("right")
         end,
         leftButtonUp = function()
             stopDirectionHold("left")

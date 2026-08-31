@@ -383,6 +383,40 @@ function EditorRoom:applyTileEdits(edits)
     needsRedraw = true
 end
 
+-- Spec 010 US1 (FR-001..005): verschiebt den gesamten Pixelinhalt der AKTIVEN
+-- Ebene des currentFrame um genau 1 nativen Pixel (Wrap-Around) und baut alle
+-- 375 Tiles der Ebene neu auf; Dedup ueber hashIndex. Danach Recomposite.
+-- Wird von der ZoomRoom (B + Pfeiltaste) aufgerufen.
+function EditorRoom:shiftActiveLayer(direction)
+    if not imageData then return false end
+    local entry = currentEntry()
+    if not entry then return false end
+    local getTile = function(idx) return imageData.imagetable:getImage(idx) end
+    local registerTile = function(img)
+        local hash = ImageStoreCodec.hashTile(img)
+        local existing = imageData.hashIndex[hash]
+        if existing and imagesEqual(imageData.imagetable:getImage(existing), img) then
+            return existing
+        end
+        local idx = appendTileImage(img)
+        imageData.hashIndex[hash] = idx
+        return idx
+    end
+    local ok = LayerModel.shiftLayerContent(
+        entry, imageData.activeLayer or 1, direction, getTile, registerTile)
+    if ok then
+        recompositeCurrentFrame()
+    end
+    return ok
+end
+
+-- Frischer 3x3-Zoom-Kontext an der aktuellen Cursorposition — von der ZoomRoom
+-- nach einem Shift genutzt, wenn sich alle Tiles der aktiven Ebene geaendert
+-- haben.
+function EditorRoom:currentZoomContext()
+    return buildZoomContext()
+end
+
 -- ── Load / Save (Contract E-01/E-02, research.md R1/R6/R7) ────────────────────
 
 local function handleLoadError(err)

@@ -1692,6 +1692,106 @@ check(EditorRoom:getActiveLayerInfo().count == 1, "Indikator zeigt jetzt 1 Ebene
 crankChangeValue = -360; EditorRoom:update(); crankChangeValue = 0  -- zurueck zu Frame 1
 check(#wr.frameLayers == 2, "wieder bei Frame 1 (kein neuer Frame angelegt)")
 
+-- ── US1: Pixel-Shift (Spec 010) ───────────────────────────────────────────
+
+section("LayerModel: shiftLayerContent verschiebt den Pixelinhalt um 1 Pixel (Spec 010, US1)")
+do
+    local it = playdate.graphics.imagetable.new(3)
+    it:setImage(1, newMockImage(16, 16, "white"))
+    it:setImage(2, newMockImage(16, 16, "black"))
+    local corner = newMockImage(16, 16, "white"); corner.pixels["0,0"] = true
+    it:setImage(3, corner)
+    local reg, nextIdx = {}, 3
+    local getT = function(i) return it:getImage(i) end
+    local regT = function(img)
+        local h = ImageStoreCodec.hashTile(img)
+        if reg[h] then return reg[h] end
+        nextIdx = nextIdx + 1; it:setImage(nextIdx, img); reg[h] = nextIdx
+        return nextIdx
+    end
+
+    local e = LayerModel.newFrameLayersFromFlat(pos375(1))
+    e.layers[1].positions[1] = 3  -- Zelle 1 (oben links) traegt das Eck-Pixel-Tile
+    check(LayerModel.shiftLayerContent(e, 1, "right", getT, regT) == true, "'right' laeuft durch")
+    local c1 = it:getImage(e.layers[1].positions[1])
+    check(c1:sample(1, 0) == "black" and c1:sample(0, 0) ~= "black",
+        "'right': schwarzes Pixel wandert (0,0) -> (1,0), Tiles neu berechnet (FR-002)")
+    check(LayerModel.shiftLayerContent(e, 1, "left", getT, regT) == true, "'left' laeuft durch")
+    check(it:getImage(e.layers[1].positions[1]):sample(0, 0) == "black", "'left' macht 'right' exakt rueckgaengig")
+    check(LayerModel.shiftLayerContent(e, 1, "down", getT, regT) == true, "'down' laeuft durch")
+    check(it:getImage(e.layers[1].positions[1]):sample(0, 1) == "black", "'down': Pixel wandert (0,0) -> (0,1)")
+
+    -- Wrap-Around: Pixel am rechten Bildrand (Zelle 25) erscheint nach 'right'
+    -- links in Zelle 1 wieder (kein Datenverlust, spec.md Edge Case / FR-005)
+    local e2 = LayerModel.newFrameLayersFromFlat(pos375(1))
+    local edge = newMockImage(16, 16, "white"); edge.pixels["15,0"] = true
+    it:setImage(60, edge)
+    e2.layers[1].positions[25] = 60
+    LayerModel.shiftLayerContent(e2, 1, "right", getT, regT)
+    check(it:getImage(e2.layers[1].positions[1]):sample(0, 0) == "black",
+        "'right' Wrap: Randpixel aus Zelle 25 erscheint links in Zelle 1 (FR-005, kein Datenverlust)")
+end
+
+section("EditorRoom: shiftActiveLayer wirkt nur auf die aktive Ebene + aktuellen Frame (Spec 010, US1, FR-004)")
+loadEditorV11("shift2l", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Ink",  positions = pos375(0), visible = true },
+    } },
+    { frameIndex = 1, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+    } },
+}, 4)
+local sd = EditorRoom:getImageData()
+local corner = newMockImage(16, 16, "white"); corner.pixels["0,0"] = true
+sd.imagetable:setImage(4, corner)
+sd.frameLayers[1].layers[2].positions[1] = 4
+sd.activeLayer = 2
+local f2before = {}
+for i = 1, 375 do f2before[i] = sd.frameLayers[2].layers[1].positions[i] end
+check(EditorRoom:shiftActiveLayer("right") == true, "shiftActiveLayer('right') laeuft durch")
+local shiftedTile = sd.imagetable:getImage(sd.frameLayers[1].layers[2].positions[1])
+check(shiftedTile:sample(1, 0) == "black" and shiftedTile:sample(0, 0) ~= "black",
+    "aktive Ebene 2: Inhalt um 1 nach rechts verschoben")
+check(sd.frameLayers[1].layers[1].positions[1] == 1, "Basisebene (nicht aktiv) unveraendert")
+local f2same = true
+for i = 1, 375 do if sd.frameLayers[2].layers[1].positions[i] ~= f2before[i] then f2same = false end end
+check(f2same, "Frame 2 vollstaendig unveraendert (FR-004)")
+check(#sd.frames[1] == 375, "flacher Composite-Cache nach dem Shift neu aufgebaut")
+
+-- Struktur ueberlebt Speichern + Laden (Pixel-Ebene: Simulator T058)
+sd.id = "shift2l-rt"
+local shco = ImageStoreCodec.newSaveOperation(sd)
+while coroutine.status(shco) ~= "dead" do coroutine.resume(shco) end
+local shrl
+local shlco = ImageStoreCodec.newLoadOperation("shift2l-rt")
+while coroutine.status(shlco) ~= "dead" do local ok, r = coroutine.resume(shlco); if ok and r then shrl = r end end
+check(shrl and #shrl.frameLayers[1].layers == 2 and #shrl.frameLayers[1].layers[2].positions == 375,
+    "nach Save+Reload: 2 Ebenen, 375 Positionen erhalten")
+check(shrl and shrl.frameLayers[1].layers[1].positions[1] == 1, "nach Save+Reload: Basisebene unveraendert")
+
+section("ZoomRoom: B + Pfeiltaste loest den Ebenen-Shift aus (Spec 010, US1, FR-001)")
+local shiftCalls = {}
+local edMock = {
+    applyTileEdits = noop,
+    shiftActiveLayer = function(_, dir) table.insert(shiftCalls, dir); return true end,
+    currentZoomContext = function()
+        return { slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} }
+    end,
+}
+ZoomRoom:init(noop, {}, edMock)
+ZoomRoom:setFromEditorContext({ slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} })
+local zh = ZoomRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+zh.upButtonDown()  -- ohne B -> nur Cursorbewegung
+check(#shiftCalls == 0, "Pfeil ohne B verschiebt nichts (nur Cursor, Regressionsschutz)")
+heldButtons[playdate.kButtonB] = true
+zh.rightButtonDown()
+zh.upButtonDown()
+heldButtons[playdate.kButtonB] = false
+check(shiftCalls[1] == "right" and shiftCalls[2] == "up",
+    "B + Pfeil ruft editorRoom:shiftActiveLayer mit der Richtung auf (FR-001)")
+
 -- ── SelectionRoom: Kreis-Schwenk des selektierten Eintrags (Spec 006 US6, ───
 -- revidiert) ──────────────────────────────────────────────────────────────
 
