@@ -1572,6 +1572,15 @@ eh.AButtonDown(); eh.AButtonUp()
 check(data.frameLayers[1].layers[2].positions[2] == 2, "zweite Zelle ebenfalls auf Ebene 2")
 check(data.frameLayers[1].layers[1].positions[2] == 1, "Ebene 1 an Zelle 2 unveraendert")
 
+-- Radierer auf oberer Ebene: A erneut auf der jetzt opaken Zelle 2 -> die
+-- Ebene wird dort wieder "absent" (0), NICHT opak-weiss (Tile 1) — sonst
+-- gaebe es keinen Rueckweg zu "durchsichtig" (Advisor-Fund).
+eh.AButtonDown(); eh.AButtonUp()
+check(data.frameLayers[1].layers[2].positions[2] == 0,
+    "A erneut (Radierer) auf oberer Ebene -> Zelle wieder 'absent' (0), nicht opak-weiss")
+check(data.frames[1][2] == 1, "Composite faellt an Zelle 2 auf die Basisebene (Tile 1) zurueck")
+check(data.frameLayers[1].layers[1].positions[2] == 1, "Basisebene an Zelle 2 weiterhin unveraendert")
+
 section("EditorRoom: Mehr-Ebenen-Edit ueberlebt Speichern + Laden (Spec 010, T031)")
 data.id = "edit2layer-rt"
 local rtco = ImageStoreCodec.newSaveOperation(data)
@@ -1590,9 +1599,9 @@ while coroutine.status(rtlco) ~= "dead" do
     if okl and res then reloaded = res end
 end
 check(reloaded and reloaded.frameLayers[1].layers[2].positions[1] == 2,
-    "neu geladen: Ebene-2-Edit erhalten")
-check(reloaded and reloaded.frameLayers[1].layers[2].positions[2] == 2,
-    "neu geladen: zweiter Ebene-2-Edit erhalten")
+    "neu geladen: Ebene-2-Edit an Zelle 1 erhalten")
+check(reloaded and reloaded.frameLayers[1].layers[2].positions[2] == 0,
+    "neu geladen: radierte obere Zelle 2 bleibt 'absent' (0)")
 check(reloaded and reloaded.frameLayers[1].layers[1].positions[1] == 1,
     "neu geladen: Ebene 1 unveraendert")
 

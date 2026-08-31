@@ -185,11 +185,22 @@ end
 
 -- ── Mal-Operationen (data-model.md) ───────────────────────────────────────────
 
-local function setCell(idx)
+-- Schreibt eine Tile-Position in die AKTIVE Ebene. Auf oberen Ebenen wird das
+-- Weiss-Basistile (1) als "absent" (0) abgelegt — sonst wuerde der Radierer
+-- (A auf opak -> Tile 1) die darunterliegenden Ebenen dauerhaft mit Weiss
+-- verdecken, ohne Rueckweg zu transparent. Auf der Basisebene bleibt 1 =
+-- Voll-Weiss (dort ist "absent" nicht vorgesehen).
+local function writeActiveLayerPosition(cellIdx, tileIdx)
     local layer = activeLayerObj()
-    if layer then
-        layer.positions[cursorCellIndex()] = idx
+    if not layer then return end
+    if layer.layerIndex ~= 0 and tileIdx == LayerModel.WHITE_TILE then
+        tileIdx = LayerModel.ABSENT
     end
+    layer.positions[cellIdx] = tileIdx
+end
+
+local function setCell(idx)
+    writeActiveLayerPosition(cursorCellIndex(), idx)
     recompositeCell(cursorCellIndex())
 end
 
@@ -364,8 +375,7 @@ end
 -- Spec 010: nur die aktive Ebene ist editierbar) und kompositiert je Zelle neu.
 function EditorRoom:applyTileEdits(edits)
     if not imageData then return end
-    local layer = activeLayerObj()
-    if not layer then return end
+    if not activeLayerObj() then return end
     for _, edit in ipairs(edits or {}) do
         local hash = ImageStoreCodec.hashTile(edit.newImage)
         local existing = imageData.hashIndex[hash]
@@ -376,7 +386,7 @@ function EditorRoom:applyTileEdits(edits)
             idx = appendTileImage(edit.newImage)
             imageData.hashIndex[hash] = idx
         end
-        layer.positions[edit.frameIndexPos] = idx
+        writeActiveLayerPosition(edit.frameIndexPos, idx)
         recompositeCell(edit.frameIndexPos)
     end
     updateTilemapFrame()
