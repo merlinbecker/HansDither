@@ -70,20 +70,23 @@ Der Test auf echter Hardware zeigte drei Probleme:
   Sitzung verschwinden, sobald eine hoehere Ebene die Zelle abdeckt.
   `imagetable:getLength()` ist ebenfalls falsch (Sitzungs-Edits haengen
   neue Tiles an und verwaisen alte; erst das Speichern
-  `pruneUnusedTilesLayered` raeumt auf). Index 1 (Weiss) ist immer in der
-  Liste → „keine Auswahl“ (`activeTile = nil`, Toggle-Modus) stets
-  erreichbar, konsistent zur Pipette. **Kurbeln auf Kachel 1 muss `activeTile`
-  wirklich auf `nil` setzen** — nicht `(picked == 1) and nil or picked` (Lua:
-  ergibt immer `picked`), sondern ein explizites `if`.
+  `pruneUnusedTilesLayered` raeumt auf). **Kurbeln auf Kachel 1 muss
+  `activeTile` wirklich auf `nil` setzen** (Abwahl/Toggle-Modus) — nicht
+  `(picked == 1) and nil or picked` (Lua: ergibt immer `picked`), sondern ein
+  explizites `if`.
   `EditorRoom:buildPauseMenuImage` (Pause-/Kontext-Ansicht, CR-06) nutzt seit
   Spec 010 **denselben** `referencedTileIndices()`-Scan — die frueher dort
   verwendete Composite-Cache-Iteration hat verdeckte Kacheln in „Tiles: N“
   untergezaehlt.
-- **Picker-Cache:** `stepTilePicker` kann bei schnellem Kurbeln ~12x je
-  `update()` feuern, dazu einmal je `draw()`. `pickerList()` memoisiert
-  `referencedTileIndices()` (`pickerTileList`); invalidiert bei jeder
-  Tile-Mutation (`recompositeCell`/`recompositeCurrentFrame`/`entered()`).
-  `buildPauseMenuImage` nutzt bewusst den frischen Scan (seltener Aufruf).
+- **Picker-Cache + Abwahl-Slot:** `stepTilePicker` kann bei schnellem Kurbeln
+  ~12x je `update()` feuern, dazu einmal je `draw()`. `pickerList()`
+  memoisiert `referencedTileIndices()` (`pickerTileList`; invalidiert bei jeder
+  Tile-Mutation via `recompositeCell`/`recompositeCurrentFrame`/`entered()`)
+  **und haengt Index 1 vorne an** — der Abwahl-/Toggle-Slot muss auch dann
+  erreichbar sein, wenn keine Zelle Kachel 1 referenziert (sonst
+  Ein-Element-Liste ohne Rueckweg). `referencedTileIndices()` selbst hat
+  **keine** Beigabe — sonst zaehlte `buildPauseMenuImage` bei solchen Bildern
+  eine Kachel zu viel; die Pause-Ansicht nutzt den un-erweiterten Scan direkt.
 - **`bNavConsumed`** wird in `bDpadNav()` gesetzt und **nur** in
   `BButtonDown`/`BButtonUp` zurueckgesetzt — nie aus dem Live-Tastenzustand
   beim Release abgeleitet (der Nutzer kann die Richtungstaste vor B
@@ -112,8 +115,8 @@ Der Test auf echter Hardware zeigte drei Probleme:
 - Headless: die alten „Up/Down + Crank“-Ebenen-Tests und die
   „Crank-Volldrehung = Frame“-Tests wurden auf B + D-Pad umgeschrieben;
   neue Abschnitte fuer Tile-Picker (Schritt/Wrap/Auto-Ausblenden, verdeckte
-  Kachel, Cache-Invalidierung, echte Abwahl) und die Pipetten-Meldung.
-  364 Assertions gruen, `pdc` sauber, buildNumber 26.
+  Kachel, Cache-Invalidierung, echte Abwahl, Bild ohne Zelle=1) und die
+  Pipetten-Meldung. Alle Assertions gruen, `pdc` sauber, buildNumber 27.
 
 ## Offen (Phase 7, Simulator/Hardware)
 - Haptik der 30°/Kachel-Schwelle auf echter Kurbel (evtl. nachjustieren).
