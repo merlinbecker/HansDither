@@ -229,6 +229,13 @@ end
 -- beitragenden Ebene bleiben unveraendert bei deren Tile-Index (kein neues
 -- Tile). getTile(index)->image, registerTile(image)->dedupter 1-basierter
 -- Index werden vom Aufrufer (EditorRoom/ImageStoreCodec) injiziert.
+--
+-- ACHTUNG (noch NICHT im Renderpfad verdrahtet, Task T053): die Basisebene
+-- traegt immer bei, daher merged diese Funktion JEDE Zelle mit oberer-Ebenen-
+-- Inhalt und registriert dafuer ein Tile. Vor dem Verdrahten ist die
+-- Merge-Rate zu druecken (z.B. nur mergen, wenn das obere Tile wirklich
+-- kColorClear-Pixel enthaelt; ein voll deckendes oberes Tile occludet und
+-- braucht keinen Merge). compositeToFlat() ist der aktuelle Renderpfad.
 function LayerModel.compositeToTiles(entry, getTile, registerTile)
     local gfx = playdate.graphics
     local tilePx = LayerModel.TILE_PX

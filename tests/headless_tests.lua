@@ -1969,6 +1969,27 @@ comp.layers[3].visible = false
 check(LayerModel.compositeToFlat(comp)[1] == 9,
     "unsichtbare Ebene wird uebersprungen -> Character (Tile 9) gewinnt Zelle 1")
 
+-- compositeToTiles: pixel-genaue Ueberblendung. Die Basisebene traegt IMMER
+-- bei (nie "absent"), daher merged die Funktion jede Zelle, an der eine obere
+-- Ebene Inhalt hat. Zellen mit nur der Basisebene bleiben unveraendert.
+-- (Noch NICHT im Renderpfad verdrahtet, T053 — die Merge-Rate ist dort vor
+-- dem Verdrahten zu druecken, z.B. nur bei tatsaechlich transparenten Pixeln
+-- der oberen Ebene.)
+do
+    local c2 = LayerModel.newFrameLayersFromFlat(flat)  -- flat: gerade Zellen = Tile 2, ungerade = Tile 1
+    c2.layers[2].positions[4] = 7     -- Zelle 4: Basis (2) + Character (7)
+    c2.layers[2].positions[1] = 8     -- Zelle 1: Basis (1) + Character (8) +
+    c2.layers[3].positions[1] = 9     -- Effects (9)
+    local registered = 0
+    local getT = function(i) return newMockImage(16, 16, "white") end
+    local regT = function(img) registered = registered + 1; return 100 + registered end
+    local out = LayerModel.compositeToTiles(c2, getT, regT)
+    check(out[2] == 2, "Zelle 2 (nur Basisebene) -> Basistile-Index unveraendert, kein neues Tile")
+    check(out[4] >= 101 and out[1] >= 101, "Zellen mit oberer Ebene -> zusammengefuehrtes Tile")
+    check(registered == 2, "genau 2 Merges (Zelle 1 + Zelle 4), nicht pro leerer Zelle")
+    check(#out == 375, "375 Positionen")
+end
+
 -- ── ImageStoreCodec: 3-Zustands-Hash & Vergleich (spec.md Edge Case Z.104) ──
 
 section("ImageStoreCodec: hashTile/imagesVisiblyEqual unterscheiden 3 Zustaende (Spec 010)")
