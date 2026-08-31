@@ -38,7 +38,23 @@ sauber neu aufgebaut. Wesentliche **Abweichungen von plan.md/tasks.md/contracts*
 
 **Gates je abgeschlossener Phase**: `lua tests/headless_tests.lua` → „ALLE TESTS
 BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
-Phase 2: buildNumber 13 → 14.
+
+**Fortschritt:**
+- **Phase 2** (T001–T009, Datenmodell + Speicherformat v1.1) ✅ — buildNumber 13 → 14, commit `64434ea`.
+- **Phase 2b/3-Vorarbeit** (EditorRoom-Ebenen-Verdrahtung) ✅ — buildNumber 14 → 15.
+  Nicht als nummerierte Task in tasks.md, aber Voraussetzung für US1/US3: alle
+  Editier-Pfade des EditorRoom (`setCell`, `beginStroke`, `applyTileEdits`,
+  `tickForward`/`tickBackward`, `clearCurrentFrame`, `buildZoomContext`) wirken
+  jetzt auf `imageData.frameLayers[currentFrame].layers[activeLayer]`;
+  `imageData.frames` ist ein nach jeder Mutation neu kompositierter flacher
+  Cache. `tickForward` nutzt `LayerModel.cloneFrameLayers` (tiefe Kopie aller
+  Ebenen). „clear screen“ leert nur die aktive Ebene. Test: 2-Ebenen-Frame →
+  Edit auf Ebene 2 → Save → Reload → Edit auf Ebene 2, Ebene 1 unberührt.
+- **Phase 3** (T010–T015, US1 Pixel-Shift in ZoomRoom) — offen.
+- **Phase 4** (T016–T024, US2 Transparenz in PixelRoom) — offen.
+- **Phase 5** (T025–T032, US3 Layer-Cycling in EditorRoom) — offen.
+- **Phase 6** (T033–T043, US4 Management-Views) — offen.
+- **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md)
 

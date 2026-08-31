@@ -10,6 +10,7 @@ import "CoreLibs/crank"
 import "CoreLibs/object"
 import "Bauchbinde"
 import "PencilCursor"
+import "LayerModel"
 import "ImageStoreCodec"
 import "RoomOperation"
 import "loadingBar"
@@ -99,6 +100,50 @@ local function updateTilemapFrame()
     end
 end
 
+-- ── Layer-Zugriff (Spec 010) ─────────────────────────────────────────────────
+--
+-- imageData.frameLayers[f] = {duration, layers = {1..3 Ebenen}} ist die
+-- massgebliche Quelle. imageData.frames[f] ist ein daraus abgeleiteter,
+-- flacher 375er-Cache fuer Tilemap/Vorschau/Pause-Ansicht — nach JEDER
+-- Ebenen-Mutation neu kompositiert. imageData.activeLayer (1-basiert) ist
+-- reiner Sitzungszustand; nur die aktive Ebene ist editierbar (spec.md US3).
+
+local function currentEntry()
+    return imageData and imageData.frameLayers and imageData.frameLayers[currentFrame]
+end
+
+local function activeLayerObj()
+    local entry = currentEntry()
+    if not entry then return nil end
+    imageData.activeLayer = LayerModel.clampActive(entry, imageData.activeLayer or 1)
+    return entry.layers[imageData.activeLayer]
+end
+
+-- Kompositiert genau eine Zelle des aktuellen Frames neu in den flachen
+-- Cache + die Tilemap (nach einer Einzelzellen-Mutation).
+local function recompositeCell(cellIdx)
+    local entry = currentEntry()
+    if not entry or not imageData.frames[currentFrame] then return end
+    local idx = LayerModel.compositeAt(entry, cellIdx)
+    imageData.frames[currentFrame][cellIdx] = idx
+    if tilemap then
+        local x = ((cellIdx - 1) % GRID_COLS) + 1
+        local y = ((cellIdx - 1) // GRID_COLS) + 1
+        tilemap:setTileAtPosition(x, y, idx)
+    end
+    needsRedraw = true
+end
+
+-- Kompositiert den gesamten aktuellen Frame neu (nach Frame-Wechsel,
+-- "clear screen", Ebenen-Add/Delete).
+local function recompositeCurrentFrame()
+    local entry = currentEntry()
+    if not entry then return end
+    imageData.frames[currentFrame] = LayerModel.compositeToFlat(entry)
+    updateTilemapFrame()
+    needsRedraw = true
+end
+
 -- Hängt ein Tile an die Imagetable an; wächst die Table notfalls durch Neuaufbau.
 local function appendTileImage(img)
     local it = imageData.imagetable
@@ -121,9 +166,11 @@ end
 -- ── Mal-Operationen (data-model.md) ───────────────────────────────────────────
 
 local function setCell(idx)
-    imageData.frames[currentFrame][cursorCellIndex()] = idx
-    tilemap:setTileAtPosition(cursor.x, cursor.y, idx)
-    needsRedraw = true
+    local layer = activeLayerObj()
+    if layer then
+        layer.positions[cursorCellIndex()] = idx
+    end
+    recompositeCell(cursorCellIndex())
 end
 
 -- Pencil-Strich (FR-004): Der A-Druck legt fest, was der ganze Strich malt.
@@ -135,7 +182,11 @@ local strokeTileIdx = nil  -- Tile-Index des laufenden A-Strichs; nil = kein Str
 
 local function beginStroke()
     lastActivityMs = playdate.getCurrentTimeMilliseconds()
-    local current = imageData.frames[currentFrame][cursorCellIndex()]
+    -- Toggle-Wert aus der AKTIVEN Ebene (nicht dem Composite): "absent" (0)
+    -- einer oberen Ebene zaehlt wie eine leere Weiss-Zelle.
+    local layer = activeLayerObj()
+    local current = layer and layer.positions[cursorCellIndex()] or 1
+    if current == 0 then current = 1 end
     if activeTile then
         strokeTileIdx = (current == activeTile) and 1 or activeTile
     else
@@ -163,19 +214,19 @@ end
 -- ── Frame-Operationen (FR-006/FR-007, data-model.md) ──────────────────────────
 
 local function tickForward()
-    local frames = imageData.frames
-    if currentFrame < #frames then
+    local entries = imageData.frameLayers
+    if currentFrame < #entries then
         currentFrame = currentFrame + 1
-    elseif #frames < MAX_FRAMES then
-        local copy = {}
-        for i, tileIndex in ipairs(frames[currentFrame]) do
-            copy[i] = tileIndex
-        end
-        frames[#frames + 1] = copy
+    elseif #entries < MAX_FRAMES then
+        -- Neuer Frame = tiefe Kopie des aktuellen (mit allen Ebenen).
+        local copy = LayerModel.cloneFrameLayers(entries[currentFrame])
+        entries[#entries + 1] = copy
+        imageData.frames[#entries] = LayerModel.compositeToFlat(copy)
         currentFrame = currentFrame + 1
     else
         currentFrame = 1
     end
+    imageData.activeLayer = LayerModel.clampActive(entries[currentFrame], imageData.activeLayer or 1)
     updateTilemapFrame()
     needsRedraw = true
 end
@@ -184,8 +235,9 @@ local function tickBackward()
     if currentFrame > 1 then
         currentFrame = currentFrame - 1
     else
-        currentFrame = #imageData.frames
+        currentFrame = #imageData.frameLayers
     end
+    imageData.activeLayer = LayerModel.clampActive(imageData.frameLayers[currentFrame], imageData.activeLayer or 1)
     updateTilemapFrame()
     needsRedraw = true
 end
@@ -195,12 +247,14 @@ end
 -- Aufrufer mehr (ersetzt durch clearCurrentFrame() unten, Spec 008/AD-037).
 local function deleteCurrentFrame()
     if inputBlocked() then return end
-    local frames = imageData.frames
-    if #frames <= 1 then return end
-    table.remove(frames, currentFrame)
-    if currentFrame > #frames then
-        currentFrame = #frames
+    local entries = imageData.frameLayers
+    if #entries <= 1 then return end
+    table.remove(entries, currentFrame)
+    table.remove(imageData.frames, currentFrame)
+    if currentFrame > #entries then
+        currentFrame = #entries
     end
+    imageData.activeLayer = LayerModel.clampActive(entries[currentFrame], imageData.activeLayer or 1)
     updateTilemapFrame()
     needsRedraw = true
 end
@@ -211,14 +265,19 @@ end
 -- andere Frames bleiben unberuehrt. Im Unterschied zu deleteCurrentFrame()
 -- oben (AD-032) bleibt resetCurrentFrameToPrevious() NICHT als toter Code
 -- erhalten - FR-011 fordert die vollstaendige Entfernung der Funktion.
+-- Spec 010: leert die AKTIVE Ebene des aktuellen Frames (Basisebene ->
+-- Voll-Weiss/1, obere Ebene -> komplett "absent"/0); andere Ebenen und
+-- Frames bleiben unberuehrt. Bei Ein-Ebenen-Bildern identisch zum bisherigen
+-- Verhalten (Spec 008 AD-037).
 local function clearCurrentFrame()
     if inputBlocked() then return end
-    local current = imageData.frames[currentFrame]
-    for i = 1, #current do
-        current[i] = 1
+    local layer = activeLayerObj()
+    if not layer then return end
+    local fill = (layer.layerIndex == 0) and 1 or 0
+    for i = 1, #layer.positions do
+        layer.positions[i] = fill
     end
-    updateTilemapFrame()
-    needsRedraw = true
+    recompositeCurrentFrame()
 end
 
 -- ── Zoomkette (FR-009/FR-010, contracts Abschnitt 3) ──────────────────────────
@@ -226,7 +285,10 @@ end
 -- 3x3-Slot-Kontext um den Cursor + 24x24-gridState (2x2-Blockauslese des
 -- 48x48-Pixelkontexts); out-of-bounds-Slots sind markiert und nicht editierbar.
 local function buildZoomContext()
-    local frame = imageData.frames[currentFrame]
+    -- Spec 010: die Zoomkette editiert ausschliesslich die AKTIVE Ebene.
+    -- "absent" (0) einer oberen Ebene -> kein Quellbild (leere Zelle).
+    local layer = activeLayerObj()
+    local positions = layer and layer.positions or imageData.frames[currentFrame]
     local slots = {}
     for dr = -1, 1 do
         local row = {}
@@ -237,8 +299,9 @@ local function buildZoomContext()
             if tx >= 1 and tx <= GRID_COLS and ty >= 1 and ty <= GRID_ROWS then
                 slot.oob = false
                 slot.frameIndexPos = (ty - 1) * GRID_COLS + tx
-                slot.originalIndex = frame[slot.frameIndexPos]
-                slot.originalImage = imageData.imagetable:getImage(slot.originalIndex)
+                slot.originalIndex = positions[slot.frameIndexPos]
+                slot.originalImage = (slot.originalIndex and slot.originalIndex ~= 0)
+                    and imageData.imagetable:getImage(slot.originalIndex) or nil
             else
                 slot.oob = true
             end
@@ -277,10 +340,12 @@ local function zoomIn()
 end
 
 -- Commit beim Rauszoomen: Dedup über hashIndex + Pixelvergleich, sonst neues Tile;
--- schreibt ausschließlich frames[currentFrame] (FR-012/FR-013).
+-- schreibt ausschließlich in die AKTIVE Ebene des currentFrame (FR-012/FR-013,
+-- Spec 010: nur die aktive Ebene ist editierbar) und kompositiert je Zelle neu.
 function EditorRoom:applyTileEdits(edits)
     if not imageData then return end
-    local frame = imageData.frames[currentFrame]
+    local layer = activeLayerObj()
+    if not layer then return end
     for _, edit in ipairs(edits or {}) do
         local hash = ImageStoreCodec.hashTile(edit.newImage)
         local existing = imageData.hashIndex[hash]
@@ -291,7 +356,8 @@ function EditorRoom:applyTileEdits(edits)
             idx = appendTileImage(edit.newImage)
             imageData.hashIndex[hash] = idx
         end
-        frame[edit.frameIndexPos] = idx
+        layer.positions[edit.frameIndexPos] = idx
+        recompositeCell(edit.frameIndexPos)
     end
     updateTilemapFrame()
     needsRedraw = true
@@ -319,6 +385,17 @@ local function handleLoadSuccess(result)
     zoomTickAccu = 0
     cursor.x = 1
     cursor.y = 1
+
+    -- Spec 010: defensiv — falls ein Aufrufer nur flache frames liefert,
+    -- je Frame eine Basisebene daraus bauen. imageData.frames bleibt der
+    -- flache Composite-Cache.
+    if not imageData.frameLayers then
+        imageData.frameLayers = {}
+        for i, flat in ipairs(imageData.frames or {}) do
+            imageData.frameLayers[i] = LayerModel.newFrameLayersFromFlat(flat)
+        end
+    end
+    imageData.activeLayer = LayerModel.clampActive(imageData.frameLayers[1], imageData.activeLayer or 1)
 
     tilemap = gfx.tilemap.new()
     tilemap:setImageTable(imageData.imagetable)

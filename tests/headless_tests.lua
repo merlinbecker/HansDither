@@ -134,8 +134,14 @@ local function newMockImage(w, h, bgcolor)
         -- Thumbnail des selektierten Eintrags ueber setMaskImage()
         setMaskImage = noop,
         getSize = function(self) return self.width, self.height end,
+        -- sample() liefert die je Pixel gespeicherte Farbe. Spec 010: der
+        -- drawPixel-Mock legt weisse/transparente Pixel als "white"/"clear"
+        -- ab, schwarze weiterhin als `true` (Alt-Tests pruefen `pixels[k] == true`
+        -- direkt). Ungezeichnete Pixel fallen auf die Hintergrundfarbe zurueck.
         sample = function(self, x, y)
-            if self.pixels[x .. "," .. y] then return "black" end
+            local p = self.pixels[x .. "," .. y]
+            if p == true then return "black" end
+            if p ~= nil then return p end
             return self.fill
         end,
     }
@@ -155,7 +161,12 @@ playdate = {
         popContext = function() drawContext = nil end,
         drawPixel = function(x, y)
             if drawContext and drawContext.pixels then
-                drawContext.pixels[x .. "," .. y] = true
+                -- Spec 010: Farbe je Pixel festhalten. Schwarz bleibt `true`
+                -- (Alt-Tests: `pixels[k] == true`), weiss/transparent als
+                -- "white"/"clear" — sonst laesst sich ein zu Weiss radierter
+                -- oder transparent gemalter Pixel nicht vom Hintergrund
+                -- unterscheiden (buildTileImage/shiftLayerContent lesen zurueck).
+                drawContext.pixels[x .. "," .. y] = (currentColor == "black") and true or currentColor
             end
         end,
         fillRect = function(x, y, w, h)
@@ -1432,6 +1443,120 @@ mockDrawScaledCalls = {}
 EditorRoom:buildPauseMenuImage()
 check(drawTextContains("Tiles: 150"), "Gesamtzahl bleibt trotz Truncation vollstaendig korrekt (FR-013)")
 check(#mockDrawScaledCalls == 120, "Raster zeigt nur die ersten 120 Vorschauen (CR-07)")
+
+-- ── EditorRoom: Ebenen-Verdrahtung (Spec 010, Phase 3) ─────────────────────
+--
+-- Nachweis, dass ALLE Editier-Pfade des EditorRoom auf die AKTIVE Ebene
+-- wirken und der flache imageData.frames-Cache nach jeder Mutation neu
+-- kompositiert wird (sonst gingen Mehr-Ebenen-Edits beim Speichern verloren,
+-- weil newSaveOperation nur frameLayers liest).
+
+local function pos375(fill, overrides)
+    local p = {}
+    for i = 1, 375 do p[i] = fill end
+    for k, v in pairs(overrides or {}) do p[k] = v end
+    return p
+end
+
+local function loadEditorV11(id, framesJson, tileCount)
+    datastoreFiles["saves/" .. id .. "/frames"] =
+        { version = "1.1", name = id, tileCount = tileCount, frames = framesJson }
+    datastoreImages["saves/" .. id .. "/sheet"] = newMockImage(400, 240, "white")
+    crankChangeValue = 0
+    crankTicksValue = 0
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    EditorRoom:setImage(id)
+    EditorRoom:entered()
+    for _ = 1, 5 do EditorRoom:update() end
+end
+
+section("EditorRoom: Malen wirkt auf die aktive Ebene, Composite-Cache folgt (Spec 010, US3)")
+loadEditorV11("edit2layer", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Character", positions = pos375(0), visible = true },
+    } },
+}, 3)
+local data = EditorRoom:getImageData()
+check(data ~= nil and #data.frameLayers[1].layers == 2, "2-Ebenen-Frame geladen")
+check(data.activeLayer == 1, "aktive Ebene startet bei 1")
+
+data.activeLayer = 2
+local eh = EditorRoom:inputHandler()
+eh.AButtonDown(); eh.AButtonUp()                       -- malt Zelle 1 (Cursor 1,1)
+check(data.frameLayers[1].layers[2].positions[1] == 2, "A-Strich landet auf Ebene 2 (Tile 2 / schwarz)")
+check(data.frameLayers[1].layers[1].positions[1] == 1, "Ebene 1 (Basis) an Zelle 1 unveraendert")
+check(data.frames[1][1] == 2, "Composite-Cache an Zelle 1 zeigt die oberste beitragende Ebene (2)")
+check(mockLastTilemap.lastFrame[1] == 2, "Tilemap zeigt den kompositierten Wert")
+
+eh.rightButtonDown()                                    -- Cursor -> Zelle 2
+eh.AButtonDown(); eh.AButtonUp()
+check(data.frameLayers[1].layers[2].positions[2] == 2, "zweite Zelle ebenfalls auf Ebene 2")
+check(data.frameLayers[1].layers[1].positions[2] == 1, "Ebene 1 an Zelle 2 unveraendert")
+
+section("EditorRoom: Mehr-Ebenen-Edit ueberlebt Speichern + Laden (Spec 010, T031)")
+data.id = "edit2layer-rt"
+local rtco = ImageStoreCodec.newSaveOperation(data)
+while coroutine.status(rtco) ~= "dead" do
+    local okrt = coroutine.resume(rtco)
+    check(okrt, "newSaveOperation(EditorRoom-imageData) laeuft durch")
+end
+local rtSaved = datastoreFiles["saves/edit2layer-rt/frames"]
+check(rtSaved and #rtSaved.frames[1].layers == 2, "gespeichert: 2 Ebenen")
+check(rtSaved and rtSaved.frames[1].layers[2].positions[1] == 2, "gespeichert: Ebene-2-Edit an Zelle 1")
+check(rtSaved and rtSaved.frames[1].layers[1].positions[1] == 1, "gespeichert: Ebene 1 unveraendert")
+local rtlco = ImageStoreCodec.newLoadOperation("edit2layer-rt")
+local reloaded
+while coroutine.status(rtlco) ~= "dead" do
+    local okl, res = coroutine.resume(rtlco)
+    if okl and res then reloaded = res end
+end
+check(reloaded and reloaded.frameLayers[1].layers[2].positions[1] == 2,
+    "neu geladen: Ebene-2-Edit erhalten")
+check(reloaded and reloaded.frameLayers[1].layers[2].positions[2] == 2,
+    "neu geladen: zweiter Ebene-2-Edit erhalten")
+check(reloaded and reloaded.frameLayers[1].layers[1].positions[1] == 1,
+    "neu geladen: Ebene 1 unveraendert")
+
+section("EditorRoom: Frame-Duplizierung kopiert alle Ebenen tief (Spec 010, tickForward)")
+loadEditorV11("dup2layer", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Character", positions = pos375(0, { [10] = 2 }), visible = true },
+    } },
+}, 3)
+local dup = EditorRoom:getImageData()
+check(#dup.frameLayers == 1, "Vorbedingung: 1 Frame")
+crankChangeValue = 360
+EditorRoom:update()                                     -- volle Umdrehung -> neuer Frame 2 (Kopie)
+crankChangeValue = 0
+check(#dup.frameLayers == 2, "360 Grad -> Frame 2 angelegt")
+check(#dup.frameLayers[2].layers == 2, "Frame 2 hat beide Ebenen der Kopie")
+check(dup.frameLayers[2].layers[2].positions[10] == 2, "Ebene-2-Inhalt in die Kopie uebernommen")
+check(dup.frameLayers[2].layers[2].positions ~= dup.frameLayers[1].layers[2].positions,
+    "tiefe Kopie: eigene positions-Tabelle je Frame")
+dup.frameLayers[2].layers[2].positions[10] = 3
+check(dup.frameLayers[1].layers[2].positions[10] == 2, "Aenderung an Frame 2 laesst Frame 1 unberuehrt")
+check(#dup.frames == 2 and #dup.frames[2] == 375, "flacher Composite-Cache fuer Frame 2 ebenfalls angelegt")
+
+section("EditorRoom: 'clear screen' leert nur die aktive Ebene (Spec 010)")
+loadEditorV11("clear2layer", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Character", positions = pos375(0, { [5] = 2, [6] = 2 }), visible = true },
+    } },
+}, 3)
+local clr = EditorRoom:getImageData()
+clr.activeLayer = 2
+check(mockMenuItemCallbacks["clear screen"] ~= nil, "'clear screen'-Menuepunkt vorhanden")
+mockMenuItemCallbacks["clear screen"]()
+check(clr.frameLayers[1].layers[2].positions[5] == 0 and clr.frameLayers[1].layers[2].positions[6] == 0,
+    "aktive obere Ebene komplett auf 'absent' (0) geleert")
+check(clr.frameLayers[1].layers[1].positions[1] == 1, "Basisebene (nicht aktiv) unveraendert")
+clr.activeLayer = 1
+mockMenuItemCallbacks["clear screen"]()
+check(clr.frameLayers[1].layers[1].positions[1] == 1 and clr.frameLayers[1].layers[1].positions[375] == 1,
+    "aktive Basisebene auf Voll-Weiss (1) geleert (Ein-Ebenen-Verhalten wie Spec 008)")
 
 -- ── SelectionRoom: Kreis-Schwenk des selektierten Eintrags (Spec 006 US6, ───
 -- revidiert) ──────────────────────────────────────────────────────────────
