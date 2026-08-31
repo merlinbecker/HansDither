@@ -26,6 +26,7 @@ import "PixelRoom"
 import "ZoomRoom"
 import "SelectionRoom"
 import "EditorRoom"
+import "FrameManagementView"
 import "ImageStoreCodec"
 
 -- Natives 400×240-Rendering ohne Skalierung
@@ -49,11 +50,14 @@ end
 
 -- Raum-Graph verdrahten (siehe arc42 Kap. 5):
 -- TitleRoom → SelectionRoom → EditorRoom ⇄ ZoomRoom ⇄ PixelRoom
+--                                  ↕ (B + Kurbel rueckwaerts, Spec 010 US4)
+--                          FrameManagementView
 TitleRoom:init(switchRoom, SelectionRoom)
 SelectionRoom:init(switchRoom, EditorRoom)
-EditorRoom:init(switchRoom, ZoomRoom, SelectionRoom)
+EditorRoom:init(switchRoom, ZoomRoom, SelectionRoom, FrameManagementView)
 ZoomRoom:init(switchRoom, PixelRoom, EditorRoom)
 PixelRoom:init(switchRoom, ZoomRoom)
+FrameManagementView:init(switchRoom, EditorRoom)
 
 -- Startraum aktivieren (wie switchRoom, nur ohne pop — der Stack ist noch leer)
 currentRoom = TitleRoom

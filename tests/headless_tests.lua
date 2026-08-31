@@ -2147,6 +2147,95 @@ do
         "vierte Ebene wird beim Laden verworfen -> maximal 3 Ebenen")
 end
 
+-- ══════════════════════════════════════════════════════════════════════════════
+--  Spec 010 US4: Frame Management View
+-- ══════════════════════════════════════════════════════════════════════════════
+
+dofile("Source/FrameManagementView.lua")
+
+-- Baut ein imageData mit n unterscheidbaren Frames (Tile-Index i+10 an Zelle 1
+-- der Basisebene UND im flachen Composite-Cache).
+local function makeMultiFrameImageData(n)
+    local fl, fr = {}, {}
+    for i = 1, n do
+        local e = LayerModel.newFrameLayersFromFlat(pos375(1))
+        e.layers[1].positions[1] = i + 10
+        fl[i] = e
+        fr[i] = LayerModel.compositeToFlat(e)
+    end
+    return { id = "fmv", name = "fmv", imagetable = buildTaggedImagetable(2),
+             frameLayers = fl, frames = fr, activeLayer = 1, hashIndex = {} }
+end
+
+section("FrameManagementView: Navigation, Markieren, Verschieben, Loeschen (Spec 010, US4)")
+local fmvSwitchedTo = nil
+local edStub = {}
+FrameManagementView:init(function(r) fmvSwitchedTo = r end, edStub)
+
+local fdata = makeMultiFrameImageData(4)
+FrameManagementView:setImageData(fdata, 3)
+local fh = FrameManagementView:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+
+-- Frame 3 markieren, nach links schieben -> Reihenfolge 1,3,2,4
+fh.AButtonDown()                                   -- markiert Cursor (Frame 3)
+fh.leftButtonDown()
+check(fdata.frameLayers[2].layers[1].positions[1] == 13
+    and fdata.frames[2][1] == 13, "Links: markierter Frame 3 wandert auf Position 2 (beide Arrays im Gleichschritt)")
+check(fdata.frameLayers[3].layers[1].positions[1] == 12, "Frame 2 ist nun an Position 3")
+fh.leftButtonDown()
+check(fdata.frameLayers[1].layers[1].positions[1] == 13, "Links nochmal: jetzt an Position 1 (Reihenfolge 3,1,2,4)")
+fh.leftButtonDown()
+check(fdata.frameLayers[1].layers[1].positions[1] == 13, "Links am Anfang: No-op (geklemmt)")
+
+-- Cursor bewegen hebt die Markierung auf
+fh.downButtonDown()
+fh.AButtonDown()                                   -- markiert erneut (jetzt Position 2)
+-- Loeschen per zweitem A auf dem markierten Frame
+fh.AButtonDown()
+check(#fdata.frameLayers == 3 and #fdata.frames == 3, "zweiter A-Druck loescht den markierten Frame (4 -> 3)")
+
+-- Bis auf 1 Frame loeschen -> letzter Loeschversuch abgelehnt
+fh.AButtonDown(); fh.AButtonDown()                 -- markieren + loeschen (3 -> 2)
+fh.AButtonDown(); fh.AButtonDown()                 -- markieren + loeschen (2 -> 1)
+check(#fdata.frameLayers == 1, "auf 1 Frame heruntergeloescht")
+fh.AButtonDown(); fh.AButtonDown()                 -- markieren + Loeschversuch
+check(#fdata.frameLayers == 1, "letzter Frame kann NICHT geloescht werden (FR-020)")
+
+-- B loslassen -> zurueck zum EditorRoom, returnFrame gesetzt
+FrameManagementView:setImageData(makeMultiFrameImageData(3), 2)
+heldButtons[playdate.kButtonB] = true
+FrameManagementView:entered()                      -- bWasHeld = true (Eintritts-Geste)
+heldButtons[playdate.kButtonB] = false
+fmvSwitchedTo = nil
+FrameManagementView:update()                       -- erkennt B-Release
+check(fmvSwitchedTo == edStub, "B loslassen -> switchRoom(editorRoom)")
+
+section("EditorRoom: B + Kurbel rueckwaerts oeffnet die Frame Management View (Spec 010, US4, FR-018)")
+local fmvMock = { _opened = false,
+    setImageData = function(self, d, cf) self._opened = true; self._cf = cf end }
+EditorRoom:init(function(room) editorSwitchedTo = room end, ZoomRoom, {}, fmvMock)
+loadEditorV11("fmvgate", { threeLayerFrame(1), threeLayerFrame(2) }, 3)
+editorSwitchedTo = nil
+heldButtons[playdate.kButtonB] = true
+crankTicksValue = -4                               -- B + Kurbel rueckwaerts (>= ZOOM_TICK_THRESHOLD)
+EditorRoom:update()
+check(fmvMock._opened == true, "FrameManagementView:setImageData wurde aufgerufen")
+check(editorSwitchedTo == fmvMock, "switchRoom(frameManagementView) ausgeloest")
+heldButtons[playdate.kButtonB] = false
+crankTicksValue = 0
+
+-- Rueckkehr: returnFrame klemmt currentFrame in die (evtl. kuerzere) Sequenz
+local fg = EditorRoom:getImageData()
+table.remove(fg.frameLayers, 2); table.remove(fg.frames, 2)   -- FMV hat Frame 2 geloescht
+fg.returnFrame = 5                                            -- ausserhalb -> wird geklemmt
+EditorRoom:entered()
+check(fg.returnFrame == nil, "returnFrame wird nach dem Lesen zurueckgesetzt")
+check(mockLastTilemap.lastFrame ~= nil, "Tilemap nach Rueckkehr aktualisiert (currentFrame geklemmt)")
+
+-- Zurueck auf den echten Raum-Graphen fuer eventuelle Folgetests
+EditorRoom:init(function(room) editorSwitchedTo = room end, ZoomRoom, {}, nil)
+
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 
 print("")

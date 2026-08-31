@@ -40,6 +40,7 @@ local STATUS_MESSAGE_MS = 4000
 local switchRoomFunction
 local zoomRoom
 local selectionRoom
+local frameManagementView   -- Spec 010 US4
 
 -- ── Zustand (data-model.md "EditorRoom-Zustand") ──────────────────────────────
 
@@ -373,6 +374,13 @@ local function zoomIn()
     switchRoomFunction(zoomRoom)
 end
 
+-- Spec 010 US4 (FR-018): B + Kurbel rueckwaerts oeffnet die Frame-Verwaltung.
+local function openFrameManagementView()
+    if not frameManagementView or inputBlocked() then return end
+    frameManagementView:setImageData(imageData, currentFrame)
+    switchRoomFunction(frameManagementView)
+end
+
 -- Commit beim Rauszoomen: Dedup über hashIndex + Pixelvergleich, sonst neues Tile;
 -- schreibt ausschließlich in die AKTIVE Ebene des currentFrame (FR-012/FR-013,
 -- Spec 010: nur die aktive Ebene ist editierbar) und kompositiert je Zelle neu.
@@ -579,8 +587,10 @@ local function handleCrank()
             zoomTickAccu = 0
             zoomIn()
         elseif zoomTickAccu <= -ZOOM_TICK_THRESHOLD then
-            -- Äußerste Zoomstufe: Rückwärtszoom ist No-op
+            -- Spec 010 US4: B + Kurbel rueckwaerts -> Frame-Verwaltung
+            -- (frueher: No-op "aeusserste Zoomstufe").
             zoomTickAccu = 0
+            openFrameManagementView()
         end
     else
         zoomTickAccu = 0
@@ -667,10 +677,11 @@ end
 
 -- ── Room-Lifecycle ────────────────────────────────────────────────────────────
 
-function EditorRoom:init(switchRoom, zoomRoomReference, selectionRoomReference)
+function EditorRoom:init(switchRoom, zoomRoomReference, selectionRoomReference, frameManagementViewReference)
     switchRoomFunction = switchRoom
     zoomRoom = zoomRoomReference
     selectionRoom = selectionRoomReference
+    frameManagementView = frameManagementViewReference
     needsRedraw = true
 end
 
@@ -697,8 +708,21 @@ function EditorRoom:entered()
         buildSystemMenu()
         startLoadOperation(id)
     elseif imageData then
-        -- Rückkehr aus der Zoomkette: Menü neu registrieren (Zoomräume räumen es ab)
+        -- Rückkehr aus der Zoomkette / Frame-Verwaltung: Menü neu registrieren
+        -- (die anderen Räume räumen es ab).
         buildSystemMenu()
+        -- Spec 010 US4: die Frame-Verwaltung kann Frames umgeordnet/geloescht
+        -- haben. currentFrame in den (evtl. kuerzeren) Bereich klemmen; wenn
+        -- die View einen Rueckkehr-Frame gesetzt hat, dorthin.
+        local n = imageData.frameLayers and #imageData.frameLayers or 1
+        if imageData.returnFrame then
+            currentFrame = imageData.returnFrame
+            imageData.returnFrame = nil
+        end
+        currentFrame = math.max(1, math.min(currentFrame, n))
+        imageData.activeLayer = LayerModel.clampActive(
+            imageData.frameLayers and imageData.frameLayers[currentFrame], imageData.activeLayer or 1)
+        if tilemap then updateTilemapFrame() end
     else
         -- Kein Bild gesetzt: zurück zum Auswahlscreen
         if switchRoomFunction and selectionRoom then
