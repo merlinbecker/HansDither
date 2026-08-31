@@ -349,6 +349,9 @@ local function shiftActiveLayerContent(direction)
     end
     if editorRoom:shiftActiveLayer(direction) then
         if editorRoom.currentZoomContext then
+            -- setFromEditorContext() setzt `ticks` auf 0 zurueck. Das ist hier
+            -- gewollt: ein Ebenen-Shift ist kein Zoom, also soll eine
+            -- angefangene Zoom-Out-Akkumulation nicht mitgeschleppt werden.
             ZoomRoom:setFromEditorContext(editorRoom:currentZoomContext())
         end
         needsRedraw = true

@@ -164,13 +164,19 @@ function FrameManagementView:entered()
 end
 
 function FrameManagementView:update()
-    -- B loslassen (nach der Halte-Geste) -> zurueck zum Tile View.
+    -- Zurueck zum Tile View, sobald B von "gehalten" auf "los" wechselt.
+    -- WICHTIG: `bWasHeld` wird bei JEDEM gehaltenen B (neu) gesetzt — nicht nur
+    -- beim Eintritt. Sonst gaebe es eine Sackgasse: kommt die letzte
+    -- Kurbel-Tick der Eintrittsgeste erst NACH dem B-Release an, waere
+    -- `bWasHeld` false und der einzige Ausgang (gehalten->los) nie mehr
+    -- ausloesbar. So genuegt ein erneuter B-Tipp, um herauszukommen.
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
-    if bWasHeld and not bHeld then
+    if bHeld then
+        bWasHeld = true
+    elseif bWasHeld then
         returnToEditor()
         return
     end
-    bWasHeld = bHeld
 
     if needsRedraw then
         draw()

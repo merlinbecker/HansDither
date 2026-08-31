@@ -2232,6 +2232,21 @@ fmvSwitchedTo = nil
 FrameManagementView:update()                       -- erkennt B-Release
 check(fmvSwitchedTo == edStub, "B loslassen -> switchRoom(editorRoom)")
 
+-- KEINE Sackgasse: kommt die letzte Kurbel-Tick der Eintrittsgeste erst NACH
+-- dem B-Release an, ist bWasHeld beim entered() bereits false. Ein erneuter
+-- B-Tipp muss trotzdem sauber herausfuehren.
+FrameManagementView:setImageData(makeMultiFrameImageData(3), 2)
+heldButtons[playdate.kButtonB] = false
+FrameManagementView:entered()                      -- bWasHeld = false (B schon los)
+fmvSwitchedTo = nil
+FrameManagementView:update()                       -- kein Release-Wechsel -> bleibt
+check(fmvSwitchedTo == nil, "B war beim Eintritt schon los -> kein sofortiger Ruecksprung")
+heldButtons[playdate.kButtonB] = true
+FrameManagementView:update()                       -- B erneut gedrueckt -> Ausgang scharf
+heldButtons[playdate.kButtonB] = false
+FrameManagementView:update()                       -- jetzt losgelassen -> zurueck
+check(fmvSwitchedTo == edStub, "erneuter B-Tipp fuehrt trotzdem heraus (keine Sackgasse)")
+
 section("EditorRoom: B + Kurbel rueckwaerts oeffnet die Frame Management View (Spec 010, US4, FR-018)")
 local fmvMock = { _opened = false,
     setImageData = function(self, d, cf) self._opened = true; self._cf = cf end }
