@@ -4,19 +4,20 @@
 
 - Jeder Room liefert einen eigenen Input-Handler.
 - Ein zentraler switchRoom-Mechanismus tauscht Handler atomar aus.
-- Bedienmuster im Editor (AD-019):
-  - D-Pad bewegt den Brush-Cursor tileweise; Halten wiederholt (SDK-keyRepeatTimer).
+- Bedienmuster im Editor (AD-019; Tile-View-Steuerung seit Spec 010 durch **AD-042** ueberarbeitet):
+  - D-Pad bewegt den Brush-Cursor tileweise; Halten wiederholt (SDK-keyRepeatTimer). Ist B gehalten, wird der Cursor eingefroren.
   - A malt als Strich: Der A-Druck bestimmt den Malwert — steht der Cursor auf dem aktiven Zeichen-Tile (bzw. Schwarz), malt der Strich Weiss (Radierer), sonst das Zeichen-Tile (bzw. Schwarz). Solange A gehalten wird, malen Cursor-Bewegungen denselben Wert weiter; Zellen werden nicht einzeln invertiert. Gleiche Semantik in allen drei Editierstufen (Editor-, Zoom-, PixelRoom).
-  - B (kurz) ist die Pipette: Tile an der Cursor-Position wird aktives Zeichen-Tile; Pipette auf Weiss waehlt ab. Die Pipette feuert bei B-Release ohne akkumulierte Zoom-Ticks.
-  - Crank ohne Modifier verwaltet Animationsframes (eine Rastung = ein Frame, getCrankTicks(4)); ein globaler Tile-Picker existiert nicht mehr.
-  - B halten + Crank wechselt die Zoomstufe (Tick-Akkumulation); waehrend B gehalten ist, loest der Crank keine Frame-Wechsel aus. An den Enden der Kette (Editor rueckwaerts, PixelRoom vorwaerts) ist der Trigger ein No-op.
+  - B (kurz, ohne D-Pad/Kurbel dazwischen) ist die Pipette: Tile an der Cursor-Position wird aktives Zeichen-Tile; Pipette auf Weiss waehlt ab. Sie feuert bei B-Release, sofern B nicht fuer Zoom (`bUsedForZoom`) oder Ebene/Frame (`bNavConsumed`) genutzt wurde, und zeigt kurz "Tile N picked" in der Bauchbinde.
+  - **B halten + Hoch/Runter** wechselt die aktive Ebene (+1/-1, Wrap 1..3); **B halten + Links/Rechts** wechselt den Frame (Rechts am letzten Frame = neuer Frame als tiefe Kopie).
+  - **Kurbel ohne Modifier** oeffnet im Tile View einen **Tile-Picker** ueber die tatsaechlich referenzierten Kacheln: je ~30° Netto-Drehung eine Kachel weiter, Wrap am Ende; das Overlay blendet ~1,5 s nach der letzten Drehung aus. Ein globaler „walk-the-cursor“-Tile-Picker existiert weiterhin nicht.
+  - **B halten + Crank** wechselt die Zoomstufe bzw. oeffnet die Frame-Verwaltung (Tick-Akkumulation, `getCrankTicks(4)`); waehrend B gehalten ist, laeuft der Tile-Picker nicht. An den Enden der Zoomkette (Editor vorwaerts→Zoom, PixelRoom vorwaerts) bzw. rueckwaerts im Editor gilt die Frame-Verwaltungs-Geste. Pro `update()` genau EINE Crank-Lese-API (CR-01).
 
 - Der Editing-Flow ist gestuft (genau drei Zoomstufen, FR-009):
   - EditorRoom (25x15-Tilemap, 16x16-Tiles),
   - ZoomRoom (3x3-Tile-Kontext als 24x24-Malraster, 2x2-Pixelbloecke),
   - PixelRoom (Einzeltile mit echten 16x16 Pixeln).
 
-Nutzen: klare mentale Modelle ohne Moduswechsel — der fruehere EditMode-Automat samt B-Long-Press (AD-014) ist ersatzlos entfallen; Frames und Zoom liegen direkt am Crank.
+Nutzen: klare mentale Modelle ohne Moduswechsel — der fruehere EditMode-Automat samt B-Long-Press (AD-014) ist ersatzlos entfallen. Seit AD-042 (Hardware-Test): „ein Druck = ein Schritt“ fuer Ebene und Frame (B + D-Pad), die sonst brachliegende Kurbel dient der Kachelwahl; B + Crank (Zoom / Frame-Verwaltung) bleibt unveraendert.
 
 ## 8.2 Rendering- und Redraw-Konzept
 

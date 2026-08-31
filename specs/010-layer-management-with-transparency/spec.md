@@ -30,6 +30,14 @@
 - Q: What becomes of US4 (Layer & Frame Management View)? → A: **US4 is now a Frame Management View only.** The Layer View is dropped entirely (layers are fixed, nothing to manage). The new view lists all animation frames; the user can reorder frames and delete frames (minimum 1 frame remains), so the animation stays controllable.
 - Q: How are empty upper layers stored? → A: A fully-empty Layer 2 or 3 is **omitted from the saved JSON**; on load every frame is reconstituted to exactly 3 layers. Single-layer artwork therefore stays as compact on disk as before.
 
+### Session 2026-08-31 (Fourth Round — Tile View control redesign, from hardware testing)
+
+- Q: How does the user switch the active layer? → A: **Hold B + Up / Down** (Up = layer forward, Down = layer backward, wrap 1↔3). The Crank is no longer involved in layer switching.
+- Q: How does the user switch animation frames? → A: **Hold B + Left / Right** (Right = next, Left = previous). Holding B + Right on the last frame appends a new frame (a deep copy — the only frame-creation gesture). The Crank is no longer involved in frame switching.
+- Q: What does the Crank do in Tile View now? → A: **Tile picker.** Turning the Crank (without B) brings up a filmstrip overlay of the tiles actually used in the image; each ~30° of net rotation moves the selection one tile further, wrapping at the end. Landing on tile 1 (white) means "no selection" (toggle mode), matching the eyedropper.
+- Q: Feedback when a tile is picked with the eyedropper (short B-tap on a tile)? → A: The Bauchbinde briefly shows **"Tile N picked"** (the tile's number) for ~1.5 s, then returns to the frame/layer label.
+- Note: **B + Crank forward / backward is unchanged** — it still drives the zoom chain (forward) and opens the Frame Management View (backward). B + arrow therefore means *pixel-shift* in Zoom View (FR-001) but *layer/frame switch* in Tile View — different views, no collision.
+
 ---
 
 ## User Scenarios & Testing *(mandatory)*
@@ -69,27 +77,28 @@ In the Pixel View (third View showing individual 16×16 pixels), the user can no
 
 ---
 
-### User Story 3 - Layer-Based Editing with Crank Control (Priority: P1)
+### User Story 3 - Layer & Frame Switching with B + D-Pad (Priority: P1)
 
-In the Tile View (first View showing complete image with all tiles), the user can now manage and switch between layers. Animation frames already exist and can be cycled through with the Crank. Layers are orthogonal to frames: each frame can have its own set of layers, and layers can be toggled/cycled without affecting frame switching. The user can hold Up or Down (direction keys) while turning the Crank to cycle through layers in the current frame. Holding Up cycles layers forward, holding Down cycles backward. This control must not conflict with existing Crank behavior (currently used for animation frame cycling).
+In the Tile View (first View showing complete image with all tiles), the user switches the active layer and the animation frame with **B + D-Pad**: hold B, then press **Up / Down** to cycle the 3 layers of the current frame (Up = forward, Down = backward, wrapping) and **Left / Right** to step through animation frames (Right = next, Left = previous; B + Right on the last frame appends a new frame). Layers are orthogonal to frames — every frame has the same fixed 3 layers. The Crank (without B) is reserved for the tile picker (see US5); B + Crank still drives the zoom chain / Frame Management View.
 
 **Why this priority**: Layers are fundamental to digital art creation. Combined with animation frames, this enables the user to create complex layered animations. This is explicitly requested and part of the core feature set.
 
-**Independent Test**: Load an image, hold Up and turn Crank, verify the layer indicator cycles Layer 1 → 2 → 3 → 1, release Up, turn Crank and verify the frame indicator changes instead. Every frame has the same fixed set of 3 layers.
+**Independent Test**: Load an image, hold B and press Up, verify the layer indicator cycles Layer 1 → 2 → 3 → 1; hold B and press Right, verify the frame indicator advances. Every frame has the same fixed set of 3 layers.
 
 **Acceptance Scenarios**:
 
-1. **Given** an image in Tile View, **When** holding Up and rotating Crank clockwise, **Then** the active layer cycles forward Layer 1 → Layer 2 → Layer 3 → Layer 1
-2. **Given** Up is being held and Crank is rotated, **When** Up is released and Crank continues to rotate, **Then** Crank now cycles frames (not layers)
+1. **Given** an image in Tile View, **When** holding B and pressing Up, **Then** the active layer cycles forward Layer 1 → Layer 2 → Layer 3 → Layer 1
+2. **Given** holding B, **When** pressing Left or Right, **Then** the animation frame steps to the previous / next frame (B + Right on the last frame appends a new frame — a deep copy)
 3. **Given** the user is on Layer 2 of Frame 1, **When** switching to another frame, **Then** the active layer stays Layer 2 (index preserved; every frame has all 3 layers so no wrap is needed)
-4. **Given** holding Down and rotating Crank, **When** layers cycle backward, **Then** the active layer decrements Layer 2 → Layer 1 → Layer 3 (wrapping)
-5. **Given** no Up/Down key pressed, **When** Crank is rotated, **Then** animation frames cycle (existing behavior preserved)
+4. **Given** holding B and pressing Down, **When** layers cycle backward, **Then** the active layer decrements Layer 2 → Layer 1 → Layer 3 (wrapping)
+5. **Given** B is **not** held, **When** the D-Pad is pressed, **Then** the tile cursor moves (unchanged); **When** the Crank is turned, **Then** the tile picker opens (US5) — neither switches layer or frame
+6. **Given** the eyedropper picked a tile with a short B-tap, **When** it fires, **Then** the Bauchbinde briefly shows "Tile N picked"
 
 ---
 
 ### User Story 4 - Frame Management View (Priority: P2)
 
-A dedicated Frame Management View lets the user keep the animation controllable: reorder frames and delete frames. It is reached from the Tile View by holding B and rotating the Crank backward (counterclockwise). All animation frames are shown as a list (mirroring the project-selection UI pattern). The user navigates with the D-Pad, marks a frame with A, moves the marked frame in the sequence with Left/Right, and deletes the marked frame with B. At least one frame always remains. Releasing B returns to the Tile View.
+A dedicated Frame Management View lets the user keep the animation controllable: reorder frames and delete frames. It is reached from the Tile View by holding B and rotating the Crank backward (counterclockwise) — this gesture is unchanged by the Fourth-Round redesign. All animation frames are shown as a list (mirroring the project-selection UI pattern). The user navigates with the D-Pad, marks a frame with A, moves the marked frame in the sequence with Left/Right, and deletes the marked frame with a **second A-press** on it (B is occupied by the hold-to-stay gesture). At least one frame always remains. Releasing B returns to the Tile View.
 
 There is **no** Layer View — layers are a fixed structure of exactly 3 per frame (like the 12-frame cap) and need no management UI.
 
@@ -113,9 +122,12 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 - **Pixel Shift Beyond Boundaries**: When shifting content by pixels that would move it beyond tile boundaries, tiles are recalculated, but content wraps around (no data loss; see FR-005)
 - **Transparency & Tile Generation**: Transparent tiles are treated as distinct from opaque and white tiles in tile deduplication. Two tiles with the same ink pattern but one white background and one transparent background are stored separately (3-state tile hash)
 - **Layer 1 Transparency**: Layer 1 (bottom) has no transparent state — its non-ink pixels are white. A B-press in Pixel View on Layer 1 therefore produces white (identical to the eraser)
-- **Frame Switching & Active Layer**: Switching frames preserves the active layer index. Because every frame has all 3 layers, the index always exists — no wrap is required (a defensive clamp to Layer 1 remains for corrupt data)
+- **Frame Switching & Active Layer**: Switching frames (B + Left/Right) preserves the active layer index. Because every frame has all 3 layers, the index always exists — no wrap is required (a defensive clamp to Layer 1 remains for corrupt data)
 - **Empty Layers**: Layers 2 and 3 may be entirely empty. An empty layer carries no content and is omitted from the saved file; it is reconstituted on load so every frame always exposes exactly 3 layers in the editor
 - **Fixed Layer Count**: Every frame has exactly 3 layers, always. There is no gesture or UI to add or remove a layer (Clarifications, Third Round)
+- **B + D-Pad vs. cursor / stroke**: While B is held the D-Pad switches layer/frame and does **not** move the tile cursor; a short B-tap with no D-Pad or Crank in between is still the eyedropper. If B is pressed *after* a direction key is already held, the cursor freezes rather than fighting the navigation
+- **Tile Picker with one tile**: If the image references only tile 1, the picker still opens but every step resolves to "no selection"; nothing crashes
+- **Tile Picker & session tiles**: The picker lists tiles referenced across all frames' composite caches, not `imagetable:getLength()` — orphaned session tiles (appended by edits, pruned only on save) are skipped
 - **Deleting the Last Frame**: The Frame Management View rejects deleting a frame when only one frame remains
 - **Reordering at the Ends**: Moving the first frame Left, or the last frame Right, is a no-op (clamped)
 
@@ -142,21 +154,27 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 - **FR-010**: System MUST treat legacy images without transparency as fully opaque black/white (backward compatibility)
 - **FR-011**: Transparent pixels in Pixel View MUST render visually distinct from ink and from white (e.g. checkerboard pattern)
 
-**Layer Cycling with Crank (US3)**
+**Layer & Frame Switching with B + D-Pad (US3)**
 
 - **FR-012**: Every frame MUST have **exactly 3 layers, always** — a fixed structure (Layer 1 = bottom/base, Layers 2–3 stacked above). Legacy 1-layer images gain two empty upper layers on load
 - **FR-012b**: There MUST be no gesture or UI to add or delete a layer; the layer count is not user-modifiable
 - **FR-012c**: An entirely empty Layer 2 or 3 MUST be omitted from the saved file and reconstituted on load (every frame exposes 3 layers in the editor)
-- **FR-013**: System MUST support holding Up and rotating Crank to cycle forward through the 3 layers of the active frame
-- **FR-014**: System MUST support holding Down and rotating Crank to cycle backward through the 3 layers
+- **FR-013**: System MUST cycle the active layer forward when **B is held and Up is pressed** in Tile View
+- **FR-014**: System MUST cycle the active layer backward when **B is held and Down is pressed**
 - **FR-015**: System MUST display the current layer index (1/2/3) and layer name in Tile View (visual indicator)
-- **FR-016**: System MUST preserve existing Crank behaviour for frame cycling when Up/Down keys are not held
+- **FR-016**: System MUST step the animation frame when **B is held and Left / Right is pressed** (Left = previous, Right = next); **B + Right on the last frame** appends a new frame as a deep copy of the current one (the only frame-creation gesture). When B is **not** held, the D-Pad moves the tile cursor and the Crank drives the tile picker — neither switches layer or frame
 - **FR-017**: System MUST wrap layer cycling (after Layer 3 → Layer 1 forward; before Layer 1 → Layer 3 backward)
 - **FR-017b**: Switching frames MUST preserve the active layer index (every frame has all 3 layers, so the index always exists)
 
+**Tile Picker & Eyedropper Feedback (US5)**
+
+- **FR-025**: Turning the Crank in Tile View **without B held** MUST open a tile-picker overlay (a filmstrip of the tiles actually referenced in the image) and set it as the active drawing tile; each ~30° of net rotation moves the selection one tile further, wrapping at the list ends. The overlay auto-hides ~1.5 s after the last rotation
+- **FR-026**: The tile picker MUST iterate only tiles actually referenced by the image (as `buildPauseMenuImage` does), never raw imagetable slots; selecting tile index 1 (white) MUST mean "no selection" (toggle mode), consistent with the eyedropper
+- **FR-027**: When the eyedropper (short B-tap on a tile) fires, the Bauchbinde MUST briefly show **"Tile N picked"** (the tile's index) for ~1.5 s, then revert to the frame/layer label
+
 **Frame Management View (US4)**
 
-- **FR-018**: System MUST open the Frame Management View when B is held and the Crank is rotated counterclockwise in Tile View
+- **FR-018**: System MUST open the Frame Management View when B is held and the Crank is rotated counterclockwise in Tile View (gesture unchanged by the Fourth-Round redesign)
 - **FR-019**: The Frame Management View MUST list every animation frame in order as selectable entries
 - **FR-020**: The user MUST be able to mark a frame with A; a **second A-press on the marked frame** deletes it (two-step confirmation — B is occupied by the hold-to-stay gesture). Deletion MUST be rejected when only one frame remains
 - **FR-021**: The user MUST be able to move the marked frame one position earlier (Left) or later (Right) in the sequence; moves are clamped at the ends; moving the D-Pad cursor clears the mark
@@ -182,8 +200,9 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 - **SC-001**: User can shift the active layer's content by exactly one pixel in any direction and have shifts persist through save/reload cycles
 - **SC-002**: Transparent pixels can be placed on Layers 2–3, rendered visually distinct from ink and white, and persist through save/reload
-- **SC-003**: User can cycle through the 3 layers using Crank + Up/Down without interfering with existing frame cycling behavior
+- **SC-003**: User can switch the active layer with B + Up/Down and the animation frame with B + Left/Right, with the Crank (no B) reserved for the tile picker — none of the three interferes with the others
 - **SC-004**: The Frame Management View is reachable with one B + Crank-backward gesture from Tile View and lets the user reorder and delete frames (min. 1)
+- **SC-007**: Turning the Crank in Tile View opens a tile-picker overlay that cycles the referenced tiles with wraparound and sets the active drawing tile; the eyedropper shows a brief "Tile N picked" confirmation
 - **SC-005**: All legacy images (created before this feature) load without errors, render identically, and gain two empty upper layers
 - **SC-006**: Layer content, frame order and frame count persist when images are saved and reloaded; every reloaded frame exposes exactly 3 layers
 
@@ -191,14 +210,14 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 ## Assumptions
 
-- **User Control Model**: The three views (Tile, Zoom, Pixel) already exist and have established Crank and button behaviors. This feature extends those controls, assuming no conflicting bindings (e.g., B is available in Zoom View for shift control, Up/Down are available in Tile View for layer cycling). [VERIFY: confirm available button/input bindings]
+- **User Control Model**: The three views (Tile, Zoom, Pixel) already exist and have established Crank and button behaviors. Fourth Round (hardware testing) settled the Tile View bindings: **B + Up/Down** = layer, **B + Left/Right** = frame, **Crank alone** = tile picker, **B + Crank** = zoom chain / Frame Management View (unchanged), short **B-tap** = eyedropper. B + arrow is pixel-shift in Zoom View and layer/frame switch in Tile View — different views, no collision.
 - **Storage Format**: The existing image storage format (PDI/JSON) can be extended to include transparency data and layer metadata without breaking existing loaders. [DEPENDENCY: Spec 009 tile cleanup must complete first; confirms JSON structure can be extended]
 - **Layer Architecture**: Every frame has **exactly 3 layers, always** (fixed structure, like the 12-frame cap). Layer 1 = bottom/base, Layers 2–3 stacked above. No add/delete. An empty upper layer is simply omitted on disk and rebuilt on load.
 - **Backward Compatibility (1-Layer Upgrade)**: Legacy images have a single flat layer. On load the existing content becomes Layer 1 and two empty upper layers are added, so the frame exposes 3 layers. Save then writes the v1.1 format (still 1 layer entry on disk while Layers 2–3 stay empty).
 - **Frame Independence**: Layers are stored per-frame, not globally, but every frame has the same 3 stacking slots — frame switching never changes the layer count.
 - **Layer Rendering Order**: Layers are composited bottom-up (Layer 1 → Layer 3). Only the active layer is editable in Zoom/Pixel views. Layer 1's white background is opaque; Layers 2–3's non-ink pixels are transparent so lower layers show through.
 - **Empty Layer Handling**: Layers 2–3 may be empty. An empty layer is omitted from the saved JSON and rebuilt on load; there is no user action to delete a layer (there is nothing to delete — the slot always exists).
-- **Frame Management Navigation**: One gesture (hold B + Crank backward in Tile View) opens the Frame Management View; releasing B returns to Tile View. No deeper hierarchy.
+- **Frame Management Navigation**: One gesture (hold B + Crank backward in Tile View) opens the Frame Management View; releasing B returns to Tile View. No deeper hierarchy. (Unchanged by the Fourth-Round redesign — that only moved layer/frame *switching* off the Crank.)
 
 ---
 
@@ -208,7 +227,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 **Scope**: This feature affects:
 - **Data Model**: 3-layer structure per frame + per-pixel transparency carried in the tile bitmap (kColorClear); no per-cell transparency array
-- **Runtime Behavior**: Input multiplexing (Crank behaviour conditional on held Up/Down for layers, B + Crank-backward for the Frame Management View), plus a re-composite step after every layer edit
+- **Runtime Behavior**: Input multiplexing (B + Up/Down = layer, B + Left/Right = frame, Crank alone = tile picker, B + Crank = zoom chain / Frame Management View), plus a re-composite step after every layer edit
 - **Interfaces**: Editor state machine, `LayerModel` helper API, new `FrameManagementView` room
 
 **Quality Attributes Affected**:
@@ -220,6 +239,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 - **ADR Required**: "Layer Rendering Order & Compositing Strategy" — decision: composite all 3 layers, topmost non-empty cell wins; flat composite cache feeds the tilemap
 - **ADR Required**: "Pixel Transparency Encoding" — decision: transparency lives per-pixel as kColorClear in the tile; 3-state tile hash; no per-cell array
 - **ADR Required**: "Fixed 3-Layer Structure" — decision: layers are a fixed structure (no add/delete), like the 12-frame cap; empty upper layers omitted on disk
+- **ADR Required**: "Tile View Control Redesign" (ADR-042) — decision: layer/frame switching moves to B + D-Pad; the free Crank drives a referenced-tile picker; B + Crank (zoom / Frame Management View) unchanged
 - **Risk Record**: "Playdate Performance Under Pixel Shifting" (re-tiling all 375 cells of a layer per keypress must not drop frame rate below 30 FPS)
 
 ### Existing Dependencies & Compatibility
@@ -234,13 +254,13 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
   - **Mitigation**: Performance testing during planning phase; consider batching shifts or lazy recalculation
 - **Risk**: Layer metadata could break existing save/load cycle if not handled carefully
   - **Mitigation**: Version the file format; provide fallback loader for legacy images
-- **Risk**: Input multiplexing (Up/Down + Crank for layers vs. Crank alone for frames) could be confusing
-  - **Mitigation**: Clear visual feedback (layer indicator, state display); user testing during planning
+- **Risk**: Input multiplexing (B + Up/Down = layer, B + Left/Right = frame, Crank alone = tile picker) could be confusing
+  - **Mitigation**: Clear visual feedback (layer indicator, tile-picker overlay, "Tile N picked" toast); hardware testing (the Fourth-Round redesign itself came out of that testing)
 
 ---
 
 ## Status Summary
 
-**Clarified** (three rounds — see `## Clarifications`). Third round (2026-08-31) restructured US4: layers are a fixed structure of exactly 3 per frame (no add/delete); the non-ink pixel state is white on Layer 1 and transparent on Layers 2–3; US4 becomes a Frame Management View (reorder + delete frames). This is being propagated through plan / research / data-model / contracts / tasks and the implementation.
+**Clarified** (four rounds — see `## Clarifications`). Third round restructured US4 (fixed 3 layers, layer-dependent off-state, US4 = Frame Management View). Fourth round (2026-08-31, from hardware testing) redesigned the Tile View controls: layer switch → B + Up/Down, frame switch → B + Left/Right, Crank alone → tile picker, eyedropper → "Tile N picked" toast. B + Crank (zoom chain / Frame Management View) unchanged.
 
-**Implementation status**: MVP (US1 shift, US2 transparency, US3 layer cycling) implemented and green on the `feature/0.3-addons` branch; the fixed-3-layer restructuring and US4 Frame Management View follow.
+**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign is implemented (EditorRoom tile picker + B + D-Pad navigation, 356 headless assertions green). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059).

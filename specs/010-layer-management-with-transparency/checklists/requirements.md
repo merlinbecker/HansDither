@@ -170,4 +170,15 @@ Re-validated against the updated spec. All 16 checklist items remain passing
 - Affects: FR-006..FR-011 (transparency), FR-012/012b/012c/017b (fixed 3 layers), FR-018..FR-024 (Frame Management View), Edge Cases, Key Entities, Success Criteria, Assumptions.
 - The "CLARIFICATION REQUIRED" Questions 1–3 above are historical; Q1 (index preservation) still holds trivially since every frame has all 3 layers.
 
+### Integration Note (Session 4, 2026-08-31) — Tile View control redesign (from hardware testing)
+
+Re-validated against the updated spec. All 16 checklist items remain passing
+(16/16 → 16/16, no state changes). New clarifications integrated:
+
+- **Layer switch → B + Up/Down**, **frame switch → B + Left/Right** (B + Right on the last frame appends a frame). The Crank no longer switches layer or frame.
+- **Crank alone → tile picker** over the *referenced* tile indices (~30°/tile, wraparound, auto-hide); index 1 (white) = "no selection".
+- **Eyedropper toast**: a short B-tap shows "Tile N picked" in the Bauchbinde for ~1.5 s.
+- **B + Crank forward/backward** (zoom chain / Frame Management View) is **unchanged**. B + arrow means pixel-shift in Zoom View but layer/frame switch in Tile View — different views, no collision.
+- Affects: FR-013/014/016, new FR-025..FR-027 (Tile Picker & Eyedropper Feedback, US5), US3/US4 narrative, SC-003/004, new SC-007, Edge Cases, Assumptions, Architecture Governance. New ADR-042. research.md gains R10.
+
 

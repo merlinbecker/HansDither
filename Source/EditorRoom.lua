@@ -121,19 +121,37 @@ local function updateTilemapFrame()
     end
 end
 
--- Distinkte, aktuell referenzierte Tile-Indizes ueber alle Frames (aufsteigend).
--- Wie EditorRoom:buildPauseMenuImage (CR-06): NICHT imagetable:getLength() —
--- Sitzungs-Edits haengen neue Tiles an und verwaisen alte; erst das Speichern
--- (pruneUnusedTilesLayered) raeumt auf. Der Tile-Picker soll nur echte Kacheln
--- durchlaufen. Index 1 (Weiss-Basis) ist immer dabei -> Abwahl stets erreichbar.
+-- Distinkte, aktuell referenzierte Tile-Indizes fuer den Tile-Picker
+-- (aufsteigend). Quelle sind die EBENEN-Positionen (`frameLayers`), NICHT der
+-- flache Composite-Cache `imageData.frames`: dort gewinnt je Zelle nur die
+-- oberste nicht-leere Ebene, sodass eine Kachel, die nur auf einer verdeckten
+-- (oberen oder unteren) Ebene liegt, aus der Auswahl fiele — und mitten in der
+-- Sitzung verschwinden koennte, sobald eine hoehere Ebene die Zelle abdeckt.
+-- NICHT imagetable:getLength(): Sitzungs-Edits haengen neue Tiles an und
+-- verwaisen alte; erst das Speichern (pruneUnusedTilesLayered) raeumt auf.
+-- Index 1 (Weiss-Basis) ist immer dabei -> Abwahl stets erreichbar.
 local function referencedTileIndices()
-    if not imageData or not imageData.frames then return {} end
-    local seen, list = {}, {}
-    for _, frame in ipairs(imageData.frames) do
-        for _, idx in ipairs(frame) do
-            if idx and idx ~= 0 and not seen[idx] then
-                seen[idx] = true
-                list[#list + 1] = idx
+    if not imageData then return {} end
+    local seen, list = { [1] = true }, { 1 }
+    local entries = imageData.frameLayers
+    if entries then
+        for _, entry in ipairs(entries) do
+            for _, layer in ipairs(entry.layers or {}) do
+                for _, idx in ipairs(layer.positions or {}) do
+                    if idx and idx ~= 0 and not seen[idx] then
+                        seen[idx] = true
+                        list[#list + 1] = idx
+                    end
+                end
+            end
+        end
+    elseif imageData.frames then
+        for _, frame in ipairs(imageData.frames) do
+            for _, idx in ipairs(frame) do
+                if idx and idx ~= 0 and not seen[idx] then
+                    seen[idx] = true
+                    list[#list + 1] = idx
+                end
             end
         end
     end

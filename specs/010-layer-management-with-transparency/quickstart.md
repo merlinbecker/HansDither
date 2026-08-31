@@ -15,15 +15,15 @@
 
 ---
 
-## Test Scenario 1: Layer Cycling with Crank (US3)
+## Test Scenario 1: Layer & Frame Switching with B + D-Pad (US3, Fourth Round)
 
-**Goal**: Verify that the 3 fixed layers can be cycled forward/backward via Crank + Up/Down without interfering with frame cycling.
+**Goal**: Verify that the 3 fixed layers cycle via **B + Up/Down** and frames step via **B + Left/Right**, with the Crank reserved for the tile picker.
 
 **Setup**:
 1. Create a new Hans-Dither project with 3 frames (every frame already has 3 layers — nothing to "create")
 2. In Frame 1:
    - Layer 1 (bottom): draw a background pattern (its non-ink pixels are white)
-   - Layer 2: cycle to it (hold Up + Crank), draw a character sprite (its non-ink pixels are transparent)
+   - Layer 2: cycle to it (hold B + press Up), draw a character sprite (its non-ink pixels are transparent)
    - Layer 3: cycle to it, draw an effect overlay
 3. Save the image
 
@@ -32,18 +32,19 @@
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Enter Tile View, verify Frame 1 is displayed with all 3 layers composited | All 3 layers visible: background at bottom, character in middle, effects transparent on top |
-| 2 | Verify layer indicator shows "Layer 1 (Active)" | On-screen indicator displays active layer |
-| 3 | Hold Up arrow key and rotate Crank clockwise once | Layer indicator changes to "Layer 2 (Active)" |
-| 4 | While still holding Up, rotate Crank once more | Layer indicator changes to "Layer 3 (Active)" |
-| 5 | While still holding Up, rotate Crank once more | Layer indicator changes to "Layer 1 (Active)" (wraparound) |
-| 6 | Release Up arrow, rotate Crank clockwise once | Frame indicator changes to "Frame 2" (layer cycling stops, frame cycling resumes) |
-| 7 | Hold Down arrow, rotate Crank twice counterclockwise | On Frame 2 (also 3 layers): active layer goes Layer 1 → Layer 3 → Layer 2 |
-| 8 | Release Down, rotate Crank back to Frame 1 | Frame 1's active layer is whatever it was last (Layer 3 from step 5); Frame 2 kept its own active layer (Layer 2) — the index is per-frame session state |
+| 2 | Verify layer indicator shows "L1/3 Layer 1" | On-screen indicator displays active layer index + name |
+| 3 | Hold B, press Up once | Layer indicator changes to "L2/3 ..." |
+| 4 | While still holding B, press Up again | Layer indicator changes to "L3/3 ..." |
+| 5 | While still holding B, press Up again | Layer indicator changes to "L1/3 ..." (wraparound) |
+| 6 | Still holding B, press Right once | Frame indicator changes to "Frame 2/3"; active layer index unchanged |
+| 7 | Holding B, press Down twice | On Frame 2 (also 3 layers): active layer goes Layer 1 → Layer 3 → Layer 2 |
+| 8 | Holding B, press Left back to Frame 1 | Frame 1's active layer index is preserved; every frame always has 3 layers |
+| 9 | Release B, turn the Crank | The **tile picker** overlay appears (Scenario 7) — it does **not** switch layer or frame |
 
 **Acceptance Criteria**:
-- ✅ Layer cycling works forward (Up + Crank) and backward (Down + Crank)
-- ✅ Layer index wraps around (Layer 3 → Layer 1)
-- ✅ Layer cycling does not interfere with frame cycling (Crank alone)
+- ✅ Layer cycling works forward (B + Up) and backward (B + Down), wrapping Layer 3 → Layer 1
+- ✅ Frame stepping works with B + Left/Right; B + Right on the last frame appends a new frame
+- ✅ The Crank alone switches neither layer nor frame (it drives the tile picker)
 - ✅ Every frame always has the same 3 layers; the active index is preserved across frame switches
 
 ---
@@ -54,7 +55,7 @@
 
 **Setup**:
 1. Open the Scenario 1 image, Frame 1
-2. Cycle to **Layer 2** (hold Up + Crank) — transparency only exists on Layers 2–3
+2. Cycle to **Layer 2** (hold B + press Up) — transparency only exists on Layers 2–3
 3. Enter Zoom View, then Pixel View on a Layer 2 tile
 
 **Test Steps**:
@@ -159,7 +160,7 @@ Then repeat on **Layer 1**: B-press produces **white** (identical to the A-erase
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Load a Spec 009 image in Tile View | Loads without error, renders identically |
-| 2 | Hold Up + Crank to cycle layers | Cycles Layer 1 → 2 → 3 → 1; Layer 1 holds the old content, Layers 2–3 are empty |
+| 2 | Hold B + press Up to cycle layers | Cycles Layer 1 → 2 → 3 → 1; Layer 1 holds the old content, Layers 2–3 are empty |
 | 3 | Enter Pixel View on Layer 1 | Pixels are ink / white only (no transparency on Layer 1) |
 | 4 | Save image | File is written in v1.1 format — one layer entry on disk (empty Layers 2–3 omitted) |
 | 5 | Reload image | Renders identically to Step 1; still 3 layers in the editor |
@@ -189,7 +190,7 @@ Then repeat on **Layer 1**: B-press produces **white** (identical to the A-erase
 |------|--------|-----------------|
 | 1 | Tile View | All 3 layers composited, Layer 1 bottom → Layer 3 top |
 | 2 | Check transparent regions | Where Layers 2/3 are transparent, the layer below shows through |
-| 3 | Cycle to Layer 1 (Up + Crank) | Indicator "L1/3 Layer 1"; still composited with the others |
+| 3 | Cycle to Layer 1 (B + Up) | Indicator "L1/3 Layer 1"; still composited with the others |
 | 4 | Draw in Zoom/Pixel View | Only Layer 1 changes; Layers 2 & 3 untouched |
 | 5 | Cycle to Layer 2 | Indicator "L2/3 Layer 2" |
 | 6 | Draw in Zoom/Pixel View | Only Layer 2 changes; Layers 1 & 3 untouched |
@@ -199,6 +200,34 @@ Then repeat on **Layer 1**: B-press produces **white** (identical to the A-erase
 - ✅ Active layer is editable; inactive layers read-only
 - ✅ Transparent pixels are visually transparent (see through to layers below)
 - ✅ Drawing on one layer doesn't affect other layers
+
+---
+
+## Test Scenario 7: Tile Picker & Eyedropper Toast (US5, Fourth Round)
+
+**Goal**: Verify the Crank opens a tile picker that cycles the referenced tiles, and that the eyedropper shows a "Tile N picked" toast.
+
+**Setup**:
+1. Open any image that uses several distinct tiles (draw a few different 16×16 tiles if needed)
+
+**Test Steps**:
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | In Tile View, with B **not** held, turn the Crank slowly | A filmstrip overlay appears centred on screen; the highlighted tile changes ~1 per 30° of rotation; "Tile N" is shown below it |
+| 2 | Keep turning past the last tile | Selection wraps back to tile 1 (white = "no selection") |
+| 3 | Turn the Crank the other way | Selection steps backward, wrapping at tile 1 → last tile |
+| 4 | Stop turning, wait ~2 s | The overlay auto-hides; the selected tile is now the active drawing tile |
+| 5 | Press A over an empty cell | The cell is painted with the picked tile |
+| 6 | Move the cursor onto a non-white tile, give a short B-tap (no Crank, no D-Pad during the hold) | Bauchbinde briefly shows "Tile N picked"; after ~1.5 s it reverts to "Frame x/y ..." |
+| 7 | Hold B and press Up/Down/Left/Right | Layer / frame switches (Scenario 1) — the B-tap eyedropper does **not** also fire |
+
+**Acceptance Criteria**:
+- ✅ Crank (no B) opens the tile picker and cycles the referenced tiles with wraparound
+- ✅ The picker never shows orphaned session tiles (only tiles referenced across frames)
+- ✅ Overlay auto-hides ~1.5 s after the last rotation; the selection persists as the active tile
+- ✅ Eyedropper shows "Tile N picked" for ~1.5 s
+- ✅ A B-release that followed a B + D-Pad navigation does not fire the eyedropper
 
 ---
 
@@ -232,8 +261,9 @@ pdc Source "Hans Dither.pdx"
 
 - [ ] **US1 (Pixel Shifting)**: Test Scenario 3 passes — shifts work, tiles recalculate, persist
 - [ ] **US2 (Transparency)**: Test Scenario 2 passes — B places the layer's non-ink state; transparent pixels stored/rendered/persisted on Layers 2–3
-- [ ] **US3 (Layer Cycling)**: Test Scenario 1 passes — Crank cycles the 3 fixed layers, doesn't interfere with frames
+- [ ] **US3 (Layer/Frame Switching)**: Test Scenario 1 passes — B + Up/Down = layer, B + Left/Right = frame, Crank switches neither
 - [ ] **US4 (Frame Management View)**: Test Scenario 4 passes — reorder + delete frames (min. 1), persists
+- [ ] **US5 (Tile Picker + Toast)**: Test Scenario 7 passes — Crank cycles referenced tiles with wrap; eyedropper shows "Tile N picked"
 - [ ] **Backward Compat**: Test Scenario 5 passes — v1.0 images load as Layer 1 + two empty upper layers
 - [ ] **Compositing**: Test Scenario 6 passes — 3 layers render correctly, editing isolated to the active layer
 - [ ] **Gate 1 (Tests)**: `lua tests/headless_tests.lua` passes with "ALLE TESTS BESTANDEN"
@@ -246,7 +276,12 @@ pdc Source "Hans Dither.pdx"
 
 | Issue | Diagnosis | Resolution |
 |-------|-----------|-----------|
-| Frame Management View doesn't open | B + Crank-backward not bound in `EditorRoom.handleCrank` | Check the `zoomTickAccu <= -ZOOM_TICK_THRESHOLD` branch |
+| Frame Management View doesn't open | B + Crank-backward not bound in `EditorRoom.handleCrank` | Check the `zoomTickAccu <= -ZOOM_TICK_THRESHOLD` branch (B-held branch) |
+| B + Up/Down or B + Left/Right doesn't switch layer/frame | `*ButtonDown` handler not checking `buttonIsPressed(kButtonB)` before `startMove` | Check `EditorRoom:inputHandler` — B-held routes to `bDpadNav` |
+| Crank does nothing / no tile-picker overlay | no-B branch of `handleCrank` not accumulating into `crankAccumDegrees`, or `pickerVisible` never set | Check `handleCrank` else-branch + `drawTilePickerOverlay` gate in `draw()` |
+| Tile picker cycles through blank/garbage tiles | iterating `imagetable:getLength()` instead of referenced indices | `referencedTileIndices()` must scan `imageData.frames` like `buildPauseMenuImage` (CR-06) |
+| B-tap after B + D-Pad also picks a tile | `bNavConsumed` not latched in `bDpadNav`, or derived from live button state | Set it inside `bDpadNav`; clear only in `BButtonDown`/`BButtonUp` |
+| "Tile N picked" never disappears | no timeout-transition redraw for `pickMessage` | Mirror the `bauchbindeVisible` pattern in `update()` |
 | Transparent pixels render as white | Tile built without `kColorClear`, or `hashTile` not 3-class | Check `PixelRoom.buildTileImage` + `ImageStoreCodec.hashTile` |
 | Upper-layer eraser leaves opaque white | `writeActiveLayerPosition` not mapping white→absent on Layers 2–3 | Check `EditorRoom.writeActiveLayerPosition` |
 | Multi-layer edit lost on save | `imageData.frames` mutated directly instead of `frameLayers` | All edits must go through the active layer + `recompositeCell` |
@@ -256,4 +291,4 @@ pdc Source "Hans Dither.pdx"
 
 ---
 
-**Status**: ✅ Quickstart updated for the Third-Round fixed-3-layer clarification.
+**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast). Scenario 7 added.

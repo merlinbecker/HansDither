@@ -56,7 +56,9 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 - **Advisor-Fix** (Radierer auf oberen Ebenen → „absent“) ✅ — buildNumber 18 → 19.
 - **Third Round** (Klarstellung durch alle Artefakte + Code) ✅ — feste 3 Ebenen, ebenenabhängiger „Nicht-Tinte“-Zustand, buildNumber 19 → 20.
 - **Phase 6** (T033–T043, US4 Frame Management View) ✅ — buildNumber 20 → 21.
-- **Phase 7** (T044–T059): Gates grün (T044–T048) ✅; arc42 Ch.4/Ch.5/Ch.9 + ADR-039..041 (T049–T052) ✅; Performance-Profiling + Simulator-Integrationstests (T053–T059) **offen** (Gerät/Simulator).
+- **FMV-Sackgassen-Fix** (B-Timing beim Eintritt) ✅ — buildNumber 22 → 23.
+- **Fourth Round — Tile-View-Steuerungs-Redesign** (aus dem Hardware-Test) ✅ — **B + Hoch/Runter = Ebene**, **B + Links/Rechts = Frame**, **freie Kurbel = Tile-Picker** (über die referenzierten Kacheln, ~30°/Kachel, Wrap, Auto-Ausblenden), Pipette meldet „Tile N picked“. B + Crank (Zoom / Frame-Verwaltung) unverändert. `layerAccumDegrees` entfernt, `crankAccumDegrees` als Picker-Akkumulator umgewidmet, `bNavConsumed` trennt B+D-Pad von der Pipette. Durch spec/research (R10)/quickstart (Szenario 7) + arc42 Ch.4/5/8/9 + **ADR-042** gezogen. 356 Assertions grün, buildNumber 23 → 24.
+- **Phase 7** (T044–T059): Gates grün (T044–T048) ✅; arc42 Ch.4/Ch.5/Ch.8/Ch.9 + ADR-039..042 (T049–T052) ✅; Performance-Profiling + Simulator-Integrationstests (T053–T059) **offen** (Gerät/Simulator).
 - **Phase 6** (T033–T043, US4 Management-Views) — offen.
 - **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
 

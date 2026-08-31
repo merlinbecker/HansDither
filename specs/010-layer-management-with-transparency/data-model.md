@@ -45,7 +45,7 @@ There is **no `transparency` array.** Per-pixel transparency is a property of th
 **State Transitions**:
 - **Created**: Layer 1 = all `1` (white); Layers 2–3 = all `0` (absent/empty).
 - **Edited**: only the *active* layer changes. On Layer 1 the eraser writes `1` (white); on Layers 2–3 it writes `0` (absent). A pixel-level transparent write produces a tile with `kColorClear` pixels.
-- **Active**: selected via Up/Down + Crank; highlighted in the Tile View HUD; the only editable layer in Zoom/Pixel.
+- **Active**: selected via **B + Up/Down** (Fourth Round); highlighted in the Tile View HUD; the only editable layer in Zoom/Pixel.
 - *(No "Deleted" transition — layers cannot be deleted.)*
 
 ---
@@ -91,8 +91,8 @@ Internally the editor tracks three codes (`PixelTransparency`: `OPAQUE=0`, `TRAN
 - Image frame count 1–12.
 
 **State Transitions**:
-- **Created**: Layer 1 = white, Layers 2–3 = empty.
-- **Active**: selected via Crank in Tile View.
+- **Created**: Layer 1 = white, Layers 2–3 = empty. A new frame is appended by **B + Right on the last frame** (deep copy of the current one) — the only frame-creation gesture.
+- **Active**: selected via **B + Left/Right** in Tile View (Fourth Round).
 - **Reordered / Deleted**: via the Frame Management View (min. 1 frame remains).
 
 ---
@@ -159,12 +159,13 @@ Pruning (`pruneUnusedTilesLayered`) runs **globally across all layers of all fra
 
 **Runtime state**: the editor holds a single `activeLayer` (1..3), clamped to the frame's 3 layers. It is **not** persisted.
 
-**Transitions**:
+**Transitions** *(Fourth Round — B + D-Pad, one press = one step; supersedes "Up/Down + Crank")*:
 
-1. **Up held + 360° Crank**: `activeLayer = activeLayer % 3 + 1` (forward, Layer 1→2→3→1).
-2. **Down held + 360° Crank**: `activeLayer = (activeLayer + 1) % 3 + 1` (backward, Layer 1→3→2→1).
-3. **Frame switch** (Crank, no Up/Down): `activeLayer` unchanged — every frame has all 3 layers. A defensive `clampActive` to Layer 1 only fires on corrupt data.
-4. *(No "layer deleted" transition.)*
+1. **B held + Up**: `activeLayer = activeLayer % 3 + 1` (forward, Layer 1→2→3→1).
+2. **B held + Down**: `activeLayer = (activeLayer + 1) % 3 + 1` (backward, Layer 1→3→2→1).
+3. **Frame switch** (B held + Left/Right): `activeLayer` unchanged — every frame has all 3 layers. A defensive `clampActive` to Layer 1 only fires on corrupt data.
+4. **Crank (no B)**: does **not** touch `activeLayer` — it drives the tile picker (`activeTile`), a separate session value.
+5. *(No "layer deleted" transition.)*
 
 ---
 

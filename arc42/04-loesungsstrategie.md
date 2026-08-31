@@ -61,7 +61,7 @@ Damit entfaellt das bisherige Nicht-Ziel "keine Multi-Frame-Animationstools"; di
 ## 4.6 Ebenen & Pixel-Transparenz (Spec 010)
 
 Der Editor erhaelt Ebenen, praezises Pixel-Verschieben und Transparenz.
-Leitentscheidungen (Details in Kapitel 9, AD-039..AD-041):
+Leitentscheidungen (Details in Kapitel 9, AD-039..AD-042):
 
 1. **Feste 3-Ebenen-Struktur je Frame.** Jeder Frame hat genau 3 Ebenen,
    immer — eine harte Grenze wie MAX_FRAMES = 12. Kein Hinzufuegen/Loeschen
@@ -78,10 +78,17 @@ Leitentscheidungen (Details in Kapitel 9, AD-039..AD-041):
    ist die Wahrheit; `imageData.frames` ist ein daraus abgeleiteter
    flacher 375er-Cache (oberste nicht-leere Zelle gewinnt), den die
    bestehende Tilemap zeichnet — kein neuer Renderpfad (AD-041). Nur die
-   aktive Ebene ist editierbar (Up/Down + Crank waehlt sie).
+   aktive Ebene ist editierbar.
 4. **US4 = Frame-Verwaltung.** Ein neuer `FrameManagementView` (Halten B +
    Kurbel rueckwaerts) laesst Frames anordnen und loeschen (min. 1). Keine
    Layer View — Ebenen sind fest (AD-041).
+5. **Tile-View-Steuerung (AD-042, 4. Runde aus dem Hardware-Test):**
+   **B + Hoch/Runter** waehlt die aktive Ebene, **B + Links/Rechts** den
+   Frame (Rechts am Ende: neuer Frame), die **freie Kurbel** oeffnet einen
+   Tile-Picker ueber die referenzierten Kacheln, die Pipette meldet kurz
+   „Tile N picked“. **B + Kurbel** (Zoom / Frame-Verwaltung) bleibt
+   unveraendert. Ebenen-/Frame-Wechsel liegen damit nicht mehr auf der
+   Kurbel.
 
 Speicherformat `frames.json` steigt auf Version `"1.1"`
 (`frames[].layers[].{layerIndex, name, positions[375], visible}`); v1.0

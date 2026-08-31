@@ -68,8 +68,11 @@ Per-layer **off state**: Layer 1 → `EMPTY` (renders white); Layers 2–3 → `
 | `EditorRoom:getActiveLayerInfo()` | `{index, count=3, name}` for the HUD indicator (FR-015). |
 | `EditorRoom:shiftActiveLayer(dir)` | US1 entry point; shifts + re-composites; returns `true` on success. |
 | `EditorRoom:currentZoomContext()` | Fresh 3×3 context at the cursor (for ZoomRoom after a shift). |
-| Up/Down held + 360° Crank | Cycles `activeLayer` (FR-013/014/017); Crank alone still cycles frames (FR-016). |
-| B held + Crank **backward** | Opens the Frame Management View (FR-018). |
+| **B held + Up / Down** | Cycles `activeLayer` +1 / -1 with wrap (FR-013/014/017). Single press = single step. |
+| **B held + Left / Right** | Steps the animation frame prev / next (FR-016); **B + Right on the last frame** appends a new frame (deep copy). |
+| **Crank, no B** | Opens the tile picker: `referencedTileIndices()` (referenced tiles only, like `buildPauseMenuImage`) stepped ~1 per 30° with wraparound; sets `activeTile` (index 1 → `nil`); overlay auto-hides ~1.5 s after the last turn (FR-025/026). |
+| Short **B-tap** | Eyedropper; `pipette()` sets `activeTile` and shows "Tile N picked" in the Bauchbinde for ~1.5 s (FR-027). Suppressed if B was used for zoom (`bUsedForZoom`) or B + D-Pad nav (`bNavConsumed`). |
+| B held + Crank **backward** | Opens the Frame Management View (FR-018) — unchanged by the Fourth-Round redesign. |
 
 Edits (`setCell`, `applyTileEdits`) route through `writeActiveLayerPosition`: on Layers 2–3 a write of the white tile `1` becomes `0` (absent), so the eraser stays a see-through eraser.
 

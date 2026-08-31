@@ -1828,6 +1828,27 @@ EditorRoom:update()
 check(not (lastBandLabel() or ""):match("picked"),
     "B-Release nach B+D-Pad loest KEINE Pipette aus (bNavConsumed)")
 
+section("EditorRoom: Tile-Picker erreicht auch verdeckte Kacheln (nur auf einer Ebene) (Spec 010)")
+-- Der Picker liest die EBENEN-Positionen, nicht den flachen Composite-Cache:
+-- eine Kachel, die nur auf einer verdeckten Ebene liegt, bleibt waehlbar und
+-- verschwindet nicht mitten in der Sitzung, wenn eine hoehere Ebene die Zelle abdeckt.
+loadEditorV11("picker-covered", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0, { [1] = 7 }), visible = true },  -- Tile 7 NUR hier
+        { layerIndex = 2, name = "Effects",    positions = pos375(0, { [1] = 9 }), visible = true },  -- deckt Zelle 1 im Composite
+    } },
+}, 9)
+check(EditorRoom:getImageData().frames[1][1] == 9,
+    "Vorbedingung: Composite-Cache an Zelle 1 zeigt nur die oberste Ebene (Tile 9)")
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- referenziert = {1,7,9}; 1 -> 7
+check(lastPickerLabel() == "Tile 7",
+    "Picker erreicht Tile 7 (liegt nur auf der verdeckten Ebene 2, fehlt im Composite-Cache)")
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- 7 -> 9
+check(lastPickerLabel() == "Tile 9", "weiter zu Tile 9")
+
 -- ── US1: Pixel-Shift (Spec 010) ───────────────────────────────────────────
 
 section("LayerModel: shiftLayerContent verschiebt den Pixelinhalt um 1 Pixel (Spec 010, US1)")

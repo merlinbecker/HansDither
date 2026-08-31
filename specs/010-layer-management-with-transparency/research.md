@@ -303,8 +303,9 @@ For this feature, focus on pure Lua logic (no simulator/device interaction):
 
 - **US1 Shift**: `LayerModel.shiftLayerContent` moves a known pixel by 1 in each direction; wrap from the right edge; `EditorRoom:shiftActiveLayer` leaves the base layer and other frames untouched; ZoomRoom B+arrow dispatches.
 - **US2 Transparency**: PixelRoom B-press paints the layer's off-state (white on Layer 1, kColorClear on Layers 2–3); 3-class `hashTile` separates white-bg and transparent-bg tiles; `setCurrentTile` reads the three classes back.
-- **US3 Layer Cycling**: Up/Down + 360° Crank cycles the 3 layers with wrap; Crank alone still cycles frames; the active index is preserved across frame switches.
+- **US3 Layer/Frame Switching (Fourth Round)**: B + Up/Down cycles the 3 layers with wrap; B + Left/Right steps frames (B + Right at the last frame appends a deep copy); the Crank with no B switches nothing; the active layer index is preserved across frame switches; a B-release that followed a B + D-Pad nav does **not** also fire the eyedropper (`bNavConsumed`).
 - **US3 fixed-3**: `LayerModel` always yields exactly 3 layers; load pads to 3; save omits empty Layers 2–3; a v1.0 flat image loads as 3 layers.
+- **US5 Tile Picker (Fourth Round)**: Crank without B steps the active tile through the *referenced* indices (like `buildPauseMenuImage`) at ~30°/tile with wraparound; overlay auto-hides ~1.5 s after the last turn; the eyedropper toast shows "Tile N picked".
 - **Editing model**: an edit on Layer 2 does not touch Layer 1; the A-press eraser on an upper layer returns the cell to "absent" (0), not opaque white; round-trips through save/reload.
 - **US4 Frame Management**: reorder moves a frame one slot (clamped at ends); delete removes it (rejected at 1 frame); `currentFrame` clamps on return; reorder/delete persist through save/reload.
 
@@ -345,6 +346,39 @@ Second Round set a *maximum* of 3 layers (Layer 1 mandatory, 2–3 optional, add
 
 ---
 
+## R10: Tile View Control Redesign (Fourth Round — from hardware testing)
+
+**Question**: On device, layer + frame switching on the Crank felt awkward and the Crank was otherwise idle in Tile View. What should the Tile View controls be?
+
+**Research Summary**:
+
+Hardware testing of the Third-Round build showed three problems: (1) "hold Up/Down + full Crank revolution" for a *single* layer step is slow and easy to overshoot; (2) a full 360° revolution to advance one frame is imprecise; (3) the Crank does nothing useful on its own in Tile View, while tile selection still requires walking the cursor onto an existing tile and eyedropping it.
+
+**Decision**: Move layer/frame switching to **B + D-Pad**; give the free Crank a **tile picker**.
+
+```
+B + Up / Down     -> active layer  +1 / -1   (wrap 1..3)
+B + Left / Right  -> frame  prev / next      (B + Right at last frame = append deep copy)
+Crank (no B)      -> tile-picker overlay: ~30°/tile through the REFERENCED tiles, wrap
+B + Crank fwd/back-> zoom chain / Frame Management View   (UNCHANGED)
+short B-tap       -> eyedropper; Bauchbinde shows "Tile N picked" ~1.5 s
+```
+
+**Rationale**:
+- **One press = one step** for layer and frame — no revolution counting, no overshoot.
+- The picker iterates only tiles actually referenced by the image (same rule as `buildPauseMenuImage`, CR-06) — session-orphaned tiles (pruned only on save) are skipped. Index 1 (white) = "no selection", matching the eyedropper.
+- `bNavConsumed` latches when B + D-Pad runs, so the subsequent B-release does not also fire the eyedropper. It is cleared only in `BButtonDown`/`BButtonUp`, never derived from live button state (the user may release the direction key before B).
+- **CR-01 preserved**: the B branch of `handleCrank` still calls `getCrankTicks(4)`; the no-B branch uses `getCrankChange()` + a `crankAccumDegrees` accumulator with a sub-360° (30°) threshold — never both APIs in one frame.
+- B + arrow means pixel-shift in Zoom View (FR-001) and layer/frame switch in Tile View — different rooms, no conflict.
+
+**Alternatives Rejected**:
+- *Keep layer/frame on the Crank, add a modifier for the picker*: adds a third Crank mode; the Crank was already the awkward part.
+- *Tick-based picker via a second `getCrankTicks(tpr)`*: `getCrankTicks` is stateful in this codebase (see `EditorRoom:update` line ~941) and the headless mock can't catch a tpr-switching bug — would ship blind to hardware.
+
+**Status**: ✅ Implemented (EditorRoom; 356 headless assertions green). Supersedes the "Up/Down + Crank" layer control and "Crank alone = frames" from R3/R4/R9.
+
+---
+
 ## Summary Table (Updated)
 
 | Research Item | Decision (current) |
@@ -357,6 +391,7 @@ Second Round set a *maximum* of 3 layers (Layer 1 mandatory, 2–3 optional, add
 | R6: Pixel Shifting | Decode layer → 400×240 buffer → shift 1px (wrap) → re-tile all 375 cells |
 | R7: Backward Compat | Structure-based v1.0/v1.1 detection; pad every frame to 3 layers on load |
 | R8: Tests | Headless section per user story + Constitution V gates |
+| R10: Tile View Controls | B + Up/Down = layer, B + Left/Right = frame, Crank = referenced-tile picker; B + Crank unchanged |
 | **R9: Layer Count** | **Exactly 3 layers per frame, always — no add/delete (Third Round)** |
 
 ---

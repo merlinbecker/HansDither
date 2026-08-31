@@ -12,8 +12,9 @@ Hans-Dither gains four editing capabilities:
 
 1. **Precise Pixel Shifting (US1, P1)**: hold B + arrow keys in Zoom View to shift the active layer's content 1 pixel at a time, with automatic tile recalculation.
 2. **Transparency Support (US2, P1)**: per-pixel transparency stored as `kColorClear` in the tile bitmap. The non-ink pixel state is **white on Layer 1**, **transparent on Layers 2–3**.
-3. **Layer Cycling (US3, P1)**: every frame has a **fixed structure of exactly 3 layers** (no add/delete, like the 12-frame cap). Up/Down + Crank cycles the active layer; Crank alone still cycles frames.
+3. **Layer & Frame Switching (US3, P1)**: every frame has a **fixed structure of exactly 3 layers** (no add/delete, like the 12-frame cap). **B + Up/Down** cycles the active layer; **B + Left/Right** steps frames (B + Right on the last frame appends one). *(Fourth Round, from hardware testing — supersedes "Up/Down + Crank".)*
 4. **Frame Management View (US4, P2)**: hold B + Crank backward in Tile View to open a list of all frames; reorder frames and delete frames (min. 1). No Layer View — layers are fixed.
+5. **Tile Picker & Eyedropper Toast (US5, Fourth Round)**: turning the Crank (no B) in Tile View opens a filmstrip picker over the *referenced* tiles (~30°/tile, wraparound, auto-hide); the eyedropper (short B-tap) shows "Tile N picked" briefly.
 
 All features reuse existing SDK capabilities (SDK-First, Constitution I) and the proven Room-based navigation and PDI storage model (Constitutions II–IV).
 
@@ -66,7 +67,7 @@ All features reuse existing SDK capabilities (SDK-First, Constitution I) and the
 
 **Status**: PASS
 
-- Layer cycling uses Crank API (built-in, no custom rotation handler needed)
+- Layer/frame switching uses B + D-Pad (single press = single step); the Crank drives the tile picker via `getCrankChange()` + a sub-360° accumulator (Fourth Round)
 - Pixel shifting relies on existing graphics API for tile rendering
 - Transparency is managed via imagetable pixel states (native SDK)
 - View navigation uses existing Room pattern (switchRoom API)
@@ -143,7 +144,7 @@ specs/010-layer-management-with-transparency/
 
 ```text
 Source/                          # flat — there is NO Rooms/ or Models/ dir
-├── EditorRoom.lua               # "Tile View": layer cycling, composite cache, shift entry, B+Crank-back → US4
+├── EditorRoom.lua               # "Tile View": B+D-Pad layer/frame switch, Crank tile picker, composite cache, shift entry, B+Crank-back → US4
 ├── ZoomRoom.lua                 # "Zoom View": B + arrows → shift active layer
 ├── PixelRoom.lua                # "Pixel View": 3-state grid, layer-dependent off-state, B = transparent
 ├── FrameManagementView.lua      # NEW (US4): list/reorder/delete frames
