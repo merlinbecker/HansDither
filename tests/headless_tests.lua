@@ -1879,6 +1879,30 @@ crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- referenzie
 check(lastPickerLabel() == "Tile 2",
     "frisch gemalte Kachel 2 ist sofort waehlbar (Picker-Cache invalidiert)")
 
+section("EditorRoom: Bild ohne Zelle=1 — Pause-Anzahl faktisch, Picker haelt trotzdem den Abwahl-Slot (Spec 010)")
+-- Basisebene komplett mit Tile 5 gefuellt; keine Zelle referenziert Tile 1.
+loadEditorV11("nowhite", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(5), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } },
+}, 5)
+mockDrawTextCalls = {}
+mockDrawScaledCalls = {}
+EditorRoom:buildPauseMenuImage()
+check(drawTextContains("Tiles: 1"),
+    "Pause-Ansicht zaehlt faktisch: nur Tile 5 referenziert -> 'Tiles: 1' (kein Phantom-Tile 1)")
+check(#mockDrawScaledCalls == 1, "genau 1 Tile-Vorschau (Tile 5)")
+
+-- Der Picker haengt den Abwahl-Slot (1) trotzdem an: Liste = {1, 5}.
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- Abwahl(1) -> 5
+check(lastPickerLabel() == "Tile 5", "Picker: von der Abwahl vorwaerts auf Tile 5")
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- 5 -> Wrap -> Abwahl(1)
+check(lastPickerLabel() == "Tile 1", "Picker: Wrap zurueck auf den Abwahl-Slot (nicht haengengeblieben)")
+
 -- ── US1: Pixel-Shift (Spec 010) ───────────────────────────────────────────
 
 section("LayerModel: shiftLayerContent verschiebt den Pixelinhalt um 1 Pixel (Spec 010, US1)")

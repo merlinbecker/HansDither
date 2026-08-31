@@ -122,9 +122,9 @@ local function updateTilemapFrame()
     end
 end
 
--- Distinkte, aktuell referenzierte Tile-Indizes (aufsteigend). Gemeinsame
--- Quelle fuer den Tile-Picker (Spec 010) UND die Pause-/Kontext-Ansicht
--- (buildPauseMenuImage, Spec 006 CR-06 / FR-011).
+-- Distinkte, tatsaechlich referenzierte Tile-Indizes (aufsteigend). Faktischer
+-- Scan ohne Beigaben — gemeinsame Quelle fuer den Tile-Picker (Spec 010) UND
+-- die Pause-/Kontext-Ansicht (buildPauseMenuImage, Spec 006 CR-06 / FR-011).
 -- Quelle sind die EBENEN-Positionen (`frameLayers`), NICHT der flache
 -- Composite-Cache `imageData.frames`: dort gewinnt je Zelle nur die oberste
 -- nicht-leere Ebene, sodass eine Kachel, die nur auf einer verdeckten (oberen
@@ -133,10 +133,11 @@ end
 -- Pause-Ansicht wuerde sie in "Tiles: N" fehlen.
 -- NICHT imagetable:getLength(): Sitzungs-Edits haengen neue Tiles an und
 -- verwaisen alte; erst das Speichern (pruneUnusedTilesLayered) raeumt auf.
--- Index 1 (Weiss-Basis) ist immer dabei -> Abwahl im Picker stets erreichbar.
+-- Den Abwahl-Slot (Index 1) haengt NUR pickerList() an — sonst zaehlte die
+-- Pause-Ansicht bei Bildern ohne Zelle=1 eine Kachel zu viel.
 local function referencedTileIndices()
     if not imageData then return {} end
-    local seen, list = { [1] = true }, { 1 }
+    local seen, list = {}, {}
     local entries = imageData.frameLayers
     if entries then
         for _, entry in ipairs(entries) do
@@ -168,10 +169,18 @@ end
 -- das ~13 Voll-Scans (3x375 Zellen) je Frame. Der Cache wird bei jeder
 -- Tile-Mutation invalidiert (`recompositeCell`/`recompositeCurrentFrame` und
 -- `entered()` setzen `pickerTileList = nil`). buildPauseMenuImage nutzt
--- bewusst den frischen Scan (seltener Aufruf, Genauigkeit zaehlt).
+-- bewusst den frischen, faktischen Scan (seltener Aufruf, Genauigkeit zaehlt).
+--
+-- Index 1 (Weiss) wird hier — und NUR hier — vorne angehaengt: er ist der
+-- Abwahl-/Toggle-Slot des Pickers und muss auch dann erreichbar sein, wenn
+-- keine Zelle Kachel 1 referenziert (sonst bliebe der Picker bei einer
+-- Ein-Element-Liste haengen). Die Liste bleibt aufsteigend sortiert.
 local function pickerList()
     if not pickerTileList then
         pickerTileList = referencedTileIndices()
+        if pickerTileList[1] ~= 1 then
+            table.insert(pickerTileList, 1, 1)
+        end
     end
     return pickerTileList
 end
@@ -919,10 +928,12 @@ function EditorRoom:buildPauseMenuImage()
 
     -- CR-06 (FR-011): frisches, aufsteigendes Set tatsaechlich referenzierter
     -- Tile-Indizes — NICHT imagetable:getLength() (zaehlt nie mehr referenzierte
-    -- Alt-Eintraege mit). Seit Spec 010 gemeinsam mit dem Tile-Picker ueber
-    -- referencedTileIndices() (scannt die Ebenen-Positionen, sodass auch eine
-    -- nur auf einer verdeckten Ebene liegende Kachel gezaehlt wird — der fruehere
-    -- Scan des flachen Composite-Cache hat solche Kacheln uebersehen).
+    -- Alt-Eintraege mit). Seit Spec 010 derselbe faktische Scan wie fuer den
+    -- Tile-Picker (referencedTileIndices scannt die Ebenen-Positionen, sodass
+    -- auch eine nur auf einer verdeckten Ebene liegende Kachel gezaehlt wird —
+    -- der fruehere Scan des flachen Composite-Cache hat solche Kacheln
+    -- uebersehen). Der Abwahl-Slot des Pickers (Index 1) haengt NUR pickerList()
+    -- an, nicht dieser Scan — die Pause-Anzahl bleibt faktisch korrekt.
     local distinctIndices = referencedTileIndices()
     local totalDistinctTileCount = #distinctIndices
 
