@@ -11,6 +11,7 @@
 
 import "CoreLibs/graphics"
 import "CoreLibs/object"
+import "LayerModel"
 
 local gfx = playdate.graphics
 
@@ -149,13 +150,17 @@ function ImageStore.createImage(name)
     end
     
     local frames = {frameData}  -- Ein Frame
-    
-    -- Erstelle imageData für das initiale Save
+
+    -- Erstelle imageData für das initiale Save. Spec 010: frameLayers traegt
+    -- die verschachtelte Ebenenstruktur (neue Bilder starten mit genau einer
+    -- Basisebene "Layer 1"); frames bleibt das flache, kompositierte Array.
     local imageData = {
         id = id,
         name = name,
         imagetable = imagetable,
         frames = frames,
+        frameLayers = { LayerModel.newFrameLayersFromFlat(frameData) },
+        activeLayer = 1,
         hashIndex = {}
     }
     

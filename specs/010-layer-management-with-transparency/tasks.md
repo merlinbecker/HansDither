@@ -2,6 +2,44 @@
 
 **Input**: Implementation plan from `/specs/010-layer-management-with-transparency/plan.md`
 
+---
+
+## Implementation Notes (Übernahme durch Claude Code, 2026-08-31)
+
+Der vorherige Agent (GitHub Copilot) hat Phase 2 mitten im Umbau abgebrochen
+(`Source/LayerUtils.lua` + `Source/PixelTransparency.lua` neu, `ImageStoreCodec.lua`
+halb migriert → 6 vorher grüne Tests rot). Zustand zurückgesetzt auf HEAD, dann
+sauber neu aufgebaut. Wesentliche **Abweichungen von plan.md/tasks.md/contracts**
+(Plan/Contracts wurden vor Kenntnis der echten Dateien geschrieben):
+
+- **Kein `Source/Models/`- oder `Source/Rooms/`-Verzeichnis.** Reale Dateien flach
+  in `Source/`. Zuordnung: „Tile View“ = `EditorRoom.lua`, „Zoom View“ =
+  `ZoomRoom.lua`, „Pixel View“ = `PixelRoom.lua`.
+- **Layer-Datenmodell** als reine Lua-Tabellen-Helfer in `Source/LayerModel.lua`
+  (global `LayerModel`) statt Klassen mit Gettern/Settern. Frame-Layer-Entry:
+  `{duration, layers = {{layerIndex, name, positions[375], visible}, ...}}`.
+  Laufzeit-Indizierung 1-basiert (`layers[1..3]`), `layerIndex`-Feld 0-basiert
+  (Contract). Aktive Ebene = reiner Editor-Sitzungszustand (`imageData.activeLayer`,
+  1-basiert), **nicht** persistiert.
+- **Transparenz pro Pixel, nicht pro Zelle** (Nutzer-Klarstellung: wird nur im
+  PixelRoom gesetzt). Es gibt **kein** 375er `transparency`-Array je Layer wie in
+  data-model.md/contracts/save-format.md skizziert. Transparente Pixel leben als
+  `gfx.kColorClear` direkt im 16×16-Tile und werden über einen **3-Zustands-
+  `hashTile()`** (schwarz/weiß/transparent) getrennt dedupliziert — genau das,
+  was spec.md Edge Case Zeile 104 fordert. → data-model.md + contracts sind
+  entsprechend zu aktualisieren (Phase 7, T049–T052-Umfeld).
+- **`ImageStoreCodec.newSaveOperation` / `newLoadOperation`** sind „Image:saveJSON /
+  loadJSON“ (T007/T008) — Coroutine-basiert über `playdate.datastore`.
+- **`pruneUnusedTilesLayered`** (T009) bereinigt **global über alle Ebenen aller
+  Frames**, nicht per `layerIndex` — per-Ebene-Prune wäre gegen die gemeinsame
+  Imagetable unsound. Flaches `pruneUnusedTiles` bleibt für die Spec-009-Tests.
+- **Doppelte Task-IDs T025–T032** (Zeilen ~163–181 *und* ~185–203, unterschiedlicher
+  Inhalt) — beim Abhaken wird die jeweils gemeinte Zeile mitgenannt.
+
+**Gates je abgeschlossener Phase**: `lua tests/headless_tests.lua` → „ALLE TESTS
+BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
+Phase 2: buildNumber 13 → 14.
+
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md)
 
 **Tests**: Headless tests in `tests/headless_tests.lua` + Constitution V build gate (mandatory, non-negotiable)
@@ -60,27 +98,27 @@
 
 ### Data Model Implementation (3-Layer Architecture)
 
-- [ ] T001 Create Layer model in `Source/Models/Layer.lua` with fields: layerIndex (0–2 only), name, positions (375 entries), transparency (375 entries), visible flag. Implement getters: getLayerIndex(), getName(), getPositions(), getTransparency(). Implement setter: setPosition(index, tileIndex, transparency). **Validation: layerIndex ∈ {0,1,2}** per research.md R9
+- [X] T001 ~~Create Layer model in `Source/Models/Layer.lua`~~ → **`Source/LayerModel.lua`** (global `LayerModel`, flat-table helpers). `newLayer(index0,name)`, `newFrameLayersFromFlat`, `cloneFrameLayers`, `validate` (layerIndex 0..2, 375 positions), `compositeToFlat`/`compositeAt`. Kein `transparency`-Array (Transparenz pro Pixel im Tile). `setPosition` entfällt — Positionen werden direkt in `layer.positions[cell]` geschrieben (wie im übrigen Code).
 
-- [ ] T002 [P] Extend Frame model in `Source/Models/ImageStore.lua` to support per-frame layers (max 3). Add fields: layers (array<Layer>, size 1–3), activeLayerIndex. Implement methods: addLayer(name) [validate layer count ≤ 3], deleteLayer(layerIndex) [prevent Layer 1 deletion], getLayerCount(), getLayer(index), setActiveLayer(index), getActiveLayer(). Maintain backward compatibility (frames without layers load as single-layer frames, Layer 1 only). File path: `Source/Models/ImageStore.lua`
+- [X] T002 [P] ~~Extend Frame model in `Source/Models/ImageStore.lua`~~ → Frame-Layer-Methoden in **`Source/LayerModel.lua`**: `addLayer(entry,name)` (≤3, sonst `max-layers-reached`), `deleteLayer(entry,active1)` (Ebene 1 geschützt, reindiziert), `layerCount`, `getLayer`, `clampActive`, `cycleActive`. `ImageStore.createImage` (`Source/ImageStore.lua`) setzt jetzt `frameLayers` + `activeLayer`. Rückwärtskompatibel: `newLoadOperation` upgradet flache Frames zu 1-Ebenen-Frames.
 
-- [ ] T003 [P] Create PixelTransparency utility module in `Source/PixelTransparency.lua`. Implement: encode(state) → 0|1|2, decode(byte) → "opaque"|"transparent"|"empty", isTransparent(byte) → boolean. Validation: all inputs bounded to valid range [0,1,2]
+- [X] T003 [P] Create PixelTransparency utility module in `Source/PixelTransparency.lua`. `encode(state)→0|1|2`, `decode(byte)→"opaque"|"transparent"|"empty"`, `isTransparent/isOpaque/isEmpty`, `sanitize` (klemmt auf [0,1,2], sonst opaque). Zusätzlich Pixel↔Farbe-Brücke: `fromColor`/`toColor`/`sampleState` (opaque=black, transparent=clear, empty=white).
 
-- [ ] T004 [P] Create PixelState model in `Source/Models/PixelState.lua` to represent individual pixel as (x, y, color, transparency). Implement getters/setters for state transitions: Empty → Opaque (A-press), Empty → Transparent (B-press), Opaque ↔ Transparent (overwrite)
+- [X] T004 [P] ~~Create PixelState model in `Source/Models/PixelState.lua`~~ → gefaltet in **`Source/PixelTransparency.lua`** (`fromColor`/`toColor`/`sampleState` bilden die Zustandsübergänge Empty↔Opaque↔Transparent auf gfx-Farben ab). Ein separates PixelState-Modul wäre ein dünner Wrapper (kein `Models/`-Verzeichnis). Die eigentlichen A-/B-/Y-Übergänge im PixelRoom → Phase 4.
 
 ### Storage Format Extension (JSON v1.1, 3-Layer Bounded)
 
-- [ ] T005 Update ImageStoreCodec.lua `save()` method to serialize layers + transparency to JSON v1.1 schema. Write: frames[].layers[].{layerIndex, name, positions, transparency, visible}. **Validation: 375-entry invariant for positions/transparency arrays + layer count 1–3 per frame**. File path: `Source/ImageStoreCodec.lua`
+- [X] T005 `ImageStoreCodec.createFramesTableV11(name, frameLayers, tileCount)` + `newSaveOperation`-Umbau: schreibt v1.1-Schema `{version="1.1", frames[].{ frameIndex, duration, layers[].{layerIndex, name, positions, visible} }}`. Validierung: 375-Positions-Invariante + Ebenenzahl 1–3, ungültige Frames verworfen. **Kein** per-Zelle `transparency`-Array (Transparenz pro Pixel im Tile, 3-Zustands-`hashTile`). File path: `Source/ImageStoreCodec.lua`
 
-- [ ] T006 Update ImageStoreCodec.lua `load()` method to parse JSON v1.1 schema. Handle v1.0 backward compatibility: upgrade old images to v1.1 (single layer "Layer 1" only, all pixels opaque). Validation: check version, auto-convert if < 1.1, **ensure loaded layer count never exceeds 3**. File path: `Source/ImageStoreCodec.lua`
+- [X] T006 `ImageStoreCodec.newLoadOperation`: erkennt v1.1 (verschachtelt) vs. v1.0 (flach) an der **Struktur des ersten Frames**, nicht am version-Feld (robuster, FR-010). v1.0→v1.1-Auto-Upgrade (eine Basisebene „Layer 1“, alle Pixel opak). Ebenenzahl beim Laden auf 3 begrenzt. Liefert `imageData.frameLayers` + `imageData.frames` (kompositiert) + `activeLayer=1`. File path: `Source/ImageStoreCodec.lua`
 
-- [ ] T007 [P] Implement ImageStore:loadJSON(filePath) in `Source/ImageStore.lua`. Deserialize v1.1 JSON, reconstruct Frame objects with Layer children (1–3 per frame), set activeLayerIndex. Handle file I/O via playdate.file. Validation: schema validation on load, error handling for malformed JSON, **reject if layer count > 3**. File path: `Source/ImageStore.lua`
+- [X] T007 [P] ~~ImageStore:loadJSON~~ → **ist** `ImageStoreCodec.newLoadOperation` (Coroutine über `playdate.datastore`). Schema-Validierung + Fehlerbehandlung für kaputtes JSON (Fallback: 1 weißer Frame) + `#layers > 3` wird abgeschnitten. Getestet: `headless_tests.lua` „v1.1 Round-Trip“, „v1.0-Bild lädt als einzelne opake Ebene“, „Laden erzwingt das 3-Layer-Limit“.
 
-- [ ] T008 [P] Implement ImageStore:saveJSON(filePath) in `Source/ImageStore.lua`. Serialize all frames + layers to v1.1 JSON schema. Use atomic write (temp file → rename) to prevent corruption. **Validation: pre-save invariant check (375-entry arrays, unique layer indices 0–2, layer count 1–3)**. File path: `Source/ImageStore.lua`
+- [X] T008 [P] ~~ImageStore:saveJSON~~ → **ist** `ImageStoreCodec.newSaveOperation`. Atomizität über `playdate.datastore.write` (SDK). Pre-Save-Invarianten in `createFramesTableV11` (375, Ebenenzahl) + `pruneUnusedTilesLayered`. Getestet über den v1.1-Round-Trip.
 
 ### Tile Recalculation (Spec 009 Integration)
 
-- [ ] T009 Extend ImageStoreCodec.pruneUnusedTiles() signature to accept layerIndex parameter. Modify logic: prune unused tiles per-layer (not globally), rebuild position indices for that layer only. Return (newImagetable, newLayerPositions, newTileCount). File path: `Source/ImageStoreCodec.lua`
+- [X] T009 ~~`pruneUnusedTiles()` um `layerIndex` erweitern, per-Ebene prunen~~ → **`pruneUnusedTilesLayered(imagetable, frameLayers, tileCount)`**: prunt **global über alle Ebenen aller Frames** (per-Ebene wäre gegen die geteilte Imagetable unsound). Remappt jede `layer.positions` (0 „absent“ bleibt 0), liefert `(newImagetable, newFrameLayers, newTileCount)`. Flaches `pruneUnusedTiles` bleibt unverändert für die Spec-009-Tests. File path: `Source/ImageStoreCodec.lua`
 
 **Checkpoint**: Phase 2 complete when images can be saved/loaded with 1–3 layers + transparency, v1.0 images auto-upgrade to Layer 1, and layer count validation prevents > 3 layers
 

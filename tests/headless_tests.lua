@@ -120,7 +120,9 @@ local function newMockImage(w, h, bgcolor)
     return {
         width = w, height = h,
         pixels = {},
-        fill = (bgcolor == "black") and "black" or "white",
+        -- Spec 010: "clear" (kColorClear) bleibt erhalten — ImageStoreCodec.hashTile
+        -- unterscheidet seit Spec 010 drei Zustaende (schwarz/weiss/transparent).
+        fill = (bgcolor == "black") and "black" or (bgcolor == "clear") and "clear" or "white",
         draw = noop,
         drawFaded = noop,
         -- Spec 006 US5: Tile-Vorschau-Zeichnungen in der Pause-Ansicht
@@ -486,6 +488,13 @@ ImageStore = strictTable("ImageStore", {
     getIndex = function() return { images = {} } end,
     writeIndex = noop,
 })
+
+-- Spec 010: Foundational-Module — muessen VOR ImageStoreCodec/EditorRoom/
+-- ZoomRoom/PixelRoom geladen sein (import "..." ist im Headless-Harness ein
+-- No-op, siehe oben; die Globals LayerModel/PixelTransparency entstehen nur
+-- ueber diese dofile-Aufrufe).
+dofile("Source/PixelTransparency.lua")
+dofile("Source/LayerModel.lua")
 
 dofile("Source/Bauchbinde.lua")     -- Namenszeile des SelectionRoom
 dofile("Source/RoomOperation.lua")  -- Coroutine-Antrieb für SyncService (Spec 004)
@@ -991,11 +1000,18 @@ do
         check(ok, "newSaveOperation() laeuft ohne Fehler durch: " .. tostring(err))
     end
 
+    -- Spec 010: newSaveOperation() schreibt jetzt v1.1 (verschachtelte Ebenen).
+    -- Ein flach uebergebenes imageData.frames wird je Frame zur Basisebene
+    -- "Layer 1" gewrappt; die Positionen liegen in frames[f].layers[1].positions.
     local saved = datastoreFiles["saves/prune-roundtrip-test/frames"]
     check(saved ~= nil, "frames.json wurde geschrieben")
+    check(saved and saved.version == "1.1", "frames.json traegt version 1.1 (Spec 010)")
     check(saved and saved.tileCount == 4, "gespeicherter tileCount spiegelt die Bereinigung wider (4 statt 5)")
-    check(saved and saved.frames[1][1] == 3, "Position 1 zeigt weiterhin auf Tile 3 (unveraenderter Index)")
-    check(saved and saved.frames[1][2] == 4, "Position 2 zeigt jetzt auf den neuen Index 4 (vormals Tile 5)")
+    local baseLayer = saved and saved.frames[1] and saved.frames[1].layers[1]
+    check(baseLayer ~= nil and #baseLayer.positions == 375,
+        "Frame 1 hat genau eine Basisebene mit 375 Positionen")
+    check(baseLayer and baseLayer.positions[1] == 3, "Position 1 zeigt weiterhin auf Tile 3 (unveraenderter Index)")
+    check(baseLayer and baseLayer.positions[2] == 4, "Position 2 zeigt jetzt auf den neuen Index 4 (vormals Tile 5)")
     check(datastoreImages["saves/prune-roundtrip-test/sheet"] ~= nil, "sheet.pdi wurde geschrieben (Bilddaten-Phase erreicht)")
 end
 
@@ -1460,6 +1476,294 @@ local nonSelectedThumb2 = SelectionRoom:getThumbnail("bild1")
 check(nonSelectedThumb1 == nonSelectedThumb2, "Thumbnail nicht selektierter Einträge bleibt gecacht (kein Schwenk)")
 
 check(true, "update() mit selektiertem Bild-Eintrag laeuft ohne Fehler durch")
+
+-- ══════════════════════════════════════════════════════════════════════════════
+--  Spec 010: Layer-Datenmodell, Transparenz & Speicherformat v1.1
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- ── PixelTransparency: 3-Zustands-Codec ─────────────────────────────────────
+
+section("PixelTransparency: encode/decode + Praedikate (Spec 010, US2)")
+check(PixelTransparency.encode("opaque") == 0 and PixelTransparency.encode("transparent") == 1
+    and PixelTransparency.encode("empty") == 2, "encode bildet die drei Zustandsnamen auf 0/1/2 ab")
+check(PixelTransparency.decode(0) == "opaque" and PixelTransparency.decode(1) == "transparent"
+    and PixelTransparency.decode(2) == "empty", "decode ist die Umkehrung von encode")
+check(PixelTransparency.encode("bloedsinn") == 0, "unbekannter Zustandsname faellt auf opaque zurueck")
+check(PixelTransparency.isTransparent(1) and not PixelTransparency.isTransparent(0),
+    "isTransparent nur fuer Code 1")
+check(PixelTransparency.isOpaque(0) and PixelTransparency.isOpaque(nil) and not PixelTransparency.isOpaque(1),
+    "isOpaque fuer 0 und nil (Alt-Tiles ohne Transparenzinfo)")
+check(PixelTransparency.isEmpty(2) and not PixelTransparency.isEmpty(0), "isEmpty nur fuer Code 2")
+check(PixelTransparency.sanitize(7) == 0 and PixelTransparency.sanitize(nil) == 0
+    and PixelTransparency.sanitize(1) == 1, "sanitize klemmt Fremdwerte auf opaque, gueltige bleiben")
+check(PixelTransparency.fromColor("black") == 0 and PixelTransparency.fromColor("clear") == 1
+    and PixelTransparency.fromColor("white") == 2, "fromColor: schwarz->opaque, clear->transparent, weiss->empty")
+check(PixelTransparency.toColor(0) == "black" and PixelTransparency.toColor(1) == "clear"
+    and PixelTransparency.toColor(2) == "white", "toColor ist die Umkehrung von fromColor")
+
+-- ── LayerModel: Konstruktion & Validierung ─────────────────────────────────
+
+section("LayerModel: Konstruktion neuer Ebenen (Spec 010, Foundational)")
+local baseLayer = LayerModel.newLayer(0, nil)
+check(baseLayer.layerIndex == 0 and baseLayer.name == "Layer 1", "Basisebene: layerIndex 0, Default-Name 'Layer 1'")
+check(#baseLayer.positions == 375, "Basisebene hat genau 375 Positionen")
+check(baseLayer.positions[1] == 1 and baseLayer.positions[375] == 1,
+    "Basisebene fuellt jede Zelle mit dem Weiss-Tile (Index 1)")
+local upperLayer = LayerModel.newLayer(1, "Character")
+check(upperLayer.layerIndex == 1 and upperLayer.name == "Character", "Obere Ebene uebernimmt Name")
+check(upperLayer.positions[1] == 0 and upperLayer.positions[200] == 0,
+    "Obere Ebene startet komplett 'absent' (0) -> Basisebene scheint durch")
+
+local flat = {}
+for i = 1, 375 do flat[i] = (i % 2 == 0) and 2 or 1 end
+local entry = LayerModel.newFrameLayersFromFlat(flat, 150)
+check(entry.duration == 150 and #entry.layers == 1, "newFrameLayersFromFlat: 1 Ebene, uebernommene duration")
+check(entry.layers[1].layerIndex == 0 and entry.layers[1].name == "Layer 1", "gewrappte Ebene ist die Basisebene")
+check(entry.layers[1].positions[2] == 2 and entry.layers[1].positions[3] == 1,
+    "flache Positionen werden 1:1 in die Basisebene uebernommen")
+check(entry.layers[1].positions ~= flat, "Positionen werden kopiert, nicht referenziert")
+
+section("LayerModel: validate() (contracts/save-format.md 'Validation on Load')")
+check(LayerModel.validate(entry) == true, "1-Ebenen-Entry ist gueltig")
+local threeLayer = LayerModel.cloneFrameLayers(entry)
+LayerModel.addLayer(threeLayer, "L2")
+LayerModel.addLayer(threeLayer, "L3")
+check(LayerModel.validate(threeLayer) == true and #threeLayer.layers == 3, "3-Ebenen-Entry ist gueltig")
+local badCount = LayerModel.cloneFrameLayers(threeLayer)
+badCount.layers[4] = LayerModel.newLayer(3, "L4")
+check(LayerModel.validate(badCount) == false, "4 Ebenen -> ungueltig (hartes 3-Limit, FR-012b)")
+local badIndex = LayerModel.cloneFrameLayers(threeLayer)
+badIndex.layers[2].layerIndex = 5
+check(LayerModel.validate(badIndex) == false, "nicht fortlaufende layerIndex -> ungueltig")
+local badLen = LayerModel.cloneFrameLayers(entry)
+badLen.layers[1].positions = { 1, 2, 3 }
+check(LayerModel.validate(badLen) == false, "positions != 375 -> ungueltig")
+
+-- ── LayerModel: Ebenen-Verwaltung (US4) ────────────────────────────────────
+
+section("LayerModel: addLayer/deleteLayer respektieren das 3-Layer-Limit (Spec 010, US4)")
+local mgmt = LayerModel.newFrameLayersFromFlat(flat)
+local ok1 = LayerModel.addLayer(mgmt, "Character")
+local ok2 = LayerModel.addLayer(mgmt, "Effects")
+check(ok1 and ok2 and #mgmt.layers == 3, "zwei Ebenen hinzugefuegt -> 3 Ebenen")
+local ok3, err3 = LayerModel.addLayer(mgmt, "Vierte")
+check(ok3 == false and err3 == "max-layers-reached" and #mgmt.layers == 3,
+    "vierte Ebene wird abgelehnt (FR-012b)")
+local okD1, errD1 = LayerModel.deleteLayer(mgmt, 1)
+check(okD1 == false and errD1 == "layer-1-protected" and #mgmt.layers == 3,
+    "Ebene 1 (Basis) kann nicht geloescht werden (spec.md Edge Cases)")
+local okD2 = LayerModel.deleteLayer(mgmt, 2)
+check(okD2 == true and #mgmt.layers == 2, "obere Ebene 2 geloescht -> 2 Ebenen")
+check(mgmt.layers[1].layerIndex == 0 and mgmt.layers[2].layerIndex == 1,
+    "verbleibende Ebenen werden luekenlos reindiziert")
+check(mgmt.layers[2].name == "Effects", "die richtige Ebene wurde entfernt (Character), Effects bleibt")
+local single = LayerModel.newFrameLayersFromFlat(flat)
+local okD3, errD3 = LayerModel.deleteLayer(single, 2)
+check(okD3 == false and errD3 == "min-one-layer",
+    "Loeschen bei nur 1 Ebene schlaegt fehl (mind. 1 Ebene, Basis ist Pflicht)")
+local okD4, errD4 = LayerModel.deleteLayer(mgmt, 9)
+check(okD4 == false and errD4 == "layer-not-found",
+    "Loeschen eines Index ausserhalb des Bereichs schlaegt fehl")
+
+-- ── LayerModel: aktive Ebene / Wrap-Around (US3) ───────────────────────────
+
+section("LayerModel: cycleActive/clampActive Wrap-Around (Spec 010, US3, FR-017)")
+local cyc = LayerModel.newFrameLayersFromFlat(flat)
+LayerModel.addLayer(cyc, "L2"); LayerModel.addLayer(cyc, "L3")
+check(LayerModel.cycleActive(cyc, 1, 1) == 2 and LayerModel.cycleActive(cyc, 2, 1) == 3,
+    "vorwaerts: 1 -> 2 -> 3")
+check(LayerModel.cycleActive(cyc, 3, 1) == 1, "vorwaerts-Wrap: 3 -> 1 (max 3 Ebenen)")
+check(LayerModel.cycleActive(cyc, 1, -1) == 3, "rueckwaerts-Wrap: 1 -> 3")
+check(LayerModel.cycleActive(cyc, 2, -1) == 1, "rueckwaerts: 2 -> 1")
+local twoLayer = LayerModel.newFrameLayersFromFlat(flat)
+LayerModel.addLayer(twoLayer, "L2")
+check(LayerModel.clampActive(twoLayer, 3) == 1, "aktiver Index 3 auf Frame mit 2 Ebenen -> Wrap auf 1 (R4)")
+check(LayerModel.clampActive(twoLayer, 2) == 2, "gueltiger Index bleibt erhalten")
+check(LayerModel.clampActive(twoLayer, nil) == 1, "nil -> 1")
+
+-- ── LayerModel: Compositing ────────────────────────────────────────────────
+
+section("LayerModel: compositeToFlat stapelt Ebenen (Spec 010, US3, data-model 'Three-Layer Frame')")
+local comp = LayerModel.newFrameLayersFromFlat(flat)          -- Basis: gerade Zellen = 2
+LayerModel.addLayer(comp, "Character")                        -- alles absent
+LayerModel.addLayer(comp, "Effects")                         -- alles absent
+comp.layers[2].positions[1] = 9                               -- Character deckt Zelle 1
+comp.layers[3].positions[1] = 15                              -- Effects deckt Zelle 1 (oberste gewinnt)
+comp.layers[2].positions[4] = 7                               -- nur Character deckt Zelle 4
+local flatComposite = LayerModel.compositeToFlat(comp)
+check(flatComposite[1] == 15, "Zelle 1: oberste beitragende Ebene (Effects, Tile 15) gewinnt")
+check(flatComposite[4] == 7, "Zelle 4: nur Character traegt bei -> Tile 7")
+check(flatComposite[2] == 2, "Zelle 2: keine obere Ebene -> Basisebene (Tile 2)")
+check(#flatComposite == 375, "Compositing liefert exakt 375 Positionen")
+comp.layers[3].visible = false
+check(LayerModel.compositeToFlat(comp)[1] == 9,
+    "unsichtbare Ebene wird uebersprungen -> Character (Tile 9) gewinnt Zelle 1")
+
+-- ── ImageStoreCodec: 3-Zustands-Hash & Vergleich (spec.md Edge Case Z.104) ──
+
+section("ImageStoreCodec: hashTile/imagesVisiblyEqual unterscheiden 3 Zustaende (Spec 010)")
+local whiteTile = newMockImage(16, 16, "white")
+local clearTile = newMockImage(16, 16, "clear")
+local whiteTile2 = newMockImage(16, 16, "white")
+check(ImageStoreCodec.hashTile(whiteTile) ~= ImageStoreCodec.hashTile(clearTile),
+    "voll-weisses und voll-transparentes Tile hashen unterschiedlich (Dedup trennt sie, spec.md:104)")
+check(ImageStoreCodec.hashTile(whiteTile) == ImageStoreCodec.hashTile(whiteTile2),
+    "zwei gleich aussehende Tiles hashen identisch")
+check(ImageStoreCodec.imagesVisiblyEqual(whiteTile, whiteTile2) == true,
+    "identische Tiles sind visuell gleich")
+check(ImageStoreCodec.imagesVisiblyEqual(whiteTile, clearTile) == false,
+    "weiss vs. transparent sind NICHT visuell gleich (3-Zustands-Vergleich)")
+local blackOnWhite = newMockImage(16, 16, "white")
+blackOnWhite.pixels["0,0"] = true
+local blackOnClear = newMockImage(16, 16, "clear")
+blackOnClear.pixels["0,0"] = true
+check(ImageStoreCodec.hashTile(blackOnWhite) ~= ImageStoreCodec.hashTile(blackOnClear),
+    "gleiches Schwarz-Muster, unterschiedlicher Hintergrund -> unterschiedlicher Hash")
+
+-- ── ImageStoreCodec: createFramesTableV11 ──────────────────────────────────
+
+section("ImageStoreCodec: createFramesTableV11 schreibt v1.1-Schema (Spec 010, T005)")
+local twoLayerEntry = LayerModel.newFrameLayersFromFlat(flat)
+LayerModel.addLayer(twoLayerEntry, "Character")
+twoLayerEntry.layers[2].positions[1] = 3
+local v11 = ImageStoreCodec.createFramesTableV11("demo", { twoLayerEntry }, 4)
+check(v11.version == "1.1", "version-Feld ist der String '1.1'")
+check(v11.tileCount == 4 and v11.gridWidth == 25 and v11.gridHeight == 15, "Metafelder wie gehabt")
+check(#v11.frames == 1 and v11.frames[1].frameIndex == 0 and v11.frames[1].duration == 100,
+    "Frame 0 mit Default-Dauer 100")
+check(#v11.frames[1].layers == 2 and v11.frames[1].layers[1].layerIndex == 0
+    and v11.frames[1].layers[2].layerIndex == 1, "zwei Ebenen mit fortlaufendem layerIndex")
+check(v11.frames[1].layers[2].name == "Character" and v11.frames[1].layers[2].positions[1] == 3,
+    "Ebenennamen und -positionen werden uebernommen")
+local badEntry = { duration = 100, layers = { { positions = { 1, 2, 3 } } } }
+local v11bad = ImageStoreCodec.createFramesTableV11("demo", { badEntry }, 4)
+check(#v11bad.frames == 0, "Frame mit positions-Laenge != 375 wird verworfen")
+
+-- ── ImageStoreCodec: pruneUnusedTilesLayered ───────────────────────────────
+
+section("ImageStoreCodec: pruneUnusedTilesLayered bereinigt ueber alle Ebenen (Spec 010, T009)")
+do
+    local it = buildTaggedImagetable(6)                       -- 1,2 Basis + 3,4,5,6
+    local base = LayerModel.newLayer(0, "Layer 1")
+    for i = 1, 375 do base.positions[i] = 1 end
+    base.positions[1] = 3
+    local upper = LayerModel.newLayer(1, "Character")         -- alles 0
+    upper.positions[2] = 6                                    -- referenziert Tile 6
+    local pruneEntry = { duration = 100, layers = { base, upper } }
+    local newIt, newFL, newCount = ImageStoreCodec.pruneUnusedTilesLayered(it, { pruneEntry }, 6)
+    check(newCount == 4, "genutzt: 1,2,3,6 -> 4 Tiles (4 und 5 entfallen)")
+    check(newIt:getImage(4).tag == 6, "Tile 6 rueckt auf Index 4")
+    check(newFL[1].layers[1].positions[1] == 3, "Basisebene: Tile 3 behaelt Index 3")
+    check(newFL[1].layers[2].positions[2] == 4, "obere Ebene: vormals Tile 6 zeigt jetzt auf Index 4")
+    check(newFL[1].layers[2].positions[1] == 0, "'absent' (0) bleibt 0 (obere Ebene traegt hier nichts bei)")
+    check(#newFL[1].layers == 2, "Ebenenstruktur bleibt erhalten")
+end
+
+-- ── ImageStoreCodec: Round-Trip Speichern -> Laden (v1.1) ──────────────────
+
+section("ImageStoreCodec: v1.1 Round-Trip erhaelt Ebenen + Transparenz-Metadaten (Spec 010, T006/T031)")
+do
+    local it = buildTaggedImagetable(5)
+    local base = LayerModel.newLayer(0, "Background")
+    for i = 1, 375 do base.positions[i] = 1 end
+    base.positions[1] = 3
+    local character = LayerModel.newLayer(1, "Character")
+    character.positions[5] = 4
+    local effects = LayerModel.newLayer(2, "Effects")
+    effects.positions[9] = 5
+    local imageData = {
+        id = "layer-roundtrip",
+        name = "layer-roundtrip",
+        imagetable = it,
+        frameLayers = { { duration = 120, layers = { base, character, effects } } },
+        activeLayer = 1,
+        hashIndex = {},
+    }
+    local co = ImageStoreCodec.newSaveOperation(imageData)
+    while coroutine.status(co) ~= "dead" do
+        local okr, errr = coroutine.resume(co)
+        check(okr, "newSaveOperation (3 Ebenen) laeuft ohne Fehler durch: " .. tostring(errr))
+    end
+    local savedJson = datastoreFiles["saves/layer-roundtrip/frames"]
+    check(savedJson and savedJson.version == "1.1", "frames.json v1.1 geschrieben")
+    check(savedJson and #savedJson.frames[1].layers == 3, "3 Ebenen persistiert")
+    check(savedJson and savedJson.frames[1].layers[2].name == "Character", "Ebenenname 'Character' persistiert")
+    check(savedJson and savedJson.frames[1].duration == 120, "Frame-Dauer 120 persistiert")
+
+    local lco = ImageStoreCodec.newLoadOperation("layer-roundtrip")
+    local loaded
+    while coroutine.status(lco) ~= "dead" do
+        local okl, res = coroutine.resume(lco)
+        check(okl, "newLoadOperation laeuft ohne Fehler durch: " .. tostring(res))
+        if okl and res then loaded = res end
+    end
+    check(loaded and loaded.frameLayers and #loaded.frameLayers[1].layers == 3,
+        "geladen: 3 Ebenen rekonstruiert")
+    check(loaded and loaded.frameLayers[1].layers[3].name == "Effects", "Ebenenname 'Effects' rekonstruiert")
+    check(loaded and loaded.frameLayers[1].layers[1].layerIndex == 0
+        and loaded.frameLayers[1].layers[2].layerIndex == 1
+        and loaded.frameLayers[1].layers[3].layerIndex == 2, "layerIndex fortlaufend 0..2")
+    check(loaded and loaded.activeLayer == 1, "activeLayer startet bei 1 (Sitzungszustand, nicht persistiert)")
+    check(loaded and #loaded.frames == 1 and #loaded.frames[1] == 375,
+        "kompositiertes flaches frames-Array fuer Tilemap/Vorschau vorhanden")
+end
+
+-- ── ImageStoreCodec: Rueckwaertskompatibilitaet v1.0 -> v1.1 ───────────────
+
+section("ImageStoreCodec: v1.0-Bild laedt als einzelne opake Ebene (Spec 010, US2 FR-010, T021)")
+do
+    local flatFrame = {}
+    for i = 1, 375 do flatFrame[i] = 1 end
+    flatFrame[1] = 2
+    -- v1.0-Schema: flaches 375er-Array je Frame, KEIN layers-Feld, version = 1
+    datastoreFiles["saves/legacy-v10/frames"] =
+        { version = 1, name = "legacy", tileCount = 2, frames = { flatFrame } }
+    datastoreImages["saves/legacy-v10/sheet"] = newMockImage(32, 16, "white")
+
+    local lco = ImageStoreCodec.newLoadOperation("legacy-v10")
+    local loaded
+    while coroutine.status(lco) ~= "dead" do
+        local okl, res = coroutine.resume(lco)
+        if okl and res then loaded = res end
+    end
+    check(loaded ~= nil, "v1.0-Bild laedt ohne Fehler")
+    check(loaded and #loaded.frameLayers[1].layers == 1, "Auto-Upgrade: genau eine Ebene")
+    check(loaded and loaded.frameLayers[1].layers[1].name == "Layer 1", "Ebene heisst 'Layer 1'")
+    check(loaded and loaded.frameLayers[1].layers[1].positions[1] == 2
+        and loaded.frameLayers[1].layers[1].positions[2] == 1, "Alt-Positionen 1:1 uebernommen")
+    check(loaded and loaded.frames[1][1] == 2, "kompositiertes frames-Array entspricht der Basisebene")
+
+    -- Re-Save schreibt v1.1
+    loaded.id = "legacy-v10"
+    local sco = ImageStoreCodec.newSaveOperation(loaded)
+    while coroutine.status(sco) ~= "dead" do coroutine.resume(sco) end
+    check(datastoreFiles["saves/legacy-v10/frames"].version == "1.1",
+        "naechstes Speichern hebt die Datei auf v1.1 (nahtloses Upgrade)")
+end
+
+section("ImageStoreCodec: Laden erzwingt das 3-Layer-Limit (Spec 010, FR-012b, T007)")
+do
+    local function layerObj(idx0, tile)
+        local p = {}
+        for i = 1, 375 do p[i] = (idx0 == 0) and 1 or 0 end
+        p[1] = tile
+        return { layerIndex = idx0, name = "L" .. idx0, positions = p, visible = true }
+    end
+    datastoreFiles["saves/toomany/frames"] = {
+        version = "1.1", name = "toomany", tileCount = 6,
+        frames = { { frameIndex = 0, duration = 100,
+            layers = { layerObj(0, 3), layerObj(1, 4), layerObj(2, 5), layerObj(3, 6) } } },
+    }
+    datastoreImages["saves/toomany/sheet"] = newMockImage(112, 16, "white")
+    local lco = ImageStoreCodec.newLoadOperation("toomany")
+    local loaded
+    while coroutine.status(lco) ~= "dead" do
+        local okl, res = coroutine.resume(lco)
+        if okl and res then loaded = res end
+    end
+    check(loaded and #loaded.frameLayers[1].layers == 3,
+        "vierte Ebene wird beim Laden verworfen -> maximal 3 Ebenen")
+end
 
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 

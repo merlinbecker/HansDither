@@ -1,9 +1,26 @@
 -- ImageStoreCodec.lua
 -- Modul für die Kodierung/Dekodierung von Bildern im nativen PDI-Speicherformat
 -- Coroutine-basierte Save/Load-Operationen für RoomOperation
+--
+-- Spec 010 (Foundational, contracts/save-format.md): frames.json traegt ab
+-- sofort Version "1.1" mit verschachtelten Layern je Frame statt flacher
+-- 375er-Arrays (Spec 009, version = 1). Massgeblich ist imageData.frameLayers
+-- (1..3 Ebenen je Frame, LayerModel-Format). Fehlt es (Alt-Aufrufer/Tests,
+-- die nur imageData.frames setzen), wird defensiv je Frame ein 1-Ebenen-
+-- Entry daraus gebaut — identisch zum v1.0->v1.1-Upgrade beim Laden.
+-- imageData.frames bleibt zusaetzlich als flaches, KOMPOSITIERTES Array
+-- erhalten (Tilemap-Rendering, Pause-Ansicht, Vorschau, Alt-Tests) — siehe
+-- LayerModel.compositeToFlat().
+--
+-- Transparenz wird NICHT je Zelle in frames.json gefuehrt (der data-model.md-
+-- Entwurf sah ein 375er transparency-Array vor); sie lebt pro Pixel als
+-- kColorClear direkt im Tile-Bild und wird ueber den 3-Zustands-hashTile()
+-- getrennt dedupliziert (spec.md Edge Case Zeile 104).
 
 import "CoreLibs/graphics"
 import "CoreLibs/object"
+import "PixelTransparency"
+import "LayerModel"
 
 local gfx = playdate.graphics
 
@@ -20,15 +37,25 @@ function ImageStoreCodec.newSaveOperation(imageData)
         local id = imageData.id
         local name = imageData.name or "unnamed"
         local imagetable = imageData.imagetable
-        local frames = imageData.frames or {}
-        local hashIndex = imageData.hashIndex or {}
-        
-        -- Phase 1: Tile-Bereinigung (Spec 009 FR-001..003) — entfernt über
-        -- alle Frames hinweg ungenutzte Tiles (ausser den Basistiles) und
-        -- nummeriert die verbleibenden lückenlos neu. Reine Transformation:
-        -- imageData bleibt unverändert (research.md R2 zu Spec 009 — der
-        -- Editor verlässt nach "save + exit" immer den Raum, ein
-        -- Live-State-Sync ist dadurch nicht nötig).
+
+        -- Spec 010: frameLayers ist die massgebliche Quelle (1..3 verschachtelte
+        -- Ebenen je Frame). Fehlt sie (Alt-Aufrufer/Tests, die nur das flache
+        -- imageData.frames setzen), wird defensiv je Frame ein 1-Ebenen-Entry
+        -- daraus gebaut — identisch zum v1.0->v1.1-Upgrade beim Laden.
+        local frameLayers = imageData.frameLayers
+        if not frameLayers then
+            frameLayers = {}
+            for i, flat in ipairs(imageData.frames or {}) do
+                frameLayers[i] = LayerModel.newFrameLayersFromFlat(flat)
+            end
+        end
+
+        -- Phase 1: Tile-Bereinigung (Spec 009 FR-001..003, Spec 010 ueber alle
+        -- Frames UND Ebenen hinweg) — entfernt ungenutzte Tiles (ausser den
+        -- Basistiles) und nummeriert die verbleibenden lückenlos neu. Reine
+        -- Transformation: imageData bleibt unverändert (research.md R2 zu
+        -- Spec 009 — der Editor verlässt nach "save + exit" immer den Raum,
+        -- ein Live-State-Sync ist dadurch nicht nötig).
         coroutine.yield("Dedup")
 
         -- Zähle tatsächliche Anzahl der Tiles
@@ -38,8 +65,16 @@ function ImageStoreCodec.newSaveOperation(imageData)
             tileCount = 2
         end
 
-        imagetable, frames, tileCount = ImageStoreCodec.pruneUnusedTiles(imagetable, frames, tileCount)
-        
+        imagetable, frameLayers, tileCount =
+            ImageStoreCodec.pruneUnusedTilesLayered(imagetable, frameLayers, tileCount)
+
+        -- Flaches, kompositiertes Frame-Array fuer Vorschau + Frame-Zaehler
+        -- (der Rest der Codebasis erwartet dieses Format).
+        local compositedFrames = {}
+        for i, entry in ipairs(frameLayers) do
+            compositedFrames[i] = LayerModel.compositeToFlat(entry)
+        end
+
         -- Phase 2: Sheet komponieren
         coroutine.yield("Sheet")
         
@@ -61,9 +96,9 @@ function ImageStoreCodec.newSaveOperation(imageData)
         
         -- Phase 3: Frames JSON erstellen und speichern
         coroutine.yield("Frames")
-        
-        local framesTable = ImageStoreCodec.createFramesTable(name, frames, tileCount)
-        
+
+        local framesTable = ImageStoreCodec.createFramesTableV11(name, frameLayers, tileCount)
+
         -- Stelle sicher, dass der saves-Ordner für dieses Bild existiert
         local savePath = "saves/" .. id
         playdate.file.mkdir(savePath)
@@ -80,15 +115,15 @@ function ImageStoreCodec.newSaveOperation(imageData)
         -- Phase 5: Preview erstellen und speichern
         coroutine.yield("Preview")
         
-        -- Erstelle Preview aus dem ersten Frame (400x240)
-        local preview = ImageStoreCodec.createPreviewFromFrame(frames[1], imagetable)
+        -- Erstelle Preview aus dem ersten (kompositierten) Frame (400x240)
+        local preview = ImageStoreCodec.createPreviewFromFrame(compositedFrames[1], imagetable)
         playdate.datastore.writeImage(preview, savePath .. "/preview")
-        
+
         -- Phase 6: Index aktualisieren (MUSS die letzte Phase sein - C-06)
         coroutine.yield("Index")
-        
+
         -- Aktualisiere Index
-        ImageStoreCodec.updateIndexAfterSave(id, name, #frames, preview)
+        ImageStoreCodec.updateIndexAfterSave(id, name, #frameLayers, preview)
     end)
 end
 
@@ -165,6 +200,76 @@ function ImageStoreCodec.pruneUnusedTiles(imagetable, frames, tileCount)
     end
 
     return newImagetable, newFrames, #keepList
+end
+
+-- Spec 010: Layer-Variante von pruneUnusedTiles(). Bereinigt ueber ALLE
+-- Ebenen ALLER Frames hinweg (Tiles werden zwischen Ebenen und Frames
+-- geteilt, ein per-Ebene-Prune waere gegen die gemeinsame Imagetable
+-- unsound — T009 dahingehend angepasst). "absent" (0) belegt keinen Slot
+-- und bleibt 0. Liefert (newImagetable, newFrameLayers, newTileCount);
+-- frameLayers wird tief kopiert, imageData bleibt unveraendert.
+function ImageStoreCodec.pruneUnusedTilesLayered(imagetable, frameLayers, tileCount)
+    local count = tonumber(tileCount) or 0
+
+    local used = { [1] = true, [2] = true }
+    for _, entry in ipairs(frameLayers or {}) do
+        for _, layer in ipairs(entry.layers or {}) do
+            for _, tileIndex in ipairs(layer.positions or {}) do
+                local idx = tonumber(tileIndex)
+                if idx and idx >= 1 then
+                    used[idx] = true
+                end
+            end
+        end
+    end
+
+    local keepList = {}
+    for idx in pairs(used) do
+        if idx >= 1 and idx <= count then
+            table.insert(keepList, idx)
+        end
+    end
+    table.sort(keepList)
+    if #keepList == 0 then
+        keepList = { 1, 2 }
+    end
+
+    local remap = {}
+    for newIdx, oldIdx in ipairs(keepList) do
+        remap[oldIdx] = newIdx
+    end
+
+    local newImagetable = gfx.imagetable.new(#keepList)
+    if imagetable then
+        for newIdx, oldIdx in ipairs(keepList) do
+            newImagetable:setImage(newIdx, imagetable:getImage(oldIdx))
+        end
+    end
+
+    local newFrameLayers = {}
+    for f, entry in ipairs(frameLayers or {}) do
+        local newLayers = {}
+        for l, layer in ipairs(entry.layers or {}) do
+            local newPositions = {}
+            for i, tileIndex in ipairs(layer.positions or {}) do
+                local oldIdx = tonumber(tileIndex)
+                if not oldIdx or oldIdx == 0 then
+                    newPositions[i] = 0
+                else
+                    newPositions[i] = remap[oldIdx] or remap[1]
+                end
+            end
+            newLayers[l] = {
+                layerIndex = layer.layerIndex or (l - 1),
+                name = layer.name or ("Layer " .. l),
+                positions = newPositions,
+                visible = layer.visible ~= false,
+            }
+        end
+        newFrameLayers[f] = { duration = entry.duration or 100, layers = newLayers }
+    end
+
+    return newImagetable, newFrameLayers, #keepList
 end
 
 -- Hilfsfunktion: Erstellt ein Preview-Image aus einem Frame
@@ -271,45 +376,94 @@ function ImageStoreCodec.newLoadOperation(id)
         
         -- Phase 4: Validierung
         coroutine.yield("Validierung")
-        
-        -- Validierung der Frame-Daten. table.insert statt frames[frameIdx],
-        -- damit defekte Frames keine Lücken hinterlassen (ipairs bricht an
-        -- der ersten Lücke ab und der Editor sähe zu wenige Frames).
-        local validatedFrames = {}
-        for _, frameData in ipairs(frames or {}) do
-            if type(frameData) == "table" and #frameData == 375 then
-                local validatedFrame = {}
-                for posIdx, tileIndex in ipairs(frameData) do
-                    -- Validierung: 1 <= tileIndex <= tileCount
-                    local validatedIndex = tonumber(tileIndex)
-                    if not validatedIndex or validatedIndex < 1 or validatedIndex > tileCount then
-                        validatedIndex = 1  -- Fallback auf Weiß-Tile
-                    end
-                    validatedFrame[posIdx] = validatedIndex
+
+        -- 375-Positions-Array validieren. 1 <= idx <= tileCount; ungueltig ->
+        -- Weiss (1). allowAbsent: obere Ebenen duerfen 0 ("traegt nichts bei")
+        -- behalten, die Basisebene nicht.
+        local function validatePositions(arr, allowAbsent)
+            local out = {}
+            for i = 1, 375 do
+                local v = tonumber(arr[i])
+                if v == 0 and allowAbsent then
+                    out[i] = 0
+                elseif not v or v < 1 or v > tileCount then
+                    out[i] = 1
+                else
+                    out[i] = math.floor(v)
                 end
-                table.insert(validatedFrames, validatedFrame)
+            end
+            return out
+        end
+
+        -- Spec 010: frames.json ist entweder v1.0 (flaches 375-Array je Frame)
+        -- oder v1.1 (Frame = {frameIndex, duration, layers = {...}}). Erkennung
+        -- ueber die Struktur des ersten Frames, nicht ueber das version-Feld
+        -- (robuster gegen fehlende/fehlerhafte Versionsangaben — FR-010).
+        local first = frames and frames[1]
+        local isLayered = type(first) == "table" and type(first.layers) == "table"
+
+        local frameLayers = {}
+        if isLayered then
+            for _, fd in ipairs(frames) do
+                if type(fd) == "table" and type(fd.layers) == "table" and #fd.layers >= 1 then
+                    local builtLayers = {}
+                    local n = math.min(#fd.layers, LayerModel.MAX_LAYERS)
+                    for j = 1, n do
+                        local ld = fd.layers[j]
+                        if type(ld) == "table" and type(ld.positions) == "table"
+                            and #ld.positions == 375 then
+                            builtLayers[#builtLayers + 1] = {
+                                layerIndex = #builtLayers,
+                                name = ld.name or ("Layer " .. (#builtLayers + 1)),
+                                positions = validatePositions(ld.positions, #builtLayers >= 1),
+                                visible = ld.visible ~= false,
+                            }
+                        end
+                    end
+                    if #builtLayers >= 1 then
+                        frameLayers[#frameLayers + 1] = {
+                            duration = tonumber(fd.duration) or 100,
+                            layers = builtLayers,
+                        }
+                    end
+                end
+            end
+        else
+            -- v1.0 -> v1.1 Upgrade: jeder flache Frame wird zur Basisebene
+            -- "Layer 1" (alle Pixel opak, contracts/save-format.md).
+            for _, frameData in ipairs(frames or {}) do
+                if type(frameData) == "table" and #frameData == 375 then
+                    frameLayers[#frameLayers + 1] =
+                        LayerModel.newFrameLayersFromFlat(validatePositions(frameData, false))
+                end
             end
         end
 
         -- Waren alle Frames defekt, liefern wir einen weißen Leerframe:
         -- der Editor verlässt sich darauf, dass frames[1] existiert.
-        if #validatedFrames == 0 then
+        if #frameLayers == 0 then
             local emptyFrame = {}
-            for i = 1, 375 do
-                emptyFrame[i] = 1
-            end
-            validatedFrames[1] = emptyFrame
+            for i = 1, 375 do emptyFrame[i] = 1 end
+            frameLayers[1] = LayerModel.newFrameLayersFromFlat(emptyFrame)
         end
-        
+
+        -- Flaches, kompositiertes Array fuer Tilemap/Vorschau/Pause-Ansicht.
+        local validatedFrames = {}
+        for i, entry in ipairs(frameLayers) do
+            validatedFrames[i] = LayerModel.compositeToFlat(entry)
+        end
+
         -- Erstelle Ergebnis
         local imageData = {
             id = id,
             name = name,
             imagetable = imagetable,
             frames = validatedFrames,
+            frameLayers = frameLayers,
+            activeLayer = 1,
             hashIndex = hashIndex
         }
-        
+
         -- Return the loaded imageData
         return imageData
     end)
@@ -415,10 +569,19 @@ function ImageStoreCodec.positionToTileIndex(x, y, gridWidth)
     return cellX + cellY * gridW + 1  -- +1 für 1-basierte Indizes
 end
 
--- Vergleicht zwei Bilder auf sichtbare 1-Bit-Gleichheit: nur "schwarz vs.
--- nicht-schwarz" zählt, kColorClear und kColorWhite gelten also als gleich.
--- Wird vom Dedup beim Tile-Commit genutzt (EditorRoom/ZoomRoom).
--- SDK: image:sample(x, y) liest die Farbe eines Pixels (0-basiert).
+-- Vergleicht zwei Bilder auf sichtbare Gleichheit. Spec 010: DREI Zustaende
+-- zaehlen — schwarz, weiss und transparent (kColorClear). Damit gelten zwei
+-- Tiles mit gleichem Schwarz-Muster, aber unterschiedlicher Transparenz als
+-- verschieden (spec.md Edge Case Zeile 104). Alt-Tiles (nur schwarz/weiss)
+-- verhalten sich unveraendert. Wird vom Dedup beim Tile-Commit genutzt
+-- (EditorRoom/ZoomRoom). SDK: image:sample(x, y) liest die Pixelfarbe
+-- (0-basiert).
+local function pixelClass(sample)
+    if sample == gfx.kColorBlack then return 1 end
+    if sample == gfx.kColorClear then return 2 end
+    return 0  -- weiss / undefiniert
+end
+
 function ImageStoreCodec.imagesVisiblyEqual(a, b)
     if a == nil and b == nil then return true end
     if a == nil or b == nil then return false end
@@ -427,7 +590,7 @@ function ImageStoreCodec.imagesVisiblyEqual(a, b)
     if aw ~= bw or ah ~= bh then return false end
     for y = 0, ah - 1 do
         for x = 0, aw - 1 do
-            if (a:sample(x, y) == gfx.kColorBlack) ~= (b:sample(x, y) == gfx.kColorBlack) then
+            if pixelClass(a:sample(x, y)) ~= pixelClass(b:sample(x, y)) then
                 return false
             end
         end
@@ -435,24 +598,22 @@ function ImageStoreCodec.imagesVisiblyEqual(a, b)
     return true
 end
 
--- FNV-1a Hash über 16x16 Tile
--- Basierend auf dem Muster aus TileRoomPersistence.lua
+-- FNV-1a Hash über 16x16 Tile. Spec 010: 3-Zustands-Klasse je Pixel
+-- (0 = weiss, 1 = schwarz, 2 = transparent) statt binaer schwarz/nicht-
+-- schwarz, sonst wuerden transparenz-unterschiedliche Tiles kollidieren.
 function ImageStoreCodec.hashTile(image)
     if not image then return "00000000" end
-    
+
     local w, h = image:getSize()
     local hash = -2128831035  -- FNV-1a 32-bit offset basis
-    
+
     for y = 0, h - 1 do
         for x = 0, w - 1 do
-            local pixel = image:sample(x, y) or 0
-            -- Für 1-Bit-Bilder: 0=weiß/clear, 1=schwarz/black, andere Werte möglich
-            local byteValue = pixel == gfx.kColorBlack and 1 or 0
-            hash = hash ~ byteValue
+            hash = hash ~ pixelClass(image:sample(x, y))
             hash = hash * 16777619
         end
     end
-    
+
     return string.format("%08x", hash)
 end
 
@@ -476,7 +637,54 @@ function ImageStoreCodec.createFramesTable(name, frames, tileCount)
             end
         end
     end
-    
+
+    return framesData
+end
+
+-- Spec 010: frames.json v1.1 mit verschachtelten Ebenen je Frame
+-- (contracts/save-format.md). frameLayers ist im LayerModel-Format
+-- ({duration, layers = {{layerIndex, name, positions[375], visible}, ...}}).
+-- Frames mit ungueltiger Ebenenzahl (0 oder > 3) oder Positions-Laenge != 375
+-- werden verworfen (defensiv, wie schon createFramesTable).
+function ImageStoreCodec.createFramesTableV11(name, frameLayers, tileCount)
+    local framesData = {
+        version = "1.1",
+        name = name or "unnamed",
+        gridWidth = 25,
+        gridHeight = 15,
+        tileCount = tonumber(tileCount) or 0,
+        frames = {},
+    }
+
+    if type(frameLayers) == "table" then
+        for i, entry in ipairs(frameLayers) do
+            local layers = entry and entry.layers
+            if type(layers) == "table" and #layers >= 1 and #layers <= LayerModel.MAX_LAYERS then
+                local outLayers = {}
+                local ok = true
+                for j, layer in ipairs(layers) do
+                    if type(layer.positions) ~= "table" or #layer.positions ~= LayerModel.POSITIONS then
+                        ok = false
+                        break
+                    end
+                    outLayers[j] = {
+                        layerIndex = j - 1,
+                        name = layer.name or ("Layer " .. j),
+                        positions = layer.positions,
+                        visible = layer.visible ~= false,
+                    }
+                end
+                if ok then
+                    framesData.frames[#framesData.frames + 1] = {
+                        frameIndex = #framesData.frames,
+                        duration = tonumber(entry.duration) or 100,
+                        layers = outLayers,
+                    }
+                end
+            end
+        end
+    end
+
     return framesData
 end
 

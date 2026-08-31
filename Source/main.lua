@@ -19,6 +19,8 @@ import "CoreLibs/object"
 
 -- Räume und Module (Reihenfolge egal, import lädt jede Datei genau einmal;
 -- weitere Module wie ImageStore/RoomOperation importieren die Räume selbst)
+import "PixelTransparency"
+import "LayerModel"
 import "TitleRoom"
 import "PixelRoom"
 import "ZoomRoom"
