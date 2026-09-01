@@ -59,6 +59,7 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 - **FMV-Sackgassen-Fix** (B-Timing beim Eintritt) ✅ — buildNumber 22 → 23.
 - **Fourth Round — Tile-View-Steuerungs-Redesign** (aus dem Hardware-Test) ✅ — **B + Hoch/Runter = Ebene**, **B + Links/Rechts = Frame**, **freie Kurbel = Tile-Picker** (über die referenzierten Kacheln, ~30°/Kachel, Wrap, Auto-Ausblenden), Pipette meldet „Tile N picked“. B + Crank (Zoom / Frame-Verwaltung) unverändert. `layerAccumDegrees` entfernt, `crankAccumDegrees` als Picker-Akkumulator umgewidmet, `bNavConsumed` trennt B+D-Pad von der Pipette. Durch spec/research (R10)/quickstart (Szenario 7) + arc42 Ch.4/5/8/9 + **ADR-042** gezogen. buildNumber 23 → 24.
   - **Nacharbeit (Advisor + Konsolidierung):** `referencedTileIndices()` scannt jetzt die **Ebenen-Positionen** statt des Composite-Cache (verdeckte Kacheln bleiben wählbar) und ist die **gemeinsame faktische Quelle** mit `buildPauseMenuImage` (das die verdeckten Kacheln vorher in „Tiles: N“ unterzählte). `pickerList()` cacht das Ergebnis für den Picker (Invalidierung bei Tile-Mutation) und hängt den Abwahl-Slot (Index 1) an — nur dort, damit die Pause-Anzahl faktisch bleibt. Bugfix `stepTilePicker`: `(picked == 1) and nil or picked` ergibt in Lua immer `picked` → Kurbeln auf Kachel 1 setzte `activeTile = 1` statt `nil`. Alle Assertions grün, buildNumber → 27.
+- **Fifth Round — PixelRoom: B malt nicht mehr** (aus dem Hardware-Test) ✅ — gemalt wird ausschließlich mit **A** (A-Druck auf Tinte radiert je aktiver Ebene nach weiß bzw. transparent — der ebenenabhängige „Nicht-Tinte“-Zustand war schon korrekt verdrahtet). `BButtonDown/Up` sind No-ops; **B + Kurbel zurück** (Zoom-Out, Contract PR-01) bleibt der einzige B-Pfad. Beseitigt zugleich den „stray“ transparenten Pixel, den die B-Halten-Zoom-Out-Geste beim Loslassen im Tile hinterließ. `beginStroke()` ohne `button`-Parameter, `strokeButton` entfernt. **FR-007** von „B setzt den Nicht-Tinte-Zustand“ auf „B malt nicht in Pixel View“ umformuliert. Durch spec (Clarifications 5. Runde, FR-007/008, US2, Edge Cases, Status)/research (R2, R8/R9)/quickstart (Szenario 2 + Checkliste)/data-model/contracts + arc42 Ch.5/9 + **ADR-040-Nachtrag** gezogen. Tests: „B-Tipp folgenlos“ statt „B malt transparent“ (obere + Basisebene), Radier-Strich startet via A auf Tinte; B+Crank-Zoom-Out-Regression unverändert. 369 Assertions grün, buildNumber 27 → 28.
 - **Phase 7** (T044–T059): Gates grün (T044–T048) ✅; arc42 Ch.4/Ch.5/Ch.8/Ch.9 + ADR-039..042 (T049–T052) ✅; Performance-Profiling + Simulator-Integrationstests (T053–T059) **offen** (Gerät/Simulator).
 - **Phase 6** (T033–T043, US4 Management-Views) — offen.
 - **Phase 7** (T044–T059, Polish/Gates/arc42) — offen.
@@ -92,7 +93,7 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 - **Phase 1**: Setup — project initialization, no code changes yet
 - **Phase 2**: Foundational — data model + storage format (blocks all stories)
 - **Phase 3**: US1 (Pixel Shifting) — Zoom View control + tile recalculation
-- **Phase 4**: US2 (Transparency) — Pixel View B-press + transparency state
+- **Phase 4**: US2 (Transparency) — Pixel View per-layer non-ink state (A-press eraser; Fifth Round: B no longer paints)
 - **Phase 5**: US3 (Layer Cycling) — Crank control + layer indicator
 - **Phase 6**: US4 (Management View) — Layer/Frame management UI
 - **Phase 7**: Polish — tests, documentation, arc42 updates, build gates
@@ -177,17 +178,17 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 ## Phase 4: User Story 2 - Transparency Support (Priority: P1)
 
-**Goal**: Implement B-press transparency placement in Pixel View with persistence
+**Goal**: Implement per-layer transparency in Pixel View with persistence. *(Fifth Round, 2026-09-01: painting is A only — B no longer places pixels; see Fortschritt.)*
 
-**Independent Test** (from quickstart.md): Pixel View → place opaque (A) + transparent (B) + empty pixels → save/reload → transparency states persist, visually distinct (checkerboard)
+**Independent Test** (from quickstart.md): Pixel View on Layer 2 → place opaque (A), erase to transparent (A again), place another opaque, save/reload → transparency states persist, visually distinct (checkerboard); a B-tap does nothing
 
 ### Transparency Placement (Pixel View)
 
-- [X] T016 [US2] `PixelRoom:inputHandler` erhält `BButtonDown`/`BButtonUp` → `beginStroke("B")`. Malt `gridState[cell] = TRANSPARENT`. Kein `Layer:setPosition` — Transparenz lebt pro Pixel im 16×16-Tile (`kColorClear`), nicht in einem 375er-Array. File path: `Source/PixelRoom.lua`
+- [X] T016 [US2] `PixelRoom:inputHandler` — **~~`BButtonDown`/`BButtonUp` → `beginStroke("B")`~~ (Fifth Round: zurückgenommen, B malt nicht mehr).** Der ebenenabhängige „Nicht-Tinte“-Zustand wird jetzt allein über den A-Radierer erreicht (`beginStroke()` ohne `button`, `strokeValue = OPAQUE-Zelle ? offState : OPAQUE`). Transparenz lebt pro Pixel im 16×16-Tile (`kColorClear`), nicht in einem 375er-Array. `BButtonDown/Up` sind No-ops; B + Kurbel zurück bleibt der Zoom-Out. File path: `Source/PixelRoom.lua`
 
 - [X] T017 [US2] `gridView:drawCell` rendert TRANSPARENT-Zellen mit Schachbrett-`setPattern` (sichtbar verschieden von opak-schwarz und leer-weiß, FR-011). File path: `Source/PixelRoom.lua`
 
-- [X] T018 [US2] ~~Y-Druck~~ → **Playdate-Hardware hat keine Y-Taste** (Plan-Artefakt-Fehler). A toggelt opak↔leer (Radierer, Spec 008), B setzt transparent. transparent→leer = A (→opak) + A (→leer). `buildTileImage`: OPAQUE→schwarz, TRANSPARENT→`kColorClear`, EMPTY→weiß. "Invert" tauscht nur opak↔leer. File path: `Source/PixelRoom.lua`
+- [X] T018 [US2] ~~Y-Druck~~ → **Playdate-Hardware hat keine Y-Taste** (Plan-Artefakt-Fehler). A toggelt opak↔„Nicht-Tinte“ (Radierer, Spec 008): auf der Basisebene ↔weiß, auf Ebenen 2–3 ↔`kColorClear`. ~~B setzt transparent~~ (Fifth Round: B malt nicht mehr). `buildTileImage`: OPAQUE→schwarz, TRANSPARENT→`kColorClear`, EMPTY→weiß. "Invert" tauscht nur opak↔„Nicht-Tinte“. File path: `Source/PixelRoom.lua`
 
 ### Transparency State Encoding
 
@@ -203,9 +204,9 @@ BESTANDEN“ + `buildNumber` +1 + `pdc Source "Hans Dither.pdx"` grün + Commit.
 
 ### Persistence & Verification
 
-- [X] T023 [P] [US2] `tests/headless_tests.lua` „PixelRoom: transparenter Strich + Ruecklesen aus dem Tile“: B-Strich → `buildTileImage` erzeugt `kColorClear`-Pixel; `setCurrentTile` liest sie als TRANSPARENT zurück; 3-Zustands-`hashTile` dedupliziert opak vs. transparent getrennt. Voller PixelRoom→ZoomRoom→EditorRoom→Save→Reload-Bilddurchlauf für einen Einzelpixel: Simulator (T057).
+- [X] T023 [P] [US2] `tests/headless_tests.lua` „PixelRoom: transparenter Strich + Ruecklesen aus dem Tile“: ein A-Strich, der auf einer Tinte-Zelle startet (Fifth Round — vorher B-Strich), → `buildTileImage` erzeugt `kColorClear`-Pixel; `setCurrentTile` liest sie als TRANSPARENT zurück; 3-Zustands-`hashTile` dedupliziert opak vs. transparent getrennt. Voller PixelRoom→ZoomRoom→EditorRoom→Save→Reload-Bilddurchlauf für einen Einzelpixel: Simulator (T057).
 
-- [X] T024 [P] [US2] `tests/headless_tests.lua` „leer -> A -> opak -> B -> transparent (Zyklus)“ + A-auf-opak→leer + A-auf-transparent→opak.
+- [X] T024 [P] [US2] `tests/headless_tests.lua` „obere Ebene: A auf leerem Pixel → Tinte → A → transparent“ + „Basisebene: A auf weiß → Tinte → A → weiß“ + „B-Tipp folgenlos“ (Fifth Round — vorher „leer → A → opak → B → transparent“).
 
 **Checkpoint**: US2 ✅ — headless-Tests grün; buildNumber 15 → 16; pdc grün. Commit folgt.
 

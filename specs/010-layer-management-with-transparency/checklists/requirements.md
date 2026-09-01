@@ -181,4 +181,12 @@ Re-validated against the updated spec. All 16 checklist items remain passing
 - **B + Crank forward/backward** (zoom chain / Frame Management View) is **unchanged**. B + arrow means pixel-shift in Zoom View but layer/frame switch in Tile View — different views, no collision.
 - Affects: FR-013/014/016, new FR-025..FR-027 (Tile Picker & Eyedropper Feedback, US5), US3/US4 narrative, SC-003/004, new SC-007, Edge Cases, Assumptions, Architecture Governance. New ADR-042. research.md gains R10.
 
+### Integration Note (Session 5, 2026-09-01) — Pixel View: B stops painting (from hardware testing)
+
+Re-validated against the updated spec. All 16 checklist items remain passing
+(16/16 → 16/16, no state changes). One clarification integrated:
+
+- **Pixel View painting is A only.** B no longer places a pixel (a lone B-tap is inert); B stays the zoom-out modifier (B held + Crank backward). The A-press eraser already reaches the layer's non-ink state — white on Layer 1, transparent on Layers 2–3 — so nothing became unreachable. This also removes the stray transparent pixel the old B-paint dropped into the tile on every B-held zoom-out.
+- Affects: **FR-007** (rewritten from "B sets the non-ink state" to "B does not paint in Pixel View"), FR-008 wording, US2 narrative + acceptance scenarios + Independent Test, Edge Cases ("Layer 1 Transparency" + new "Pixel View B-press"), Status Summary. ADR-040 gains a Fifth-Round addendum. research.md R2/R8 updated.
+
 

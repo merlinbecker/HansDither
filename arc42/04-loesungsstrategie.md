@@ -73,7 +73,9 @@ Leitentscheidungen (Details in Kapitel 9, AD-039..AD-042):
    `ImageStoreCodec.hashTile` unterscheidet drei Pixelklassen
    (schwarz/weiss/transparent), sodass Transparenz-Varianten getrennt
    dedupliziert werden (AD-040). Der „Nicht-Tinte“-Zustand ist
-   ebenenabhaengig: weiss auf Ebene 1, transparent auf Ebenen 2–3.
+   ebenenabhaengig: weiss auf Ebene 1, transparent auf Ebenen 2–3. Im
+   PixelRoom malt **nur A** (A auf Tinte radiert je Ebene nach weiss bzw.
+   transparent); B malt nicht (AD-040 Nachtrag, 5. Runde).
 3. **Compositing als flacher Cache.** `imageData.frameLayers` (3 Ebenen)
    ist die Wahrheit; `imageData.frames` ist ein daraus abgeleiteter
    flacher 375er-Cache (oberste nicht-leere Zelle gewinnt), den die

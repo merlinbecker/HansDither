@@ -64,17 +64,18 @@
 |------|--------|-----------------|
 | 1 | Cursor at pixel (5, 5) in Pixel View | Cursor visible in 16×16 grid |
 | 2 | Press A | Black ink pixel at (5, 5) |
-| 3 | Move to (6, 5), press B | Pixel (6, 5) shows the checkerboard pattern (transparent) |
-| 4 | Move to (5, 5), press A again | Pixel (5, 5) toggles back to transparent (Layer 2's non-ink state — the eraser) |
-| 5 | Verify visual distinction: ink (black) vs. transparent (checkerboard) | The two states are clearly different |
-| 6 | Zoom out to Tile View | Where Layer 2 is transparent, Layer 1 shows through |
-| 7 | Save, close, reload | Transparent pixels preserved; the Layer 2 tile round-trips distinctly from a white tile |
+| 3 | Press A again on (5, 5) | Pixel (5, 5) erases to the checkerboard pattern (transparent — Layer 2's non-ink state) |
+| 4 | Move to (6, 5), press A twice | Pixel (6, 5) goes ink → transparent, same as step 2–3 |
+| 5 | Move to (5, 5), press B (tap) | **Nothing happens** — B does not paint in Pixel View (Fifth Round) |
+| 6 | Verify visual distinction: ink (black) vs. transparent (checkerboard) | The two states are clearly different |
+| 7 | Zoom out to Tile View | Where Layer 2 is transparent, Layer 1 shows through |
+| 8 | Save, close, reload | Transparent pixels preserved; the Layer 2 tile round-trips distinctly from a white tile |
 
-Then repeat on **Layer 1**: B-press produces **white** (identical to the A-eraser) — Layer 1 has no transparent state.
+Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — Layer 1 has no transparent state. A B-tap does nothing here either.
 
 **Acceptance Criteria**:
-- ✅ A places ink; A on an ink pixel erases to the layer's non-ink state
-- ✅ B places the layer's non-ink state — transparent on Layers 2–3, white on Layer 1
+- ✅ A places ink; A on an ink pixel erases to the layer's non-ink state (transparent on Layers 2–3, white on Layer 1)
+- ✅ B does **not** paint — a lone B-tap in Pixel View is inert; B held + Crank backward still zooms out
 - ✅ Transparent pixels render with checkerboard in Pixel View
 - ✅ Transparent pixels let lower layers show through in Tile View
 - ✅ Transparent tiles persist through save/reload, distinct from white tiles
@@ -261,7 +262,7 @@ pdc Source "Hans Dither.pdx"
 ## Validation Checklist
 
 - [ ] **US1 (Pixel Shifting)**: Test Scenario 3 passes — shifts work, tiles recalculate, persist
-- [ ] **US2 (Transparency)**: Test Scenario 2 passes — B places the layer's non-ink state; transparent pixels stored/rendered/persisted on Layers 2–3
+- [ ] **US2 (Transparency)**: Test Scenario 2 passes — an A-press on ink erases to the layer's non-ink state (transparent on Layers 2–3); B does not paint; transparent pixels stored/rendered/persisted
 - [ ] **US3 (Layer/Frame Switching)**: Test Scenario 1 passes — B + Up/Down = layer, B + Left/Right = frame, Crank switches neither
 - [ ] **US4 (Frame Management View)**: Test Scenario 4 passes — reorder + delete frames (min. 1), persists
 - [ ] **US5 (Tile Picker + Toast)**: Test Scenario 7 passes — Crank cycles referenced tiles with wrap; eyedropper shows "Tile N picked"

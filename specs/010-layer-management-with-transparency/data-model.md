@@ -65,9 +65,9 @@ Internally the editor tracks three codes (`PixelTransparency`: `OPAQUE=0`, `TRAN
 - **Layer**: a tile belongs to the active layer.
 
 **State Transitions** (Pixel View):
-- **A-press**: toggles `ink` ↔ the layer's non-ink state (eraser behaviour, Spec 008)
-- **B-press**: sets the layer's non-ink state (white on Layer 1, transparent on Layers 2–3)
-- There is **no Y button** on Playdate hardware; "empty from transparent" is A (→ ink) then A (→ non-ink)
+- **A-press**: toggles `ink` ↔ the layer's non-ink state (eraser behaviour, Spec 008). This is the **only** paint action — an A-press on ink on Layer 2/3 therefore lands directly on `transparent`
+- **B-press**: no effect (Fifth Round, 2026-09-01 — supersedes the earlier "B sets the non-ink state"). B in Pixel View is reserved for the zoom-out modifier (B held + Crank backward)
+- There is **no Y button** on Playdate hardware; every reachable state is covered by the A toggle alone
 
 ---
 

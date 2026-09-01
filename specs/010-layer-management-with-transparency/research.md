@@ -95,6 +95,8 @@ The early draft stored a per-cell `transparency` array (0/1/2) alongside `positi
 - Transparent: checkerboard pattern (FR-011)
 - White: white cell (existing)
 
+**Pixel View Input (Fifth Round, 2026-09-01 — from hardware testing)**: painting is **A only**. The earlier design gave B its own paint action ("B sets the layer's non-ink state"); on device this was unwanted (users paint with A) and, worse, the B-held zoom-out gesture dropped a stray non-ink pixel into the tile on every use. B in Pixel View is now inert as a paint key — it only serves the zoom-out modifier (B held + Crank backward, Contract PR-01). Nothing became unreachable: the A toggle already covers `ink ↔ non-ink` per layer, so an A-press on ink on an upper layer erases straight to transparent. `beginStroke()` lost its `button` parameter and the `strokeButton` state; `BButtonDown/Up` are explicit no-ops. Supersedes FR-007's B-paint clause.
+
 **Backward compatibility**: legacy tiles are only black/white, so the 3-class hash and comparison behave exactly as the old 2-class versions did — legacy images are unaffected.
 
 **Alternatives Rejected**:
@@ -302,7 +304,7 @@ For this feature, focus on pure Lua logic (no simulator/device interaction):
 **Headless coverage (as built / to build)** in `tests/headless_tests.lua`:
 
 - **US1 Shift**: `LayerModel.shiftLayerContent` moves a known pixel by 1 in each direction; wrap from the right edge; `EditorRoom:shiftActiveLayer` leaves the base layer and other frames untouched; ZoomRoom B+arrow dispatches.
-- **US2 Transparency**: PixelRoom B-press paints the layer's off-state (white on Layer 1, kColorClear on Layers 2–3); 3-class `hashTile` separates white-bg and transparent-bg tiles; `setCurrentTile` reads the three classes back.
+- **US2 Transparency**: PixelRoom paints with **A only** (Fifth Round) — an A-press on ink erases to the layer's off-state (white on Layer 1, kColorClear on Layers 2–3); a lone B-tap is inert (no stray pixel on zoom-out); B held + Crank backward still zooms out; 3-class `hashTile` separates white-bg and transparent-bg tiles; `setCurrentTile` reads the three classes back.
 - **US3 Layer/Frame Switching (Fourth Round)**: B + Up/Down cycles the 3 layers with wrap; B + Left/Right steps frames (B + Right at the last frame appends a deep copy); the Crank with no B switches nothing; the active layer index is preserved across frame switches; a B-release that followed a B + D-Pad nav does **not** also fire the eyedropper (`bNavConsumed`).
 - **US3 fixed-3**: `LayerModel` always yields exactly 3 layers; load pads to 3; save omits empty Layers 2–3; a v1.0 flat image loads as 3 layers.
 - **US5 Tile Picker (Fourth Round)**: Crank without B steps the active tile through the *referenced* indices — scanned from the layer positions (`frameLayers[*].layers[*].positions`), so a tile on a covered layer is still reachable — at ~30°/tile with wraparound; overlay auto-hides ~1.5 s after the last turn; the eyedropper toast shows "Tile N picked".
@@ -339,7 +341,7 @@ Second Round set a *maximum* of 3 layers (Layer 1 mandatory, 2–3 optional, add
 **Implementation Impact**:
 - **Data Model**: `LayerModel` always builds/validates exactly 3 layers; `addLayer`/`deleteLayer` are removed.
 - **Storage Format**: on save, trailing empty upper layers are dropped (1–3 layer entries on disk); on load, every frame is padded back to 3.
-- **Pixel editing**: the non-ink ("eraser" / B-press) result is white on Layer 1, transparent on Layers 2–3 — the Pixel/Zoom/Tile edit paths take a per-layer "off state".
+- **Pixel editing**: the non-ink (A-press eraser) result is white on Layer 1, transparent on Layers 2–3 — the Pixel/Zoom/Tile edit paths take a per-layer "off state". *(Fifth Round: the A-press eraser is the only paint route in Pixel View; B does not paint.)*
 - **US4**: no Layer View. US4 becomes a **Frame Management View** (reorder + delete frames, min. 1).
 
 **Status**: ✅ Clarified (Spec 010 Clarifications, Third Round). Supersedes the Second-Round "1–3 optional" model.

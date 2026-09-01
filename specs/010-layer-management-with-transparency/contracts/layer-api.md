@@ -58,6 +58,15 @@ No `transparency` array. Transparent pixels are `kColorClear` inside the tiles r
 
 Per-layer **off state**: Layer 1 → `EMPTY` (renders white); Layers 2–3 → `TRANSPARENT` (renders `kColorClear`). The Pixel/Zoom/Tile edit paths pass this to the room.
 
+**PixelRoom input (Fifth Round, 2026-09-01):**
+
+| Input | Effect |
+|-------|--------|
+| A-press / A-drag | The only paint action. First cell decides the stroke value: A on ink → the layer's off state (`EMPTY`/white on Layer 1, `TRANSPARENT`/`kColorClear` on Layers 2–3); A on non-ink → `OPAQUE`. |
+| B-tap | **No effect** — `BButtonDown/Up` are no-ops (supersedes FR-007's B-paint). No stray pixel is left when releasing the zoom-out gesture. |
+| B held + Crank backward | Zoom-out (leaves PixelRoom); unchanged, Contract PR-01 (one crank-read API per `update()`). |
+| `setCurrentTile(tile, index, offStateCode)` | `offStateCode == TRANSPARENT` → upper-layer eraser; anything else → `EMPTY`. Passed by `ZoomRoom:zoomIntoPixelRoom` from `activeLayerIsBase`. |
+
 ---
 
 ## EditorRoom (Tile View)

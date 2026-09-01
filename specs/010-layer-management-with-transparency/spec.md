@@ -25,7 +25,7 @@
 ### Session 2026-08-31 (Third Round)
 
 - Q: Should users be able to add or delete layers? → A: **No.** Every frame ALWAYS has exactly 3 layers — a fixed structure, like the hard cap of 12 animation frames. There is no UI (and no gesture) to add or remove a layer. An empty layer simply carries no content.
-- Q: What is the non-ink ("toggle off") pixel state per layer? → A: **Layer-dependent.** Layer 1 (bottom) toggles between ink and **white** (white is Layer 1's background). Layers 2–3 toggle between ink and **transparent** (so lower layers show through). Each layer has exactly one "off" state; its colour depends on the layer. In Pixel View the B-press produces that same "off" state (white on Layer 1, transparent on Layers 2–3).
+- Q: What is the non-ink ("toggle off") pixel state per layer? → A: **Layer-dependent.** Layer 1 (bottom) toggles between ink and **white** (white is Layer 1's background). Layers 2–3 toggle between ink and **transparent** (so lower layers show through). Each layer has exactly one "off" state; its colour depends on the layer. In Pixel View the A-press eraser produces that "off" state (white on Layer 1, transparent on Layers 2–3). *(Fifth Round: B no longer paints in Pixel View — the A-press eraser is the only route to the "off" state.)*
 - Q: Can Layer 1 hold a transparent pixel? → A: **No.** Layer 1 is strictly two-valued (ink / white). Layers 2–3 are strictly two-valued (ink / transparent). Tile deduplication still distinguishes white vs. transparent tiles so the upper layers round-trip correctly.
 - Q: What becomes of US4 (Layer & Frame Management View)? → A: **US4 is now a Frame Management View only.** The Layer View is dropped entirely (layers are fixed, nothing to manage). The new view lists all animation frames; the user can reorder frames and delete frames (minimum 1 frame remains), so the animation stays controllable.
 - Q: How are empty upper layers stored? → A: A fully-empty Layer 2 or 3 is **omitted from the saved JSON**; on load every frame is reconstituted to exactly 3 layers. Single-layer artwork therefore stays as compact on disk as before.
@@ -37,6 +37,10 @@
 - Q: What does the Crank do in Tile View now? → A: **Tile picker.** Turning the Crank (without B) brings up a filmstrip overlay of the tiles actually used in the image; each ~30° of net rotation moves the selection one tile further, wrapping at the end. Landing on tile 1 (white) means "no selection" (toggle mode), matching the eyedropper.
 - Q: Feedback when a tile is picked with the eyedropper (short B-tap on a tile)? → A: The Bauchbinde briefly shows **"Tile N picked"** (the tile's number) for ~1.5 s, then returns to the frame/layer label.
 - Note: **B + Crank forward / backward is unchanged** — it still drives the zoom chain (forward) and opens the Frame Management View (backward). B + arrow therefore means *pixel-shift* in Zoom View (FR-001) but *layer/frame switch* in Tile View — different views, no collision.
+
+### Session 2026-09-01 (Fifth Round — Pixel View: B stops painting, from hardware testing)
+
+- Q: Should B place a pixel in Pixel View? → A: **No.** Painting is A only. A-press toggles a pixel between ink and the active layer's non-ink state (white on Layer 1, transparent on Layers 2–3) — so an A-press on ink on an upper layer already reaches transparent. B in Pixel View is reserved solely for the zoom-out modifier (**B held + Crank backward** leaves Pixel View); a lone B-tap does nothing. This also removes the stray transparent pixel that the previous B-paint behaviour dropped into the tile whenever the user held B to zoom out. Supersedes FR-007's "B-press sets the non-ink state".
 
 ---
 
@@ -61,15 +65,15 @@ When working on detailed graphics in the Zoom View (second View showing tiles), 
 
 ### User Story 2 - Transparency Support in Pixel View (Priority: P1)
 
-In the Pixel View (third View showing individual 16×16 pixels), the user can now place transparent pixels in addition to opaque drawing. The user presses A to draw opaque pixels as before, but presses B to place transparent pixels at the cursor position. Transparent pixels are stored and persist through save/reload cycles, enabling creation of sprites with actual alpha channel support.
+In the Pixel View (third View showing individual 16×16 pixels), the user can now place transparent pixels in addition to opaque drawing. Painting is **A only**: A-press toggles a pixel between ink and the active layer's non-ink state — white on Layer 1, **transparent** on Layers 2–3. On an upper layer an A-press on an ink pixel therefore erases straight to transparent. Transparent pixels are stored and persist through save/reload cycles, enabling creation of sprites with actual alpha channel support. B does not paint here (Fifth Round); B held + Crank backward is the zoom-out gesture.
 
 **Why this priority**: Transparency is essential for modern pixel art workflows and enables far more sophisticated visual effects. This is a core feature requested by the user for real graphics flexibility.
 
-**Independent Test**: In Pixel View, place an opaque pixel with A, place a transparent pixel next to it with B, save image, reload, verify transparent pixel appears as transparent (distinct visual state from opaque or empty).
+**Independent Test**: On Layer 2 in Pixel View, place an opaque pixel with A, press A again on that pixel to erase it to transparent, place another opaque pixel next to it, save image, reload, verify the transparent pixel appears as transparent (distinct visual state from opaque or empty).
 
 **Acceptance Scenarios**:
 
-1. **Given** cursor in Pixel View at an empty position, **When** B is pressed, **Then** a transparent pixel is placed at cursor position
+1. **Given** cursor in Pixel View on Layer 2/3 over an ink pixel, **When** A is pressed, **Then** the pixel becomes transparent (the layer's non-ink state)
 2. **Given** a transparent pixel already placed, **When** A is pressed at the same position, **Then** the transparent pixel is replaced with an opaque pixel
 3. **Given** a transparent pixel in the current frame, **When** frame is saved and image is reloaded, **Then** transparent pixel retains its transparency state
 4. **Given** transparent pixels in Frame 1, **When** switching to Frame 2, **Then** Frame 2's pixels are independent (may be empty or contain different transparent/opaque state)
@@ -121,7 +125,8 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 - **Pixel Shift Beyond Boundaries**: When shifting content by pixels that would move it beyond tile boundaries, tiles are recalculated, but content wraps around (no data loss; see FR-005)
 - **Transparency & Tile Generation**: Transparent tiles are treated as distinct from opaque and white tiles in tile deduplication. Two tiles with the same ink pattern but one white background and one transparent background are stored separately (3-state tile hash)
-- **Layer 1 Transparency**: Layer 1 (bottom) has no transparent state — its non-ink pixels are white. A B-press in Pixel View on Layer 1 therefore produces white (identical to the eraser)
+- **Layer 1 Transparency**: Layer 1 (bottom) has no transparent state — its non-ink pixels are white. In Pixel View the A-press eraser on Layer 1 therefore produces white; on Layers 2–3 the same eraser produces transparent
+- **Pixel View B-press**: B does not paint in Pixel View (Fifth Round). A lone B-tap is inert; B is only the zoom-out modifier (B held + Crank backward). No pixel state is unreachable — Layer 1's white was already the A-eraser result, and Layers 2–3 reach transparent via an A-press on ink
 - **Frame Switching & Active Layer**: Switching frames (B + Left/Right) preserves the active layer index. Because every frame has all 3 layers, the index always exists — no wrap is required (a defensive clamp to Layer 1 remains for corrupt data)
 - **Empty Layers**: Layers 2 and 3 may be entirely empty. An empty layer carries no content and is omitted from the saved file; it is reconstituted on load so every frame always exposes exactly 3 layers in the editor
 - **Fixed Layer Count**: Every frame has exactly 3 layers, always. There is no gesture or UI to add or remove a layer (Clarifications, Third Round)
@@ -148,8 +153,8 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 **Transparency Support (US2)**
 
 - **FR-006**: System MUST support a per-pixel non-ink state whose colour depends on the layer: **white** on Layer 1 (bottom), **transparent** on Layers 2–3
-- **FR-007**: System MUST allow B-press in Pixel View to set the current layer's non-ink state at the cursor (white on Layer 1, transparent on Layers 2–3); A-press sets/overwrites ink (existing behaviour)
-- **FR-008**: System MUST let A-press toggle a pixel between ink and the layer's non-ink state (eraser behaviour, as in Spec 008)
+- **FR-007**: System MUST NOT paint in Pixel View on a B-press (Fifth Round, from hardware testing — supersedes the earlier "B sets the non-ink state"). A lone B-tap is inert; B in Pixel View is reserved solely for the zoom-out modifier (B held + Crank backward). Painting is A only
+- **FR-008**: System MUST let A-press toggle a pixel between ink and the active layer's non-ink state (eraser behaviour, as in Spec 008) — white on Layer 1, transparent on Layers 2–3; this is the only way to place the non-ink state, so an A-press on ink on an upper layer erases straight to transparent
 - **FR-009**: System MUST persist transparent pixels through save/reload — a transparent tile round-trips distinctly from a white tile
 - **FR-010**: System MUST treat legacy images without transparency as fully opaque black/white (backward compatibility)
 - **FR-011**: Transparent pixels in Pixel View MUST render visually distinct from ink and from white (e.g. checkerboard pattern)
@@ -261,6 +266,6 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 ## Status Summary
 
-**Clarified** (four rounds — see `## Clarifications`). Third round restructured US4 (fixed 3 layers, layer-dependent off-state, US4 = Frame Management View). Fourth round (2026-08-31, from hardware testing) redesigned the Tile View controls: layer switch → B + Up/Down, frame switch → B + Left/Right, Crank alone → tile picker, eyedropper → "Tile N picked" toast. B + Crank (zoom chain / Frame Management View) unchanged.
+**Clarified** (five rounds — see `## Clarifications`). Third round restructured US4 (fixed 3 layers, layer-dependent off-state, US4 = Frame Management View). Fourth round (2026-08-31, from hardware testing) redesigned the Tile View controls: layer switch → B + Up/Down, frame switch → B + Left/Right, Crank alone → tile picker, eyedropper → "Tile N picked" toast. B + Crank (zoom chain / Frame Management View) unchanged. Fifth round (2026-09-01, from hardware testing): B no longer paints in Pixel View — painting is A only (FR-007), B stays the zoom-out modifier.
 
-**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign is implemented (EditorRoom tile picker + B + D-Pad navigation, 356 headless assertions green). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059).
+**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign and the Fifth-Round Pixel View change are implemented (369 headless assertions green, buildNumber 28). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059).
