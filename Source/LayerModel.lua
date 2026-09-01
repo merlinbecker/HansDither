@@ -273,33 +273,43 @@ end
 
 -- ── Pixel-Verschiebung (US1, contracts/layer-api.md "Layer:shift") ─────────
 --
--- Verschiebt den gesamten 400x240-Pixelinhalt der Ebene active1 um genau 1
--- nativen Pixel in Richtung "up"|"down"|"left"|"right" und baut alle 375
--- Tiles der Ebene neu auf. Design-Entscheidung (spec.md Edge Cases nennt
--- "wraps or clips gracefully (no data loss)" — beides zugleich ist nicht
--- moeglich): WRAP-AROUND, weil nur das garantiert, dass wirklich KEIN
--- Bildinhalt verloren geht (analog PixelRoom-Crank-Rotation).
+-- Design-Entscheidung (spec.md Edge Cases nennt "wraps or clips gracefully
+-- (no data loss)" — beides zugleich ist nicht moeglich): WRAP-AROUND, weil
+-- nur das garantiert, dass wirklich KEIN Bildinhalt verloren geht (analog
+-- PixelRoom-Crank-Rotation).
 --
--- getTile(index)->image (16x16 der Imagetable), registerTile(image)->
--- dedupter 1-basierter Index. "absent" (0) Zellen zaehlen als voll-clear.
-function LayerModel.shiftLayerContent(entry, active1, direction, getTile, registerTile)
-    local layer = LayerModel.getLayer(entry, active1)
-    if not layer then return false end
+-- Perf-Nachtrag (Review nach Hardware-Test, 2026-09-01, ADR-043): urspruenglich
+-- eine einzige Funktion (dekodieren -> verschobenes Zweitraster bauen ->
+-- alle 375 Tiles neu aufbauen), gemessen ~192.000 image:sample()-Aufrufe +
+-- 375 image.new() FUER EINEN 1px-Schritt. In drei Bausteine zerlegt, damit
+-- EditorRoom.shiftActiveLayer den Decode nur EINMAL pro Verschiebe-Sitzung
+-- zahlt (siehe dort) und wiederholte Tastendruecke bloss den Lese-Versatz
+-- verschieben, statt ein zweites 96000-Zellen-Raster zu kopieren:
+--
+--   decodeLayerGrid(layer, getTile)                 -- einmal: Pixel lesen
+--   materializeShiftedGrid(layer, grid, offX, offY, registerTile)  -- einmal: Tiles bauen
+--   imageFromGrid(grid, offX, offY, tileCol0, tileRow0)            -- Live-Vorschau, 1 Tile
+--
+-- shiftLayerContent bleibt als synchroner Einzelschritt (bestehende Aufrufer/
+-- Tests bleiben unveraendert gueltig) — nur ein duenner Wrapper der drei.
 
-    local dx, dy = 0, 0
-    if direction == "up" then dy = -1
-    elseif direction == "down" then dy = 1
-    elseif direction == "left" then dx = -1
-    elseif direction == "right" then dx = 1
-    else return false end
+-- Richtung -> (dx,dy) fuer einen 1-Pixel-Schritt. nil bei ungueltiger Richtung.
+function LayerModel.shiftDelta(direction)
+    if direction == "up" then return 0, -1
+    elseif direction == "down" then return 0, 1
+    elseif direction == "left" then return -1, 0
+    elseif direction == "right" then return 1, 0
+    end
+    return nil
+end
 
-    local gfx = playdate.graphics
+-- Dekodiert den vollen 400x240-Pixelinhalt einer Ebene als 3-Zustands-Codes
+-- (grid[gy][gx]). "absent" (0) Zellen zaehlen als voll-transparent. Reiner
+-- Lesevorgang, mutiert weder layer noch die Imagetable.
+function LayerModel.decodeLayerGrid(layer, getTile)
     local cols, rows, tilePx = LayerModel.GRID_COLS, LayerModel.GRID_ROWS, LayerModel.TILE_PX
-    local width, height = cols * tilePx, rows * tilePx
-
-    -- Volles Pixelraster als 3-Zustands-Codes dekodieren.
-    local buf = {}
-    for gy = 0, height - 1 do buf[gy] = {} end
+    local grid = {}
+    for gy = 0, rows * tilePx - 1 do grid[gy] = {} end
     for ty = 0, rows - 1 do
         for tx = 0, cols - 1 do
             local pos = ty * cols + tx + 1
@@ -308,28 +318,27 @@ function LayerModel.shiftLayerContent(entry, active1, direction, getTile, regist
             for py = 0, tilePx - 1 do
                 for px = 0, tilePx - 1 do
                     local gx = tx * tilePx + px
-                    local gy = ty * tilePx + py
-                    buf[gy][gx] = img and PixelTransparency.sampleState(img, px, py)
+                    local gy2 = ty * tilePx + py
+                    grid[gy2][gx] = img and PixelTransparency.sampleState(img, px, py)
                         or PixelTransparency.TRANSPARENT
                 end
             end
         end
     end
+    return grid
+end
 
-    -- Verschobenes Raster (Wrap-Around).
-    local shifted = {}
-    for gy = 0, height - 1 do
-        shifted[gy] = {}
-        local sy = (gy - dy) % height
-        for gx = 0, width - 1 do
-            local sx = (gx - dx) % width
-            shifted[gy][gx] = buf[sy][sx]
-        end
-    end
+-- Baut alle 375 Tiles der Ebene aus einem dekodierten Pixelraster (siehe
+-- decodeLayerGrid) neu auf, GELESEN durch einen Wrap-Versatz (offX,offY) —
+-- das Verschieben selbst ist also nur eine Indexverschiebung beim Lesen,
+-- keine zweite 96000-Zellen-Kopie (spart das fruehere "shifted"-Zweitraster
+-- auch im synchronen Einzelschritt-Fall). Schreibt layer.positions; komplett
+-- transparente Tiles werden auf oberen Ebenen als "absent" (0) abgelegt.
+function LayerModel.materializeShiftedGrid(layer, grid, offX, offY, registerTile)
+    local gfx = playdate.graphics
+    local cols, rows, tilePx = LayerModel.GRID_COLS, LayerModel.GRID_ROWS, LayerModel.TILE_PX
+    local width, height = cols * tilePx, rows * tilePx
 
-    -- Tiles neu aufbauen. Komplett transparente Tiles werden als "absent" (0)
-    -- abgelegt, damit sie nicht die Basisebene verdecken und beim Dedup
-    -- keinen Slot belegen.
     for ty = 0, rows - 1 do
         for tx = 0, cols - 1 do
             local pos = ty * cols + tx + 1
@@ -338,7 +347,9 @@ function LayerModel.shiftLayerContent(entry, active1, direction, getTile, regist
             gfx.pushContext(img)
                 for py = 0, tilePx - 1 do
                     for px = 0, tilePx - 1 do
-                        local state = shifted[ty * tilePx + py][tx * tilePx + px]
+                        local gx = (tx * tilePx + px - offX) % width
+                        local gy = (ty * tilePx + py - offY) % height
+                        local state = grid[gy][gx]
                         if state ~= PixelTransparency.TRANSPARENT then
                             allTransparent = false
                             gfx.setColor(PixelTransparency.toColor(state))
@@ -355,7 +366,49 @@ function LayerModel.shiftLayerContent(entry, active1, direction, getTile, regist
             end
         end
     end
+end
 
+-- Synthetisiert EIN 16x16-Tile-Bild direkt aus einem dekodierten Pixelraster
+-- an Kachelposition (tileCol0,tileRow0) (0-basiert), gelesen durch denselben
+-- Wrap-Versatz wie materializeShiftedGrid — fuer eine Live-Vorschau, WAEHREND
+-- eine Verschiebe-Sitzung noch offen ist, ohne alle 375 Tiles neu zu
+-- bauen/hashen (EditorRoom.buildZoomContext).
+function LayerModel.imageFromGrid(grid, offX, offY, tileCol0, tileRow0)
+    local gfx = playdate.graphics
+    local tilePx = LayerModel.TILE_PX
+    local width, height = LayerModel.GRID_COLS * tilePx, LayerModel.GRID_ROWS * tilePx
+    local img = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
+    gfx.pushContext(img)
+        for py = 0, tilePx - 1 do
+            for px = 0, tilePx - 1 do
+                local gx = (tileCol0 * tilePx + px - offX) % width
+                local gy = (tileRow0 * tilePx + py - offY) % height
+                local state = grid[gy][gx]
+                if state ~= PixelTransparency.TRANSPARENT then
+                    gfx.setColor(PixelTransparency.toColor(state))
+                    gfx.drawPixel(px, py)
+                end
+            end
+        end
+    gfx.popContext()
+    return img
+end
+
+-- Verschiebt den gesamten 400x240-Pixelinhalt der Ebene active1 um genau 1
+-- nativen Pixel in Richtung "up"|"down"|"left"|"right" und baut alle 375
+-- Tiles der Ebene neu auf (synchroner Einzelschritt — siehe Perf-Nachtrag
+-- oben; EditorRoom.shiftActiveLayer nutzt fuer Mehrfach-Schritte stattdessen
+-- decodeLayerGrid/materializeShiftedGrid direkt).
+--
+-- getTile(index)->image (16x16 der Imagetable), registerTile(image)->
+-- dedupter 1-basierter Index. "absent" (0) Zellen zaehlen als voll-clear.
+function LayerModel.shiftLayerContent(entry, active1, direction, getTile, registerTile)
+    local layer = LayerModel.getLayer(entry, active1)
+    if not layer then return false end
+    local dx, dy = LayerModel.shiftDelta(direction)
+    if not dx then return false end
+    local grid = LayerModel.decodeLayerGrid(layer, getTile)
+    LayerModel.materializeShiftedGrid(layer, grid, dx, dy, registerTile)
     return true
 end
 

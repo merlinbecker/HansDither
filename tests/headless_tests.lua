@@ -144,6 +144,17 @@ local function newMockImage(w, h, bgcolor)
             if p ~= nil then return p end
             return self.fill
         end,
+        -- image:copy() (SDK): bislang von keinem Test beruehrt (ZoomRoom.
+        -- buildWorkingImage() nimmt den copy()-Pfad nur bei einem echten,
+        -- nicht-nil originalImage). Perf-Nachtrag US1: die schwebende
+        -- Verschiebe-Sitzung liefert jetzt ein echtes synthetisiertes Bild
+        -- als originalImage (LayerModel.imageFromGrid), also braucht der
+        -- Mock diese Methode ab jetzt.
+        copy = function(self)
+            local c = newMockImage(self.width, self.height, self.fill)
+            for k, v in pairs(self.pixels) do c.pixels[k] = v end
+            return c
+        end,
     }
 end
 
@@ -1979,6 +1990,10 @@ sd.activeLayer = 2
 local f2before = {}
 for i = 1, 375 do f2before[i] = sd.frameLayers[2].layers[1].positions[i] end
 check(EditorRoom:shiftActiveLayer("right") == true, "shiftActiveLayer('right') laeuft durch")
+-- Perf-Nachtrag US1: shiftActiveLayer materialisiert NICHT mehr sofort (siehe
+-- naechster Testabschnitt) -- flushLayerShift() explizit anstossen, um das
+-- Ergebnis wie bisher direkt pruefen zu koennen.
+check(EditorRoom:flushLayerShift() == true, "flushLayerShift() materialisiert die schwebende Verschiebung")
 local shiftedTile = sd.imagetable:getImage(sd.frameLayers[1].layers[2].positions[1])
 check(shiftedTile:sample(1, 0) == "black" and shiftedTile:sample(0, 0) ~= "black",
     "aktive Ebene 2: Inhalt um 1 nach rechts verschoben")
@@ -1998,6 +2013,164 @@ while coroutine.status(shlco) ~= "dead" do local ok, r = coroutine.resume(shlco)
 check(shrl and #shrl.frameLayers[1].layers == 3 and #shrl.frameLayers[1].layers[2].positions == 375,
     "nach Save+Reload: 3 Ebenen, 375 Positionen erhalten")
 check(shrl and shrl.frameLayers[1].layers[1].positions[1] == 1, "nach Save+Reload: Basisebene unveraendert")
+
+section("EditorRoom: Verschiebung ist gepuffert -- N Schritte + 1 Flush == N sofortige Einzelschritte (Perf-Nachtrag US1)")
+do
+loadEditorV11("shiftbuf", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Ink",  positions = pos375(0), visible = true },
+    } },
+}, 4)
+local sb = EditorRoom:getImageData()
+local corner2 = newMockImage(16, 16, "white"); corner2.pixels["0,0"] = true
+sb.imagetable:setImage(4, corner2)
+sb.frameLayers[1].layers[2].positions[1] = 4
+sb.activeLayer = 2
+
+check(EditorRoom:shiftActiveLayer("right") == true, "1. shiftActiveLayer('right') laeuft durch")
+check(sb.frameLayers[1].layers[2].positions[1] == 4, "VOR dem Flush: Zelle 1 unveraendert (Verschiebung ist gepuffert)")
+check(EditorRoom:shiftActiveLayer("right") == true, "2. shiftActiveLayer('right') (selbe Sitzung, akkumuliert nur den Versatz)")
+check(EditorRoom:shiftActiveLayer("right") == true, "3. shiftActiveLayer('right') (selbe Sitzung)")
+check(sb.frameLayers[1].layers[2].positions[1] == 4, "nach 3 gepufferten Schritten immer noch nicht materialisiert")
+check(EditorRoom:flushLayerShift() == true, "flushLayerShift() materialisiert die Sitzung EINMAL")
+check(EditorRoom:flushLayerShift() == false, "erneuter Flush ohne offene Sitzung ist ein No-op")
+local afterTile = sb.imagetable:getImage(sb.frameLayers[1].layers[2].positions[1])
+check(afterTile:sample(3, 0) == "black" and afterTile:sample(0, 0) ~= "black",
+    "3x 'right' gepuffert + 1x Flush == ein Schritt um den akkumulierten Versatz 3")
+
+-- Referenz: dieselbe Nettoverschiebung UNGEPUFFERT ueber drei sofortige
+-- LayerModel.shiftLayerContent()-Aufrufe -- muss zum selben Pixel-Ergebnis
+-- fuehren (beweist die Offset-Algebra hinter der Pufferung).
+local cmpEntry = LayerModel.newFrameLayersFromFlat(pos375(0))
+local cmpTable = { [1] = newMockImage(16, 16, "white") }
+local cmpCorner = newMockImage(16, 16, "white"); cmpCorner.pixels["0,0"] = true
+cmpTable[2] = cmpCorner
+local cmpNext = 2
+local cmpReg = {}
+cmpEntry.layers[1].positions[1] = 2
+local cmpGetTile = function(i) return cmpTable[i] end
+local cmpRegisterTile = function(img)
+    local h = ImageStoreCodec.hashTile(img)
+    if cmpReg[h] then return cmpReg[h] end
+    cmpNext = cmpNext + 1; cmpTable[cmpNext] = img; cmpReg[h] = cmpNext
+    return cmpNext
+end
+for _ = 1, 3 do
+    LayerModel.shiftLayerContent(cmpEntry, 1, "right", cmpGetTile, cmpRegisterTile)
+end
+local cmpFinal = cmpTable[cmpEntry.layers[1].positions[1]]
+check(cmpFinal:sample(3, 0) == "black" and cmpFinal:sample(0, 0) ~= "black",
+    "Referenz: 3x sofortiger LayerModel.shiftLayerContent landet am selben Pixel (3,0)")
+end
+
+section("EditorRoom: Malstrich waehrend offener Verschiebe-Sitzung flusht sie zuerst (applyTileEdits)")
+do
+loadEditorV11("shiftpaint", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Ink",  positions = pos375(0), visible = true },
+    } },
+}, 4)
+local sp = EditorRoom:getImageData()
+local corner3 = newMockImage(16, 16, "white"); corner3.pixels["0,0"] = true
+sp.imagetable:setImage(4, corner3)
+sp.frameLayers[1].layers[2].positions[1] = 4
+sp.activeLayer = 2
+
+check(EditorRoom:shiftActiveLayer("right") == true, "Shift oeffnet eine Sitzung an Zelle 1")
+check(sp.frameLayers[1].layers[2].positions[1] == 4, "VOR dem Malen/Flush: Zelle 1 unveraendert")
+
+local paintedTile = newMockImage(16, 16, "white"); paintedTile.pixels["5,5"] = true
+EditorRoom:applyTileEdits({ { frameIndexPos = 50, newImage = paintedTile } })  -- andere Zelle als die verschobene
+
+check(sp.frameLayers[1].layers[2].positions[1] ~= 4,
+    "applyTileEdits() hat die Sitzung zuerst geflusht (Zelle 1 jetzt materialisiert)")
+local shiftedAt1 = sp.imagetable:getImage(sp.frameLayers[1].layers[2].positions[1])
+check(shiftedAt1:sample(1, 0) == "black" and shiftedAt1:sample(0, 0) ~= "black",
+    "...und die Verschiebung ist tatsaechlich in Zelle 1 angekommen (nicht vom Flush ueberschrieben)")
+local paintedAt50 = sp.imagetable:getImage(sp.frameLayers[1].layers[2].positions[50])
+check(paintedAt50:sample(5, 5) == "black", "der Malstrich an Zelle 50 wurde zusaetzlich angewendet")
+end
+
+section("ZoomRoom: B-Release / Raum-Ausgang materialisiert eine offene Verschiebe-Sitzung (Perf-Nachtrag US1)")
+do
+loadEditorV11("zoomshift", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+    } },
+}, 2)
+local zs = EditorRoom:getImageData()
+local corner4 = newMockImage(16, 16, "white"); corner4.pixels["0,0"] = true
+zs.imagetable:setImage(2, corner4)
+zs.frameLayers[1].layers[1].positions[1] = 2
+
+local pixelMock = { setCurrentTile = noop }
+ZoomRoom:init(function() end, pixelMock, EditorRoom)
+ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+local zih = ZoomRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+heldButtons[playdate.kButtonB] = true
+zih.rightButtonDown()
+check(zs.frameLayers[1].layers[1].positions[1] == 2, "B+Rechts: VOR jedem Flush unveraendert (gepuffert)")
+heldButtons[playdate.kButtonB] = false
+zih.BButtonUp()
+check(zs.frameLayers[1].layers[1].positions[1] ~= 2, "BButtonUp materialisiert die Sitzung")
+local flushedTile = zs.imagetable:getImage(zs.frameLayers[1].layers[1].positions[1])
+check(flushedTile:sample(1, 0) == "black" and flushedTile:sample(0, 0) ~= "black",
+    "...mit dem korrekt um 1 verschobenen Pixel")
+
+-- Advisor-Punkt: ohne BButtonUp (Home-Taste waehrend B noch gehalten) darf
+-- die Sitzung trotzdem nicht verloren gehen -- commitForTerminate() muss
+-- selbst flushen.
+loadEditorV11("zoomshiftterm", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+    } },
+}, 2)
+local zt = EditorRoom:getImageData()
+local corner5 = newMockImage(16, 16, "white"); corner5.pixels["0,0"] = true
+zt.imagetable:setImage(2, corner5)
+zt.frameLayers[1].layers[1].positions[1] = 2
+ZoomRoom:init(function() end, pixelMock, EditorRoom)
+ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+local zih2 = ZoomRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+heldButtons[playdate.kButtonB] = true
+zih2.rightButtonDown()
+check(zt.frameLayers[1].layers[1].positions[1] == 2, "Sitzung offen, KEIN BButtonUp aufgerufen")
+ZoomRoom:commitForTerminate()  -- simuliert gameWillTerminate() waehrend B noch haelt
+check(zt.frameLayers[1].layers[1].positions[1] ~= 2,
+    "commitForTerminate() materialisiert die Sitzung trotzdem (kein Datenverlust beim Beenden)")
+heldButtons[playdate.kButtonB] = false
+
+-- Reinzoomen in den PixelRoom (B haelt + Kurbel vorwaerts) waehrend eine
+-- Sitzung offen ist, OHNE B loszulassen: muss ebenfalls flushen, sonst
+-- zeigt "All Similar" im PixelRoom auf einen bereits verwaisten Tile-Index.
+loadEditorV11("zoomshiftpx", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+    } },
+}, 2)
+local zp = EditorRoom:getImageData()
+local corner6 = newMockImage(16, 16, "white"); corner6.pixels["0,0"] = true
+zp.imagetable:setImage(2, corner6)
+zp.frameLayers[1].layers[1].positions[1] = 2
+local pixelMock2 = { setCurrentTile = noop }
+ZoomRoom:init(function() end, pixelMock2, EditorRoom)
+ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+local zih3 = ZoomRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+heldButtons[playdate.kButtonB] = true
+zih3.rightButtonDown()  -- Shift, Sitzung bleibt offen
+check(zp.frameLayers[1].layers[1].positions[1] == 2, "Sitzung offen vor dem Reinzoomen")
+crankTicksValue = 4
+ZoomRoom:update()  -- B haelt + Kurbel vorwaerts -> zoomIntoPixelRoom()
+crankTicksValue = 0
+check(zp.frameLayers[1].layers[1].positions[1] ~= 2,
+    "Reinzoomen in den PixelRoom flusht die Sitzung zuerst (originalIndex bleibt fuer 'All Similar' korrekt)")
+heldButtons[playdate.kButtonB] = false
+end
 
 section("ZoomRoom: B + Pfeiltaste loest den Ebenen-Shift aus (Spec 010, US1, FR-001)")
 local shiftCalls = {}
