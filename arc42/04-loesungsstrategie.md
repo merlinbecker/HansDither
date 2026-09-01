@@ -91,14 +91,16 @@ Leitentscheidungen (Details in Kapitel 9, AD-039..AD-043):
    „Tile N picked“. **B + Kurbel** (Zoom / Frame-Verwaltung) bleibt
    unveraendert. Ebenen-/Frame-Wechsel liegen damit nicht mehr auf der
    Kurbel.
-6. **Pixel-Verschiebung wird gepuffert (AD-043, Perf-Review aus dem
-   Hardware-Test).** Ein 1px-Shift kostete pro Tastendruck einen vollen
-   375-Tile-Rebuild + Rehash (gemessen ~192.000 `image:sample()`-Aufrufe) —
-   spuerbar ruckelig beim Halten der Pfeiltaste. `EditorRoom.shiftActiveLayer`
-   dekodiert die Ebene jetzt nur einmal pro Verschiebe-Geste und akkumuliert
-   weitere Tastendruecke als O(1)-Wrap-Versatz; materialisiert wird erst in
-   `flushLayerShift()`, am Ende der Geste (B-Release, Rauszoomen, Malen,
-   Pause, Terminate).
+6. **Pixel-Verschiebung wirkt nur auf die Cursor-Zelle (AD-043, aus dem
+   Hardware-Test).** B + Pfeiltaste verschiebt nicht mehr den ganzen Screen /
+   die ganze Ebene, sondern nur die Zelle unter dem Cursor plus deren einen
+   Nachbarn in Schieberichtung (2-Tile-Streifen, als Ganzes um 1px
+   geschoben; die abgewandte Kante des Nachbarn faellt weg, KEIN Wrap). Der
+   Inhalt wandert so in den Nachbarn und bleibt dort. `LayerModel.shiftTileContent`
+   ersetzt die Ganz-Ebenen-Verschiebung; die Operation (~2500 Ops) laeuft
+   synchron je Tastendruck (das gemessene Ganz-Ebenen-Problem —
+   ~192.000 `image:sample()` je Druck — und die dafuer erwogene aufgeschobene
+   Materialisierung entfallen damit).
 
 Speicherformat `frames.json` steigt auf Version `"1.1"`
 (`frames[].layers[].{layerIndex, name, positions[375], visible}`); v1.0

@@ -83,37 +83,37 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 
 ---
 
-## Test Scenario 3: Pixel Shifting (US1)
+## Test Scenario 3: Per-tile Pixel Shifting (US1, revised 2026-09-01 — ADR-043)
 
-**Goal**: Verify that pixel-by-pixel shifting works with automatic tile recalculation.
+**Goal**: Verify that B + arrow nudges **only the cursor's tile** by 1 pixel, and that content crossing the tile boundary moves into the neighbour tile and stays.
 
 **Setup**:
 1. Create new Hans-Dither project
-2. In Zoom View, draw a simple shape (e.g., 3×3 block of opaque pixels in top-left of zoom area)
-3. Record pixel positions visually
+2. Zoom into one tile; draw a shape that touches the **right edge** of that tile (e.g. a vertical line at local x=15) plus one pixel mid-tile
+3. Make sure the tile to the right also has some drawn content, so you can see it being overwritten
 4. Save image
 
 **Test Steps**:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | In Zoom View, enter Layer 1 with the 3×3 shape | Shape visible in top-left quadrant of zoom view |
-| 2 | Hold B-button and press Up arrow once | Shape shifts up by exactly 1 pixel; tiles recalculated; shape remains intact |
-| 3 | While B still held, press Right arrow once | Shape shifts right by 1 pixel; tiles recalculated |
-| 4 | Release B, observe shape position | Shape is now 1 pixel up and 1 pixel right from original |
-| 5 | Save image | Save completes without errors |
-| 6 | Reload image in Zoom View | Shape remains in shifted position (up 1, right 1) |
-| 7 | Hold B and press Left arrow twice | Shape shifts left 2 pixels (now net 1 up, 1 left from original) |
-| 8 | Hold B and press Down once | Shape shifts down 1 pixel (now 1 left from original) |
-| 9 | Save and reload | Position preserved exactly |
+| 1 | In Zoom View on that tile (Layer 1) | Cursor's tile is the centre of the 3×3 context; right neighbour visible |
+| 2 | Hold B and press Right once | The tile's content moves right 1px; the right-edge column crosses into the **left edge of the right neighbour**; the neighbour's own content shifted right too and its far (right) column fell off; **no other tile changed**; the tile's left column is now blank (Layer-1 white) |
+| 3 | Hold B, press Right ~15 more times | The shape walks fully out of the source tile and accumulates in the right neighbour, overwriting what was there; the source tile ends up empty |
+| 4 | Move cursor (no B) to a tile at the far-right column of the tile grid, hold B, press Right | Only that tile changes; the column that crosses the boundary is discarded (no wrap, no neighbour) |
+| 5 | Hold B and press Up / Down / Left on a mid-grid tile | Same behaviour toward the top / bottom / left neighbour respectively |
+| 6 | Save, reload | Shifted positions preserved exactly |
+| 7 | Repeat on Frame 2, then check Frame 1 | Frame 1 unchanged (shifts are per-frame) |
+| 8 | On Layer 2/3, shift a tile whose only content crosses out | The emptied upper-layer tile becomes fully transparent (shows Layer 1 through); its content is now in the neighbour |
 
 **Acceptance Criteria**:
-- ✅ Pixel shifts work in all 4 directions (Up/Down/Left/Right)
-- ✅ Each key press shifts exactly 1 pixel
-- ✅ Tiles recalculate after each shift (no visual corruption); *(Perf review, 2026-09-01: this now happens once per shift **gesture** rather than per key press — see ADR-043 — the preview still updates on every key press)*
-- ✅ Repeated key presses while holding B feel responsive, not laggy (ADR-043 — device-level FPS confirmation still open, T053/T054)
-- ✅ Shifted positions persist through save/reload
-- ✅ Shifts are independent per frame (Frame 2 shifts don't affect Frame 1)
+- ✅ B + arrow shifts **only the cursor's tile + its one neighbour** in the push direction — never the whole screen
+- ✅ Content crossing the boundary moves into the neighbour and stays there; repeated presses accumulate it there (the neighbour's far edge falls off)
+- ✅ A pixel not on the leading edge just moves 1px and stays in the tile
+- ✅ At the tile-grid edge: only the source tile changes, the crossing strip is discarded (no wrap)
+- ✅ Source tile's vacated edge = the layer's non-ink state (white on Layer 1, transparent on Layers 2–3)
+- ✅ Shifted positions persist through save/reload; shifts are per-frame
+- ✅ Each key press feels instant (the shift touches ≤ 2 tiles — ADR-043; device FPS check still open, T053/T054)
 
 ---
 
@@ -262,7 +262,7 @@ pdc Source "Hans Dither.pdx"
 
 ## Validation Checklist
 
-- [ ] **US1 (Pixel Shifting)**: Test Scenario 3 passes — shifts work, tiles recalculate, persist
+- [ ] **US1 (Per-tile Pixel Shifting)**: Test Scenario 3 passes — B + arrow shifts only the cursor's tile + one neighbour, content migrates into the neighbour, no wrap at the grid edge, persists
 - [ ] **US2 (Transparency)**: Test Scenario 2 passes — an A-press on ink erases to the layer's non-ink state (transparent on Layers 2–3); B does not paint; transparent pixels stored/rendered/persisted
 - [ ] **US3 (Layer/Frame Switching)**: Test Scenario 1 passes — B + Up/Down = layer, B + Left/Right = frame, Crank switches neither
 - [ ] **US4 (Frame Management View)**: Test Scenario 4 passes — reorder + delete frames (min. 1), persists
@@ -288,12 +288,13 @@ pdc Source "Hans Dither.pdx"
 | Transparent pixels render as white | Tile built without `kColorClear`, or `hashTile` not 3-class | Check `PixelRoom.buildTileImage` + `ImageStoreCodec.hashTile` |
 | Upper-layer eraser leaves opaque white | `writeActiveLayerPosition` not mapping white→absent on Layers 2–3 | Check `EditorRoom.writeActiveLayerPosition` |
 | Multi-layer edit lost on save | `imageData.frames` mutated directly instead of `frameLayers` | All edits must go through the active layer + `recompositeCell` |
-| Pixel shift causes visual corruption | Tile recalculation incomplete | Debug `LayerModel.shiftLayerContent` + layered prune |
-| Holding the shift arrow key feels laggy / drops frames | Full 375-tile rebuild + rehash was paid on every key press (~192,000 `image:sample()` calls measured for one step) | Should be resolved by ADR-043 (materialization deferred to `EditorRoom:flushLayerShift()`, once per gesture) — if still slow on device, profile the single flush call itself (T054); it stays O(375 tiles), just paid once instead of N times |
-| Canonical tiles look stale right after a shift (e.g. pause-menu preview, save) | An open shift session (`EditorRoom.pendingShift`) was never flushed before the read | Every canonical read path must call `EditorRoom:flushLayerShift()` first (ADR-043 lists the call sites) — a new code path reading `imageData.frameLayers`/`frames`/`imagetable` needs one too |
+| Pixel shift causes visual corruption | Tile recalculation incomplete | Debug `LayerModel.shiftTileContent` (the 2-tile strip build + `writeCell` dedup) |
+| B + arrow shifts the whole screen, not one tile | Calling a whole-layer shift (removed `LayerModel.shiftLayerContent`) instead of `LayerModel.shiftTileContent(entry, active1, cellIdx, dir, …)` | `EditorRoom:shiftActiveLayer` must pass a `cellIdx`; ZoomRoom passes `slots[<cursor slot>].frameIndexPos` (ADR-043) |
+| Content that crosses the tile boundary disappears instead of landing in the neighbour | `shiftTileContent` not writing the neighbour, or `neighborIdx` computed wrong (off-grid check) | Neighbour = source cell ± the direction delta, only if inside the 25×15 grid; it gets the source's facing edge and shifts along (2-tile strip) |
+| Shift wraps around the tile grid edge | Leftover wrap logic (the removed whole-layer shift wrapped; per-tile does not) | At the grid edge `neighborIdx` is `nil` → only the source tile changes, crossing strip discarded (ADR-043) |
 | Old images don't load | Structure-based v1.0 detection failed | Check `newLoadOperation`'s `frames[1].layers` test + pad-to-3 |
 | buildNumber not incremented | Manual step forgotten | Increment once per `pdc` run |
 
 ---
 
-**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast). Scenario 7 added. Fifth Round (Pixel View: B stops painting) and the pixel-shift perf review (ADR-043, deferred materialization) folded into Scenario 2 and Scenario 3 respectively, plus two new Troubleshooting rows.
+**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast, Scenario 7). Fifth Round (Pixel View: B stops painting) folded into Scenario 2. Scenario 3 rewritten for the per-tile pixel shift (ADR-043 — B + arrow shifts one tile + one neighbour, content migrates, no wrap), plus three Troubleshooting rows.

@@ -248,31 +248,38 @@ Pixel shifting requirement: User holds B + arrow to shift all frame content 1 pi
 - Performance acceptable: 400×240 image = 240×240 pixel buffer (typical artist resolution), single shift per frame = ~57KB memory overhead
 - Matches user mental model: "shift content" not "remap tile indices"
 
-**Alternatives Rejected**:
+**Alternatives Rejected** *(the "per-tile shifting" rejection below was itself overturned on 2026-09-01 — see the Nachtrag)*:
 - **Direct tile index remapping**: Error-prone at boundaries; tile index logic becomes fragile
-- **Per-tile shifting**: Doesn't handle within-tile shifts (need 16 shift operations per tile)
 
 **Evidence**: Spec 009 already provides robust tile recalculation via ImageStoreCodec; reuse proven code.
 
-**Perf-Nachtrag (Review nach Hardware-Test, 2026-09-01, ADR-043)**: der oben
-beschriebene Algorithmus wurde als EINE Funktion gebaut
-(`LayerModel.shiftLayerContent`) und lief bei jedem einzelnen Tastendruck.
-Eine Standalone-Messung (375-Tile-Ebene, ein 1px-Schritt) ergab **~192.000
-`image:sample()`-Aufrufe + 375 `image.new()`** — auf dem Playdate (168 MHz,
-Lua-Interpreter) geschaetzt mehrere hundert ms je Tastendruck, spuerbar
-ruckelig beim Halten der Pfeiltaste (genau das im Risk Record vorhergesehene
-Risiko, `spec.md` Architecture Governance). Behoben durch **Aufschieben der
-Materialisierung**: `shiftLayerContent` wurde in drei Bausteine zerlegt
-(`decodeLayerGrid` / `materializeShiftedGrid` / `imageFromGrid`);
-`EditorRoom.shiftActiveLayer` dekodiert die Ebene nur EINMAL pro
-Verschiebe-Sitzung und akkumuliert weitere Tastendruecke als reinen
-Wrap-Versatz (O(1)) — materialisiert wird erst in `flushLayerShift()`, am
-Ende der Geste (B-Release, Rauszoomen, Malen, Pause, Terminate). Die
-Zoom-View-Live-Vorschau bleibt bei jedem Tastendruck aktuell (synthetisiert
-9 Tiles direkt aus dem gepufferten Raster statt aus real gebauten Tiles).
-Offset-Algebra beweist Aequivalenz: N sequentielle 1px-Verschiebungen ==
-eine Verschiebung um den akkumulierten Versatz (Modulo-Arithmetik ist
-additiv). Details, Alternativen und Flush-Aufrufstellen: [ADR-043](adr/ADR-043-Aufgeschobene-Pixel-Verschiebung.md).
+**Nachtrag (Review nach Hardware-Test, 2026-09-01, ADR-043)** — der oben
+beschriebene Ganz-Ebenen-Ansatz wurde in ZWEI Runden ersetzt:
+
+1. *Perf.* `LayerModel.shiftLayerContent` lief bei jedem Tastendruck ueber
+   die ganze Ebene. Standalone-Messung (375-Tile-Ebene, ein 1px-Schritt):
+   **~192.000 `image:sample()`-Aufrufe + 375 `image.new()`** — auf dem
+   Playdate geschaetzt mehrere hundert ms je Tastendruck (genau das im Risk
+   Record vorhergesehene Risiko). *(Erste, verworfene Loesung: dieselbe
+   Ganz-Ebenen-Verschiebung, Materialisierung ans Gesten-Ende aufgeschoben —
+   `pendingShift`/`flushLayerShift`.)*
+2. *Umfang.* Die zweite Rueckmeldung: verschoben werden soll **nur die Zelle
+   unter dem Cursor**, nicht der ganze Screen; der Inhalt soll in die
+   Nachbarzelle wandern und dort bleiben.
+
+**Neuer Ansatz — `LayerModel.shiftTileContent(entry, active1, cellIdx, dir,
+getTile, registerTile)`**: Ausgangszelle + der eine Nachbar in
+Schieberichtung bilden einen **2-Tile-Streifen** (32×16 bzw. 16×32), der als
+Ganzes um 1px verschoben wird. Die von der Schieberichtung abgewandte Kante
+der Ausgangszelle wird mit dem Nicht-Tinte-Zustand gefuellt (weiss / clear
+je Ebene); die abgewandte Kante des Nachbarn faellt weg (KEIN Wrap, KEIN
+Weiterreichen an eine dritte Zelle). Am Rasterrand ohne Nachbar aendert sich
+nur die Ausgangszelle. Innerhalb der Zelle bleibende Pixel wandern einfach
+1px mit — die frueher hier notierte Ablehnung „per-tile shifting kann keine
+In-Zell-Verschiebungen“ war eine Fehleinschaetzung. ~2500 Ops/Tastendruck,
+also synchron je Tastendruck; die aufgeschobene Materialisierung entfaellt.
+`LayerModel.shiftLayerContent` + `decodeLayerGrid`/`materializeShiftedGrid`/
+`imageFromGrid` sind entfernt. Details: [ADR-043](adr/ADR-043-Pixel-Verschiebung-pro-Tile.md).
 
 ---
 
@@ -323,7 +330,7 @@ For this feature, focus on pure Lua logic (no simulator/device interaction):
 
 **Headless coverage (as built / to build)** in `tests/headless_tests.lua`:
 
-- **US1 Shift**: `LayerModel.shiftLayerContent` moves a known pixel by 1 in each direction; wrap from the right edge; `EditorRoom:shiftActiveLayer` leaves the base layer and other frames untouched; ZoomRoom B+arrow dispatches. **Perf-Nachtrag (ADR-043)**: `shiftActiveLayer` defers materialization (positions unchanged before `flushLayerShift()`); N buffered steps + one flush reach the same pixel as N immediate `LayerModel.shiftLayerContent` calls (offset algebra); a paint mid-session (`applyTileEdits`) flushes first so it lands on top of the shift, not the other way round; `BButtonUp`, `commitAndReturnToEditor`, `commitForTerminate`, and zooming into Pixel View each flush an open session — including terminate *without* a prior B-release (no data loss on Home-button-mid-gesture).
+- **US1 Shift (per-tile, ADR-043)**: `LayerModel.shiftTileContent` moves a known pixel by 1 in each of the four directions; the strip that crosses the boundary lands at the neighbour's facing edge while the neighbour's own content shifts along and its far edge is discarded (2-tile strip); repeated presses accumulate the content in the neighbour; a pixel not on the leading edge just moves 1px and stays; at the tile-grid edge only the source tile changes (no wrap); on an upper layer a source tile emptied by the shift collapses to `absent` (0). `EditorRoom:shiftActiveLayer(dir, cellIdx)` touches only the source cell + one neighbour, leaves the base layer and other frames untouched, recomposites the 1–2 affected cells; without `cellIdx` it uses the editor cursor's cell. ZoomRoom B+arrow forwards `slots[<cursor slot>].frameIndexPos` and keeps the zoom cursor put so repeated presses walk the same tile.
 
 - **US2 Transparency**: PixelRoom paints with **A only** (Fifth Round) — an A-press on ink erases to the layer's off-state (white on Layer 1, kColorClear on Layers 2–3); a lone B-tap is inert (no stray pixel on zoom-out); B held + Crank backward still zooms out; 3-class `hashTile` separates white-bg and transparent-bg tiles; `setCurrentTile` reads the three classes back.
 - **US3 Layer/Frame Switching (Fourth Round)**: B + Up/Down cycles the 3 layers with wrap; B + Left/Right steps frames (B + Right at the last frame appends a deep copy); the Crank with no B switches nothing; the active layer index is preserved across frame switches; a B-release that followed a B + D-Pad nav does **not** also fire the eyedropper (`bNavConsumed`).

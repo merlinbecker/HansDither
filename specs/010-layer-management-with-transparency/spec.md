@@ -48,18 +48,19 @@
 
 ### User Story 1 - Precise Pixel-by-Pixel Shifting in Zoom View (Priority: P1)
 
-When working on detailed graphics in the Zoom View (second View showing tiles), a user needs to shift drawn content precisely by single pixels in any direction without affecting the overall tile structure. The user holds B and uses arrow keys (Up/Down/Left/Right) to shift all drawn content within the current frame exactly one pixel at a time while B remains held. The tiles are recalculated after each pixel shift to maintain visual integrity.
+When working on detailed graphics in the Zoom View (second View showing tiles), a user needs to nudge the content of a single tile by one pixel at a time. The user holds B and uses arrow keys (Up/Down/Left/Right) to shift the content of **the tile under the cursor** by exactly one pixel while B remains held. Only that one tile and its immediate neighbour in the push direction change — not the whole screen. The one-pixel strip that crosses the tile boundary moves into that neighbour and stays there (the neighbour's own content shifts along too and its far edge falls off); repeated presses walk the content across, tile by tile. The vacated edge of the source tile is filled with the layer's non-ink state.
 
 **Why this priority**: This is a core editing capability that directly improves precision and user control over artwork. Many pixel art workflows depend on exact positioning, making this a MVP feature for an advanced editor.
 
-**Independent Test**: Load an image with drawn content in Zoom View, hold B and press Up arrow once, verify content shifts up exactly one pixel and tiles remain valid. Repeat for other directions. Reload image to confirm shift persists.
+**Independent Test**: Zoom into a tile with drawn content, hold B and press Right once; verify the tile's content shifts right one pixel, the pixel that crossed the boundary is now at the left edge of the right neighbour, and no other tile changed. Repeat for other directions. Reload image to confirm the shift persists.
 
 **Acceptance Scenarios**:
 
-1. **Given** a frame with drawn content in Zoom View, **When** B is held and Up arrow is pressed once, **Then** all content shifts up by exactly one pixel and tiles are recalculated
-2. **Given** B is being held and Up arrow has been pressed, **When** Down arrow is pressed while B remains held, **Then** content shifts down one pixel (independent of previous direction)
+1. **Given** the cursor on a tile with drawn content in Zoom View, **When** B is held and an arrow is pressed once, **Then** that tile's content shifts one pixel in that direction and its neighbour in that direction shifts along as one 2-tile strip (the neighbour's far edge falls off; no third tile is touched)
+2. **Given** B is being held and Right has been pressed, **When** Left is pressed while B remains held, **Then** the same tile's content shifts left one pixel (independent of previous direction)
 3. **Given** content shifted by B + arrow key, **When** the frame is saved and reloaded, **Then** the shifted position persists exactly as shown
-4. **Given** shifted content in one frame, **When** switching to another frame, **Then** only the current frame's content has shifted; other frames are unaffected
+4. **Given** shifted content in one frame, **When** switching to another frame, **Then** only the current frame's tile has shifted; other frames are unaffected
+5. **Given** the cursor on a tile at the edge of the 25×15 tile grid, **When** B + the arrow toward that edge is pressed, **Then** only that tile changes and the strip that crosses the boundary is discarded (no wrap)
 
 ---
 
@@ -123,7 +124,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 ### Edge Cases
 
-- **Pixel Shift Beyond Boundaries**: When shifting content by pixels that would move it beyond tile boundaries, tiles are recalculated, but content wraps around (no data loss; see FR-005)
+- **Pixel Shift at the tile-grid edge**: When the source tile is at the edge of the 25×15 tile grid and the shift points off that edge, there is no neighbour to receive the crossing strip — only the source tile changes and the strip is discarded. (Revised 2026-09-01, from hardware testing — the earlier whole-layer shift wrapped around; per-tile shift does not. See ADR-043.)
 - **Transparency & Tile Generation**: Transparent tiles are treated as distinct from opaque and white tiles in tile deduplication. Two tiles with the same ink pattern but one white background and one transparent background are stored separately (3-state tile hash)
 - **Layer 1 Transparency**: Layer 1 (bottom) has no transparent state — its non-ink pixels are white. In Pixel View the A-press eraser on Layer 1 therefore produces white; on Layers 2–3 the same eraser produces transparent
 - **Pixel View B-press**: B does not paint in Pixel View (Fifth Round). A lone B-tap is inert; B is only the zoom-out modifier (B held + Crank backward). No pixel state is unreachable — Layer 1's white was already the A-eraser result, and Layers 2–3 reach transparent via an A-press on ink
@@ -144,11 +145,11 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 **Pixel Shifting (US1)**
 
-- **FR-001**: System MUST allow user to hold B and press direction keys (Up/Down/Left/Right) in Zoom View to shift all content in the active frame by exactly one pixel per key press
-- **FR-002**: System MUST recalculate all tile references after each pixel shift to maintain visual and data integrity. *(Perf review, 2026-09-01: "after each shift" is satisfied once the shift **gesture** ends, not necessarily after each individual key press — see the Deferred Materialization note under Architecture Governance. The Zoom View preview updates on every key press regardless; only the 375-tile rebuild is batched, and it always runs before the layer is saved, read by another view, or the player leaves Zoom View — so the requirement's outcome is unchanged.)*
+- **FR-001**: System MUST allow user to hold B and press direction keys (Up/Down/Left/Right) in Zoom View to shift the content of **the tile under the cursor** by exactly one pixel per key press (revised 2026-09-01, from hardware testing — was "all content in the active frame"; see ADR-043)
+- **FR-002**: System MUST recalculate the tile references of the affected cells after each pixel shift — the source tile and (unless the source tile is at the tile-grid edge) its neighbour in the push direction. Both move as one 2-tile strip: the neighbour's own content shifts along and its far edge is discarded; the source tile's vacated edge is filled with the layer's non-ink state (white on Layer 1, transparent on Layers 2–3). No other cell is touched.
 - **FR-003**: System MUST persist pixel shifts when image is saved and reloaded
 - **FR-004**: System MUST apply shifts only to the active frame; other frames remain unaffected
-- **FR-005**: System MUST handle shifts at tile boundaries gracefully (no content loss at edges)
+- **FR-005**: System MUST handle shifts at the tile-grid edge gracefully: when the source tile has no neighbour in the push direction, only the source tile changes and the strip that crosses the boundary is discarded (no wrap; revised 2026-09-01 — was wrap-around; see ADR-043)
 
 **Transparency Support (US2)**
 
@@ -203,7 +204,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 ### Measurable Outcomes
 
-- **SC-001**: User can shift the active layer's content by exactly one pixel in any direction and have shifts persist through save/reload cycles
+- **SC-001**: User can shift the content of the tile under the cursor by exactly one pixel in any direction (content crossing the boundary moves into the neighbour tile) and have shifts persist through save/reload cycles
 - **SC-002**: Transparent pixels can be placed on Layers 2–3, rendered visually distinct from ink and white, and persist through save/reload
 - **SC-003**: User can switch the active layer with B + Up/Down and the animation frame with B + Left/Right, with the Crank (no B) reserved for the tile picker — none of the three interferes with the others
 - **SC-004**: The Frame Management View is reachable with one B + Crank-backward gesture from Tile View and lets the user reorder and delete frames (min. 1)
@@ -238,15 +239,15 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 **Quality Attributes Affected**:
 - **Usability**: Improved precision control (US1), transparent pixels on upper layers (US2), layer cycling (US3), frame reorder/delete (US4)
 - **Maintainability**: `imageData.frames` becomes a derived composite cache that must be regenerated on every layer mutation
-- **Performance**: Re-tiling on every pixel shift and re-compositing on every edit must stay within one frame on the Playdate. *(Perf review, 2026-09-01: a single re-tile was measured at ~192,000 `image:sample()` calls + 375 `image.new()` — far over budget if paid per key press. Resolved via deferred materialization — see ADR-043.)*
+- **Performance**: Re-tiling on every pixel shift and re-compositing on every edit must stay within one frame on the Playdate. *(Perf review, 2026-09-01: the original whole-layer re-tile was measured at ~192,000 `image:sample()` calls + 375 `image.new()` per key press — far over budget. Resolved by scoping the shift to one tile + one neighbour, ~2,500 ops per key press, done synchronously. See ADR-043.)*
 
 **Evidence & Decisions**:
 - **ADR Required**: "Layer Rendering Order & Compositing Strategy" — decision: composite all 3 layers, topmost non-empty cell wins; flat composite cache feeds the tilemap
 - **ADR Required**: "Pixel Transparency Encoding" — decision: transparency lives per-pixel as kColorClear in the tile; 3-state tile hash; no per-cell array
 - **ADR Required**: "Fixed 3-Layer Structure" — decision: layers are a fixed structure (no add/delete), like the 12-frame cap; empty upper layers omitted on disk
 - **ADR Required**: "Tile View Control Redesign" (ADR-042) — decision: layer/frame switching moves to B + D-Pad; the free Crank drives a referenced-tile picker; B + Crank (zoom / Frame Management View) unchanged
-- **ADR Required**: "Deferred Pixel-Shift Materialization" (ADR-043, 2026-09-01, from a control-performance review) — decision: `EditorRoom.shiftActiveLayer` decodes the active layer once per shift **gesture** and accumulates further key presses as a cheap O(1) wrap offset; the 375-tile rebuild + rehash is deferred to a `flushLayerShift()` call that runs once, wherever the session actually needs canonical tiles (B-release, leaving Zoom View, painting mid-gesture, pause, terminate)
-- **Risk Record**: "Playdate Performance Under Pixel Shifting" — **RESOLVED** (2026-09-01): measured ~192,000 `image:sample()` calls per keypress before the fix; mitigated exactly as anticipated below ("batching shifts / lazy recalculation") via ADR-043
+- **ADR Required**: "Pixel Shift Scoped to One Tile" (ADR-043, 2026-09-01, from hardware testing) — decision: B + arrow shifts only the tile under the cursor plus its neighbour in the push direction (a 2-tile strip moved as one; the neighbour's far edge falls off, no wrap). `LayerModel.shiftTileContent` replaces the whole-layer `shiftLayerContent`. Small enough to run synchronously per key press — the deferred-materialization mechanism from this ADR's first draft is gone
+- **Risk Record**: "Playdate Performance Under Pixel Shifting" — **RESOLVED** (2026-09-01): measured ~192,000 `image:sample()` calls per keypress for the whole-layer shift; scoping the shift to one tile + one neighbour (~2,500 ops) removes the problem at the source (ADR-043)
 
 ### Existing Dependencies & Compatibility
 
@@ -257,7 +258,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 ### Technical Debt & Risk Mitigation
 
 - **Risk**: Tile recalculation on every pixel shift could cause lag on Playdate hardware
-  - **Mitigation**: **Resolved (2026-09-01)** — batched/lazy recalculation via deferred materialization (ADR-043): a shift gesture pays the 375-tile rebuild once, not once per key press. Device-level FPS confirmation is still open (Phase 7 T053/T054)
+  - **Mitigation**: **Resolved (2026-09-01)** — the shift no longer touches the whole layer; it is scoped to the cursor's tile + one neighbour (~2,500 ops/key press, synchronous). ADR-043. Device-level FPS confirmation is still open (Phase 7 T053/T054)
 - **Risk**: Layer metadata could break existing save/load cycle if not handled carefully
   - **Mitigation**: Version the file format; provide fallback loader for legacy images
 - **Risk**: Input multiplexing (B + Up/Down = layer, B + Left/Right = frame, Crank alone = tile picker) could be confusing
@@ -269,4 +270,4 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 **Clarified** (five rounds — see `## Clarifications`). Third round restructured US4 (fixed 3 layers, layer-dependent off-state, US4 = Frame Management View). Fourth round (2026-08-31, from hardware testing) redesigned the Tile View controls: layer switch → B + Up/Down, frame switch → B + Left/Right, Crank alone → tile picker, eyedropper → "Tile N picked" toast. B + Crank (zoom chain / Frame Management View) unchanged. Fifth round (2026-09-01, from hardware testing): B no longer paints in Pixel View — painting is A only (FR-007), B stays the zoom-out modifier.
 
-**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign, the Fifth-Round Pixel View change, and the deferred pixel-shift materialization perf fix (ADR-043) are implemented (393 headless assertions green, buildNumber 29). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059) — the deferred-materialization fix addresses T054's concern architecturally; device-level FPS confirmation is still open.
+**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign, the Fifth-Round Pixel View change, and the per-tile pixel-shift rework (ADR-043 — B + arrow shifts one tile + one neighbour, not the whole layer) are implemented (394 headless assertions green, buildNumber 30). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059); device-level FPS confirmation of the per-tile shift is still open.
