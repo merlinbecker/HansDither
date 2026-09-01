@@ -1142,12 +1142,12 @@ local function pixelCursorToOrigin(h)
     for _ = 1, 16 do h.upButtonDown(); h.upButtonUp() end
 end
 
-section("PixelRoom: 'Nicht-Tinte'-Zustand ist ebenenabhaengig (Spec 010, US2, Third Round)")
+section("PixelRoom: 'Nicht-Tinte'-Zustand ist ebenenabhaengig, nur A malt (Spec 010, US2, 5. Runde)")
 local tpTile = nil
 local tpZoom = { setNewTile = function(_, t) tpTile = t end, updateExistingTile = function(_, t) tpTile = t end }
 local T = PixelTransparency.TRANSPARENT
 
--- OBERE Ebene: offState = TRANSPARENT. B malt transparent, A radiert nach transparent.
+-- OBERE Ebene: offState = TRANSPARENT. A toggelt Tinte <-> transparent; B malt NICHT.
 PixelRoom:init(noop, tpZoom)
 PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1, T)
 PixelRoom:entered()
@@ -1156,30 +1156,33 @@ for b in pairs(heldButtons) do heldButtons[b] = nil end
 crankChangeValue = 0; crankTicksValue = 0
 pixelCursorToOrigin(tph)
 
-tph.BButtonDown(); tph.BButtonUp()
-PixelRoom:commitForTerminate()
-check(tpTile:sample(0, 0) == "clear", "obere Ebene: B-Druck malt einen transparenten Pixel (FR-007)")
-
 tph.AButtonDown(); tph.AButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile:sample(0, 0) == "black", "obere Ebene: A auf transparentem Pixel -> Tinte (AS2)")
+check(tpTile:sample(0, 0) == "black", "obere Ebene: A auf leerem Pixel -> Tinte")
+
+-- B malt NICHT mehr (frueher FR-007): ein B-Tipp laesst das Pixel unveraendert.
+tph.BButtonDown(); tph.BButtonUp()
+PixelRoom:commitForTerminate()
+check(tpTile:sample(0, 0) == "black", "obere Ebene: B-Tipp auf Tinte ist folgenlos (B malt nicht)")
 
 tph.AButtonDown(); tph.AButtonUp()
 PixelRoom:commitForTerminate()
 check(tpTile:sample(0, 0) == "clear", "obere Ebene: A auf Tinte -> radiert nach transparent (nicht weiss!)")
 
--- BASISEBENE: offState = EMPTY (Default). B malt WEISS, A radiert nach weiss.
+-- BASISEBENE: offState = EMPTY (Default). A toggelt Tinte <-> weiss; B malt NICHT.
 PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)  -- kein offStateCode -> EMPTY
 PixelRoom:entered()
 local bh = PixelRoom:inputHandler()
 pixelCursorToOrigin(bh)
-bh.BButtonDown(); bh.BButtonUp()
-PixelRoom:commitForTerminate()
-check(tpTile:sample(0, 0) == "white", "Basisebene: B-Druck = weiss (identisch zum Radierer, kein Transparent)")
 bh.AButtonDown(); bh.AButtonUp()   -- weiss -> Tinte
+PixelRoom:commitForTerminate()
+check(tpTile:sample(0, 0) == "black", "Basisebene: A auf weiss -> Tinte")
+bh.BButtonDown(); bh.BButtonUp()   -- B-Tipp: folgenlos
+PixelRoom:commitForTerminate()
+check(tpTile:sample(0, 0) == "black", "Basisebene: B-Tipp auf Tinte ist folgenlos (B malt nicht)")
 bh.AButtonDown(); bh.AButtonUp()   -- Tinte -> weiss
 PixelRoom:commitForTerminate()
-check(tpTile:sample(0, 0) == "white", "Basisebene: A toggelt Tinte <-> weiss")
+check(tpTile:sample(0, 0) == "white", "Basisebene: A auf Tinte -> radiert nach weiss")
 
 section("PixelRoom: transparenter Strich + Ruecklesen aus dem Tile (Spec 010, US2)")
 local strokeTile = nil
@@ -1191,7 +1194,8 @@ local sh = PixelRoom:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
 pixelCursorToOrigin(sh)
 
--- Erst Tinte ueber 3 Zellen, dann B-Strich radiert sie nach transparent zurueck.
+-- Erst Tinte ueber 3 Zellen, dann ein A-Strich, der auf Tinte startet, radiert
+-- sie nach transparent zurueck (offState der oberen Ebene).
 heldButtons[playdate.kButtonA] = true
 sh.AButtonDown()
 sh.rightButtonDown(); sh.rightButtonUp()
@@ -1202,16 +1206,16 @@ PixelRoom:commitForTerminate()
 check(strokeTile:sample(0, 0) == "black" and strokeTile:sample(1, 0) == "black"
     and strokeTile:sample(2, 0) == "black", "A gehalten + Bewegung malt einen Tinten-Strich")
 
-pixelCursorToOrigin(sh)
-heldButtons[playdate.kButtonB] = true
-sh.BButtonDown()
+pixelCursorToOrigin(sh)   -- Cursor zurueck auf (0,0) = Tinte -> Strichwert = offState (transparent)
+heldButtons[playdate.kButtonA] = true
+sh.AButtonDown()
 sh.rightButtonDown(); sh.rightButtonUp()
 sh.rightButtonDown(); sh.rightButtonUp()
-sh.BButtonUp()
-heldButtons[playdate.kButtonB] = false
+sh.AButtonUp()
+heldButtons[playdate.kButtonA] = false
 PixelRoom:commitForTerminate()
 check(strokeTile:sample(0, 0) == "clear" and strokeTile:sample(1, 0) == "clear"
-    and strokeTile:sample(2, 0) == "clear", "B gehalten + Bewegung radiert den Strich nach transparent")
+    and strokeTile:sample(2, 0) == "clear", "A gehalten auf Tinte + Bewegung radiert den Strich nach transparent")
 
 -- Ruecklesen: ein Tile mit transparentem Pixel laedt als TRANSPARENT-Zelle
 local reload = newMockImage(16, 16, "white")

@@ -3,14 +3,18 @@
 -- Malvorgang setzt genau 1 nativen Pixel (FR-011).
 -- "All Similar" und "Invert" bleiben als Systemmenü-Funktionen erhalten (FR-015).
 --
--- Spec 010 (US2): das 16x16-Malraster hat DREI Zustaende je Pixel
--- (PixelTransparency): OPAQUE (schwarz), TRANSPARENT (durchsichtig, kColorClear)
--- und EMPTY (weiss). A-Druck toggelt opak<->leer (Radierer, wie Spec 008),
--- B-Druck malt transparent (FR-007). "Empty" aus "Transparent" erreicht man
--- mit A (transparent->opak) und nochmal A (opak->leer) — die Playdate-Hardware
--- hat keine dedizierte dritte Maltaste ("Y" in den Plan-Artefakten existiert
--- nicht). Transparente Pixel landen als kColorClear im Tile und werden ueber
--- den 3-Zustands-hashTile getrennt dedupliziert (spec.md Edge Case Z.104).
+-- Spec 010 (US2, 5. Runde — Hardware-Test): gemalt wird AUSSCHLIESSLICH mit A.
+-- A-Druck toggelt zwischen Tinte (OPAQUE) und dem ebenenabhaengigen
+-- "Nicht-Tinte"-Zustand (offState): EMPTY/weiss auf der Basisebene,
+-- TRANSPARENT/kColorClear auf den Ebenen 2-3 (Radierer, wie Spec 008). Auf
+-- einer oberen Ebene erreicht ein A-Strich auf Tinte damit direkt den
+-- transparenten Zustand — eine dedizierte dritte Maltaste ("Y" in den
+-- Plan-Artefakten) existiert auf der Playdate nicht. B malt NICHT (frueher
+-- FR-007): B ist allein der Zoom-Out-Modifier — B halten + Kurbel zurueck
+-- verlaesst den PixelRoom (update(), Contract PR-01); ein einzelner B-Tipp
+-- bleibt folgenlos. Transparente Pixel landen als kColorClear im Tile und
+-- werden ueber den 3-Zustands-hashTile getrennt dedupliziert (spec.md Edge
+-- Case Z.104).
 import "CoreLibs/graphics"
 import "PixelTransparency"
 import "PencilCursor"
@@ -148,15 +152,13 @@ local function rotateGridCounterClockwise()
     needsRedraw = true
 end
 
--- Pencil-Strich: der erste Tastendruck bestimmt den Malwert des ganzen Strichs.
+-- Pencil-Strich: der A-Tastendruck bestimmt den Malwert des ganzen Strichs.
 --  * A auf Tinte -> Strich malt den ebenenabhaengigen "Nicht-Tinte"-Zustand
 --    (offState: weiss auf Ebene 1, transparent auf Ebenen 2-3 — Radierer,
 --    Spec 008 / FR-008); sonst OPAQUE.
---  * B -> Strich malt offState direkt (FR-007: weiss auf Ebene 1, transparent
---    auf Ebenen 2-3).
--- Bewegungen mit gehaltener Starttaste malen denselben Wert weiter.
+-- Bewegungen mit gehaltenem A malen denselben Wert weiter. B startet keinen
+-- Strich (Spec 010, 5. Runde — Hardware-Test) — nur A malt.
 local strokeValue = nil   -- 3-Zustands-Code des laufenden Strichs, nil = kein Strich
-local strokeButton = nil  -- "A" | "B" | nil
 
 local function paintCurrentCell(value)
     local _, row, col = gridView:getSelection()
@@ -166,21 +168,15 @@ local function paintCurrentCell(value)
     end
 end
 
-local function beginStroke(button)
+local function beginStroke()
     local _, row, col = gridView:getSelection()
     if not (row and col and gridState[row]) then return end
-    strokeButton = button
-    if button == "B" then
-        strokeValue = offState
-    else
-        strokeValue = (gridState[row][col] == OPAQUE) and offState or OPAQUE
-    end
+    strokeValue = (gridState[row][col] == OPAQUE) and offState or OPAQUE
     paintCurrentCell(strokeValue)
 end
 
 local function endStroke()
     strokeValue = nil
-    strokeButton = nil
 end
 
 local function moveCursor(direction)
@@ -199,9 +195,8 @@ local function moveCursor(direction)
 
     local _, newRow, newCol = gridView:getSelection()
     if oldRow ~= newRow or oldCol ~= newCol then
-        -- Laufender Strich malt weiter, solange die Starttaste gehalten wird
-        local heldButton = (strokeButton == "B") and playdate.kButtonB or playdate.kButtonA
-        if strokeValue ~= nil and playdate.buttonIsPressed(heldButton) then
+        -- Laufender Strich malt weiter, solange A gehalten wird
+        if strokeValue ~= nil and playdate.buttonIsPressed(playdate.kButtonA) then
             paintCurrentCell(strokeValue)
         else
             needsRedraw = true
@@ -408,20 +403,17 @@ function PixelRoom:inputHandler()
             stopDirectionHold("right")
         end,
         AButtonDown = function()
-            beginStroke("A")
+            beginStroke()
         end,
         AButtonUp = function()
             endStroke()
         end,
-        -- Spec 010 (US2, FR-007): B malt einen transparenten Pixel. Die
-        -- B+Crank-Zoom-Out-Geste (update(), Contract PR-01) bleibt unberuehrt —
-        -- ein kurzer B-Tipp malt, B-Halten+Kurbeln zoomt (und malt dabei einen
-        -- transparenten Pixel als Nebeneffekt, analog EditorRoom-Pipette).
-        BButtonDown = function()
-            beginStroke("B")
-        end,
-        BButtonUp = function()
-            endStroke()
-        end
+        -- Spec 010 (US2, 5. Runde — Hardware-Test): B malt NICHT mehr (frueher
+        -- FR-007). B ist allein der Zoom-Out-Modifier — B halten + Kurbel
+        -- zurueck verlaesst den PixelRoom (siehe update(), Contract PR-01).
+        -- Der einzelne B-Tipp bleibt bewusst folgenlos (kein stray Pixel beim
+        -- Loslassen der Zoom-Geste mehr).
+        BButtonDown = function() end,
+        BButtonUp = function() end
     }
 end
