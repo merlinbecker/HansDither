@@ -254,6 +254,26 @@ Pixel shifting requirement: User holds B + arrow to shift all frame content 1 pi
 
 **Evidence**: Spec 009 already provides robust tile recalculation via ImageStoreCodec; reuse proven code.
 
+**Perf-Nachtrag (Review nach Hardware-Test, 2026-09-01, ADR-043)**: der oben
+beschriebene Algorithmus wurde als EINE Funktion gebaut
+(`LayerModel.shiftLayerContent`) und lief bei jedem einzelnen Tastendruck.
+Eine Standalone-Messung (375-Tile-Ebene, ein 1px-Schritt) ergab **~192.000
+`image:sample()`-Aufrufe + 375 `image.new()`** — auf dem Playdate (168 MHz,
+Lua-Interpreter) geschaetzt mehrere hundert ms je Tastendruck, spuerbar
+ruckelig beim Halten der Pfeiltaste (genau das im Risk Record vorhergesehene
+Risiko, `spec.md` Architecture Governance). Behoben durch **Aufschieben der
+Materialisierung**: `shiftLayerContent` wurde in drei Bausteine zerlegt
+(`decodeLayerGrid` / `materializeShiftedGrid` / `imageFromGrid`);
+`EditorRoom.shiftActiveLayer` dekodiert die Ebene nur EINMAL pro
+Verschiebe-Sitzung und akkumuliert weitere Tastendruecke als reinen
+Wrap-Versatz (O(1)) — materialisiert wird erst in `flushLayerShift()`, am
+Ende der Geste (B-Release, Rauszoomen, Malen, Pause, Terminate). Die
+Zoom-View-Live-Vorschau bleibt bei jedem Tastendruck aktuell (synthetisiert
+9 Tiles direkt aus dem gepufferten Raster statt aus real gebauten Tiles).
+Offset-Algebra beweist Aequivalenz: N sequentielle 1px-Verschiebungen ==
+eine Verschiebung um den akkumulierten Versatz (Modulo-Arithmetik ist
+additiv). Details, Alternativen und Flush-Aufrufstellen: [ADR-043](adr/ADR-043-Aufgeschobene-Pixel-Verschiebung.md).
+
 ---
 
 ## R7: Backward Compatibility (Old Images Without Layers)
@@ -303,7 +323,8 @@ For this feature, focus on pure Lua logic (no simulator/device interaction):
 
 **Headless coverage (as built / to build)** in `tests/headless_tests.lua`:
 
-- **US1 Shift**: `LayerModel.shiftLayerContent` moves a known pixel by 1 in each direction; wrap from the right edge; `EditorRoom:shiftActiveLayer` leaves the base layer and other frames untouched; ZoomRoom B+arrow dispatches.
+- **US1 Shift**: `LayerModel.shiftLayerContent` moves a known pixel by 1 in each direction; wrap from the right edge; `EditorRoom:shiftActiveLayer` leaves the base layer and other frames untouched; ZoomRoom B+arrow dispatches. **Perf-Nachtrag (ADR-043)**: `shiftActiveLayer` defers materialization (positions unchanged before `flushLayerShift()`); N buffered steps + one flush reach the same pixel as N immediate `LayerModel.shiftLayerContent` calls (offset algebra); a paint mid-session (`applyTileEdits`) flushes first so it lands on top of the shift, not the other way round; `BButtonUp`, `commitAndReturnToEditor`, `commitForTerminate`, and zooming into Pixel View each flush an open session — including terminate *without* a prior B-release (no data loss on Home-button-mid-gesture).
+
 - **US2 Transparency**: PixelRoom paints with **A only** (Fifth Round) — an A-press on ink erases to the layer's off-state (white on Layer 1, kColorClear on Layers 2–3); a lone B-tap is inert (no stray pixel on zoom-out); B held + Crank backward still zooms out; 3-class `hashTile` separates white-bg and transparent-bg tiles; `setCurrentTile` reads the three classes back.
 - **US3 Layer/Frame Switching (Fourth Round)**: B + Up/Down cycles the 3 layers with wrap; B + Left/Right steps frames (B + Right at the last frame appends a deep copy); the Crank with no B switches nothing; the active layer index is preserved across frame switches; a B-release that followed a B + D-Pad nav does **not** also fire the eyedropper (`bNavConsumed`).
 - **US3 fixed-3**: `LayerModel` always yields exactly 3 layers; load pads to 3; save omits empty Layers 2–3; a v1.0 flat image loads as 3 layers.

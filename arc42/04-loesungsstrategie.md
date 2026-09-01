@@ -61,7 +61,7 @@ Damit entfaellt das bisherige Nicht-Ziel "keine Multi-Frame-Animationstools"; di
 ## 4.6 Ebenen & Pixel-Transparenz (Spec 010)
 
 Der Editor erhaelt Ebenen, praezises Pixel-Verschieben und Transparenz.
-Leitentscheidungen (Details in Kapitel 9, AD-039..AD-042):
+Leitentscheidungen (Details in Kapitel 9, AD-039..AD-043):
 
 1. **Feste 3-Ebenen-Struktur je Frame.** Jeder Frame hat genau 3 Ebenen,
    immer — eine harte Grenze wie MAX_FRAMES = 12. Kein Hinzufuegen/Loeschen
@@ -91,6 +91,14 @@ Leitentscheidungen (Details in Kapitel 9, AD-039..AD-042):
    „Tile N picked“. **B + Kurbel** (Zoom / Frame-Verwaltung) bleibt
    unveraendert. Ebenen-/Frame-Wechsel liegen damit nicht mehr auf der
    Kurbel.
+6. **Pixel-Verschiebung wird gepuffert (AD-043, Perf-Review aus dem
+   Hardware-Test).** Ein 1px-Shift kostete pro Tastendruck einen vollen
+   375-Tile-Rebuild + Rehash (gemessen ~192.000 `image:sample()`-Aufrufe) —
+   spuerbar ruckelig beim Halten der Pfeiltaste. `EditorRoom.shiftActiveLayer`
+   dekodiert die Ebene jetzt nur einmal pro Verschiebe-Geste und akkumuliert
+   weitere Tastendruecke als O(1)-Wrap-Versatz; materialisiert wird erst in
+   `flushLayerShift()`, am Ende der Geste (B-Release, Rauszoomen, Malen,
+   Pause, Terminate).
 
 Speicherformat `frames.json` steigt auf Version `"1.1"`
 (`frames[].layers[].{layerIndex, name, positions[375], visible}`); v1.0

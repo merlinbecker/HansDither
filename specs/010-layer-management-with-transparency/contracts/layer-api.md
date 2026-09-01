@@ -40,7 +40,11 @@ No `transparency` array. Transparent pixels are `kColorClear` inside the tiles r
 | `LayerModel.compositeToTiles(entry, getTile, registerTile)` | Like `compositeToFlat` but merges per-pixel where >1 layer contributes at a cell (registers merged tiles). |
 | `LayerModel.clampActive(entry, i)` | Returns `i` if `1 <= i <= 3`, else `1`. |
 | `LayerModel.cycleActive(entry, i, delta)` | Wraps in `1..3`. |
-| `LayerModel.shiftLayerContent(entry, active1, dir, getTile, registerTile)` | Shifts the layer's 400×240 pixel content by 1px (wrap), rebuilds all 375 tiles; upper-layer all-clear tiles collapse to `0`. Returns `true` on success. |
+| `LayerModel.shiftLayerContent(entry, active1, dir, getTile, registerTile)` | Shifts the layer's 400×240 pixel content by 1px (wrap), rebuilds all 375 tiles; upper-layer all-clear tiles collapse to `0`. Returns `true` on success. Synchronous single-step wrapper (ADR-043) around `shiftDelta`/`decodeLayerGrid`/`materializeShiftedGrid` below — unchanged signature/behaviour for existing callers/tests. |
+| `LayerModel.shiftDelta(dir)` | `"up"/"down"/"left"/"right"` → `dx, dy` for a 1px step, or `nil` for an invalid direction (ADR-043). |
+| `LayerModel.decodeLayerGrid(layer, getTile)` | Decodes the layer's full 400×240 pixel content into a 3-state grid (`grid[gy][gx]`); pure read, no mutation (ADR-043). |
+| `LayerModel.materializeShiftedGrid(layer, grid, offX, offY, registerTile)` | Rebuilds all 375 tiles of `layer`, reading `grid` through a wrap offset `(offX,offY)`; writes `layer.positions`. The actual "shift" is just the read offset — no second 96,000-cell copy (ADR-043). |
+| `LayerModel.imageFromGrid(grid, offX, offY, tileCol0, tileRow0)` | Synthesizes ONE 16×16 tile image from `grid` at 0-based tile position `(tileCol0,tileRow0)`, through the same wrap offset — for a live preview while a shift session is still open, without rebuilding all 375 tiles (ADR-043). |
 
 **Removed**: `addLayer`, `deleteLayer` (layers are a fixed structure).
 
@@ -75,8 +79,9 @@ Per-layer **off state**: Layer 1 → `EMPTY` (renders white); Layers 2–3 → `
 |--------|----------|
 | `EditorRoom:getImageData()` | `{id, name, imagetable, frames (flat composite cache), frameLayers (3 layers/frame), activeLayer (1..3), hashIndex}`. |
 | `EditorRoom:getActiveLayerInfo()` | `{index, count=3, name}` for the HUD indicator (FR-015). |
-| `EditorRoom:shiftActiveLayer(dir)` | US1 entry point; shifts + re-composites; returns `true` on success. |
-| `EditorRoom:currentZoomContext()` | Fresh 3×3 context at the cursor (for ZoomRoom after a shift). |
+| `EditorRoom:shiftActiveLayer(dir)` | US1 entry point. **ADR-043 (perf review):** does NOT re-composite immediately — decodes the active layer once per shift *session* and accumulates further calls as an O(1) wrap offset (`pendingShift`); returns `true` on success (session opened/extended, not yet materialized). |
+| `EditorRoom:flushLayerShift()` | Materializes an open shift session (rebuilds the 375 tiles + re-composites); idempotent, returns `true` if something was pending, else `false`. MUST run before any code path reads/writes canonical tiles/positions (ADR-043 lists the call sites: `applyTileEdits`, ZoomRoom `zoomIntoPixelRoom`/`commitAndReturnToEditor`/`commitForTerminate`, `BButtonUp`, `entered()`, `buildPauseMenuImage()`). |
+| `EditorRoom:currentZoomContext()` | Fresh 3×3 context at the cursor (for ZoomRoom after a shift). While a shift session is open, the 3 slot images are synthesized straight from the buffered pixel grid (`LayerModel.imageFromGrid`) instead of the (not yet rebuilt) real tiles — no flush needed just to preview. |
 | **B held + Up / Down** | Cycles `activeLayer` +1 / -1 with wrap (FR-013/014/017). Single press = single step. |
 | **B held + Left / Right** | Steps the animation frame prev / next (FR-016); **B + Right on the last frame** appends a new frame (deep copy). |
 | **Crank, no B** | Opens the tile picker: `referencedTileIndices()` scans the **layer positions** (`frameLayers[*].layers[*].positions`, skipping `0`) — not the composite cache, so covered-layer tiles stay reachable — stepped ~1 per 30° with wraparound; sets `activeTile` (index 1 → `nil`); overlay auto-hides ~1.5 s after the last turn (FR-025/026). |

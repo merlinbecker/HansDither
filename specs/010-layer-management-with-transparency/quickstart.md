@@ -110,7 +110,8 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 **Acceptance Criteria**:
 - ✅ Pixel shifts work in all 4 directions (Up/Down/Left/Right)
 - ✅ Each key press shifts exactly 1 pixel
-- ✅ Tiles recalculate after each shift (no visual corruption)
+- ✅ Tiles recalculate after each shift (no visual corruption); *(Perf review, 2026-09-01: this now happens once per shift **gesture** rather than per key press — see ADR-043 — the preview still updates on every key press)*
+- ✅ Repeated key presses while holding B feel responsive, not laggy (ADR-043 — device-level FPS confirmation still open, T053/T054)
 - ✅ Shifted positions persist through save/reload
 - ✅ Shifts are independent per frame (Frame 2 shifts don't affect Frame 1)
 
@@ -288,9 +289,11 @@ pdc Source "Hans Dither.pdx"
 | Upper-layer eraser leaves opaque white | `writeActiveLayerPosition` not mapping white→absent on Layers 2–3 | Check `EditorRoom.writeActiveLayerPosition` |
 | Multi-layer edit lost on save | `imageData.frames` mutated directly instead of `frameLayers` | All edits must go through the active layer + `recompositeCell` |
 | Pixel shift causes visual corruption | Tile recalculation incomplete | Debug `LayerModel.shiftLayerContent` + layered prune |
+| Holding the shift arrow key feels laggy / drops frames | Full 375-tile rebuild + rehash was paid on every key press (~192,000 `image:sample()` calls measured for one step) | Should be resolved by ADR-043 (materialization deferred to `EditorRoom:flushLayerShift()`, once per gesture) — if still slow on device, profile the single flush call itself (T054); it stays O(375 tiles), just paid once instead of N times |
+| Canonical tiles look stale right after a shift (e.g. pause-menu preview, save) | An open shift session (`EditorRoom.pendingShift`) was never flushed before the read | Every canonical read path must call `EditorRoom:flushLayerShift()` first (ADR-043 lists the call sites) — a new code path reading `imageData.frameLayers`/`frames`/`imagetable` needs one too |
 | Old images don't load | Structure-based v1.0 detection failed | Check `newLoadOperation`'s `frames[1].layers` test + pad-to-3 |
 | buildNumber not incremented | Manual step forgotten | Increment once per `pdc` run |
 
 ---
 
-**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast). Scenario 7 added.
+**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast). Scenario 7 added. Fifth Round (Pixel View: B stops painting) and the pixel-shift perf review (ADR-043, deferred materialization) folded into Scenario 2 and Scenario 3 respectively, plus two new Troubleshooting rows.

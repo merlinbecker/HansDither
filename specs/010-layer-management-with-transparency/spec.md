@@ -145,7 +145,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 **Pixel Shifting (US1)**
 
 - **FR-001**: System MUST allow user to hold B and press direction keys (Up/Down/Left/Right) in Zoom View to shift all content in the active frame by exactly one pixel per key press
-- **FR-002**: System MUST recalculate all tile references after each pixel shift to maintain visual and data integrity
+- **FR-002**: System MUST recalculate all tile references after each pixel shift to maintain visual and data integrity. *(Perf review, 2026-09-01: "after each shift" is satisfied once the shift **gesture** ends, not necessarily after each individual key press — see the Deferred Materialization note under Architecture Governance. The Zoom View preview updates on every key press regardless; only the 375-tile rebuild is batched, and it always runs before the layer is saved, read by another view, or the player leaves Zoom View — so the requirement's outcome is unchanged.)*
 - **FR-003**: System MUST persist pixel shifts when image is saved and reloaded
 - **FR-004**: System MUST apply shifts only to the active frame; other frames remain unaffected
 - **FR-005**: System MUST handle shifts at tile boundaries gracefully (no content loss at edges)
@@ -238,14 +238,15 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 **Quality Attributes Affected**:
 - **Usability**: Improved precision control (US1), transparent pixels on upper layers (US2), layer cycling (US3), frame reorder/delete (US4)
 - **Maintainability**: `imageData.frames` becomes a derived composite cache that must be regenerated on every layer mutation
-- **Performance**: Re-tiling on every pixel shift and re-compositing on every edit must stay within one frame on the Playdate
+- **Performance**: Re-tiling on every pixel shift and re-compositing on every edit must stay within one frame on the Playdate. *(Perf review, 2026-09-01: a single re-tile was measured at ~192,000 `image:sample()` calls + 375 `image.new()` — far over budget if paid per key press. Resolved via deferred materialization — see ADR-043.)*
 
 **Evidence & Decisions**:
 - **ADR Required**: "Layer Rendering Order & Compositing Strategy" — decision: composite all 3 layers, topmost non-empty cell wins; flat composite cache feeds the tilemap
 - **ADR Required**: "Pixel Transparency Encoding" — decision: transparency lives per-pixel as kColorClear in the tile; 3-state tile hash; no per-cell array
 - **ADR Required**: "Fixed 3-Layer Structure" — decision: layers are a fixed structure (no add/delete), like the 12-frame cap; empty upper layers omitted on disk
 - **ADR Required**: "Tile View Control Redesign" (ADR-042) — decision: layer/frame switching moves to B + D-Pad; the free Crank drives a referenced-tile picker; B + Crank (zoom / Frame Management View) unchanged
-- **Risk Record**: "Playdate Performance Under Pixel Shifting" (re-tiling all 375 cells of a layer per keypress must not drop frame rate below 30 FPS)
+- **ADR Required**: "Deferred Pixel-Shift Materialization" (ADR-043, 2026-09-01, from a control-performance review) — decision: `EditorRoom.shiftActiveLayer` decodes the active layer once per shift **gesture** and accumulates further key presses as a cheap O(1) wrap offset; the 375-tile rebuild + rehash is deferred to a `flushLayerShift()` call that runs once, wherever the session actually needs canonical tiles (B-release, leaving Zoom View, painting mid-gesture, pause, terminate)
+- **Risk Record**: "Playdate Performance Under Pixel Shifting" — **RESOLVED** (2026-09-01): measured ~192,000 `image:sample()` calls per keypress before the fix; mitigated exactly as anticipated below ("batching shifts / lazy recalculation") via ADR-043
 
 ### Existing Dependencies & Compatibility
 
@@ -256,7 +257,7 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 ### Technical Debt & Risk Mitigation
 
 - **Risk**: Tile recalculation on every pixel shift could cause lag on Playdate hardware
-  - **Mitigation**: Performance testing during planning phase; consider batching shifts or lazy recalculation
+  - **Mitigation**: **Resolved (2026-09-01)** — batched/lazy recalculation via deferred materialization (ADR-043): a shift gesture pays the 375-tile rebuild once, not once per key press. Device-level FPS confirmation is still open (Phase 7 T053/T054)
 - **Risk**: Layer metadata could break existing save/load cycle if not handled carefully
   - **Mitigation**: Version the file format; provide fallback loader for legacy images
 - **Risk**: Input multiplexing (B + Up/Down = layer, B + Left/Right = frame, Crank alone = tile picker) could be confusing
@@ -268,4 +269,4 @@ There is **no** Layer View — layers are a fixed structure of exactly 3 per fra
 
 **Clarified** (five rounds — see `## Clarifications`). Third round restructured US4 (fixed 3 layers, layer-dependent off-state, US4 = Frame Management View). Fourth round (2026-08-31, from hardware testing) redesigned the Tile View controls: layer switch → B + Up/Down, frame switch → B + Left/Right, Crank alone → tile picker, eyedropper → "Tile N picked" toast. B + Crank (zoom chain / Frame Management View) unchanged. Fifth round (2026-09-01, from hardware testing): B no longer paints in Pixel View — painting is A only (FR-007), B stays the zoom-out modifier.
 
-**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign and the Fifth-Round Pixel View change are implemented (371 headless assertions green, buildNumber 28). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059).
+**Implementation status**: US1–US4 implemented and green on `feature/0.3-addons`. The Fourth-Round control redesign, the Fifth-Round Pixel View change, and the deferred pixel-shift materialization perf fix (ADR-043) are implemented (393 headless assertions green, buildNumber 29). Remaining: performance profiling + manual simulator/hardware integration (Phase 7 T053–T059) — the deferred-materialization fix addresses T054's concern architecturally; device-level FPS confirmation is still open.
