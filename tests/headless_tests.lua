@@ -1120,15 +1120,29 @@ crankChangeValue = 0
 crankTicksValue = 0
 
 -- Regressionsschutz: B+Crank-Zoomkette bleibt unveraendert funktionsfaehig
--- (Contract PR-01 - pro update() genau eine Crank-Lese-API)
+-- (Contract PR-01 - pro update() genau eine Crank-Lese-API). Zusaetzlich
+-- (Fifth Round): die echte B-Halten-Zoom-Out-Geste beginnt mit BButtonDown
+-- und darf KEINEN Pixel ins Tile schreiben — frueher hinterliess sie beim
+-- Loslassen einen "stray" Pixel (auf der Basisebene wurde der Eck-Pixel
+-- sogar radiert).
 local switchedTo = nil
 PixelRoom:init(function(room) switchedTo = room end, zoomMock2)
-PixelRoom:setCurrentTile(cornerTile, 1)
+PixelRoom:setCurrentTile(cornerTile, 1)  -- Basisebene, ein Eck-Pixel bei (0,0)
 PixelRoom:entered()
+local zoRegH = PixelRoom:inputHandler()
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+for _ = 1, 16 do zoRegH.leftButtonDown(); zoRegH.leftButtonUp() end  -- Cursor -> Spalte 1
+for _ = 1, 16 do zoRegH.upButtonDown(); zoRegH.upButtonUp() end      -- Cursor -> Zeile 1 (Pixel 0,0)
 heldButtons[playdate.kButtonB] = true
+zoRegH.BButtonDown()          -- die echte Geste startet mit dem B-Down
 crankTicksValue = -4
 PixelRoom:update()
+zoRegH.BButtonUp()
 check(switchedTo == zoomMock2, "B+Crank (-4 Ticks): Zoom-Out weiterhin ausgeloest (Contract PR-01 Regressionsschutz)")
+check(rotatedReceivedTile.pixels["0,0"] == true,
+    "B-Halten-Zoom-Out committet das Tile unveraendert (Eck-Pixel bleibt, kein Radieren)")
+check(rotatedReceivedTile.pixels["0,1"] == nil and rotatedReceivedTile.pixels["1,0"] == nil,
+    "B-Halten-Zoom-Out malt keinen stray Pixel am Cursor (Fifth Round)")
 crankTicksValue = 0
 heldButtons[playdate.kButtonB] = false
 

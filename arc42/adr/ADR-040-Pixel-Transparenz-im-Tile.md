@@ -73,8 +73,9 @@ weiter. **Kein Pixelzustand wird unerreichbar** — der A-Toggle deckt
 direkt „transparent“. B bleibt der Zoom-Out-Modifier (B halten + Crank
 zurueck). `spec.md` FR-007 lautet jetzt „B malt nicht in Pixel View“.
 Tests: „B-Tipp folgenlos“ (obere + Basisebene), Radier-Strich startet via
-A auf einer Tinte-Zelle; B+Crank-Zoom-Out-Regression unveraendert
-(`tests/headless_tests.lua`, 369 Assertions, buildNumber 28).
+A auf einer Tinte-Zelle; die B+Crank-Zoom-Out-Regression prueft jetzt auch
+die `BButtonDown`-Geste (kein stray Pixel) (`tests/headless_tests.lua`,
+371 Assertions, buildNumber 28).
 
 ### Begruendung
 - pro Pixel + Dedup-treu in einem Zug, ohne Nebendaten.
