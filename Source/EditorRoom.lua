@@ -85,13 +85,6 @@ local bauchbindeVisible = true   -- abgeleitet aus lastActivityMs (data-model.md
                                   -- gehalten, damit update() den Uebergang sichtbar->unsichtbar per
                                   -- needsRedraw auch OHNE andere Eingabe erkennt (analog statusMessage)
 
--- Perf-Nachtrag US1 (siehe shiftActiveLayer/flushLayerShift weiter unten):
--- schwebende, noch nicht materialisierte Pixel-Verschiebung der aktiven
--- Ebene. {frame, layerRef, grid, offX, offY} | nil. MUSS vor buildZoomContext
--- deklariert sein (wird dort gelesen) -- daher hier bei den anderen
--- Modul-Zustandsvariablen und nicht direkt bei shiftActiveLayer.
-local pendingShift = nil
-
 local overlay = loadingBar.new()
 local bauchbinde = Bauchbinde.new(gfx)
 
@@ -462,14 +455,6 @@ local function buildZoomContext()
     -- "absent" (0) einer oberen Ebene -> kein Quellbild (leere Zelle).
     local layer = activeLayerObj()
     local positions = layer and layer.positions or imageData.frames[currentFrame]
-    -- Perf-Nachtrag US1: waehrend eine Verschiebe-Sitzung dieser Ebene offen
-    -- ist (pendingShift, siehe shiftActiveLayer weiter unten), sind
-    -- layer.positions noch NICHT materialisiert -- die 3x3-Vorschau wird
-    -- stattdessen direkt aus dem schwebenden Pixelraster synthetisiert
-    -- (LayerModel.imageFromGrid, ~9 Tiles statt aller 375). slot.originalIndex
-    -- bleibt bewusst der alte (noch nicht geflushte) Wert: nichts liest ihn,
-    -- bevor ein flushLayerShift()-Aufruf ihn wieder aktuell gemacht hat.
-    local shiftBuf = (pendingShift and pendingShift.layerRef == layer) and pendingShift or nil
     local slots = {}
     for dr = -1, 1 do
         local row = {}
@@ -481,13 +466,8 @@ local function buildZoomContext()
                 slot.oob = false
                 slot.frameIndexPos = (ty - 1) * GRID_COLS + tx
                 slot.originalIndex = positions[slot.frameIndexPos]
-                if shiftBuf then
-                    slot.originalImage = LayerModel.imageFromGrid(
-                        shiftBuf.grid, shiftBuf.offX, shiftBuf.offY, tx - 1, ty - 1)
-                else
-                    slot.originalImage = (slot.originalIndex and slot.originalIndex ~= 0)
-                        and imageData.imagetable:getImage(slot.originalIndex) or nil
-                end
+                slot.originalImage = (slot.originalIndex and slot.originalIndex ~= 0)
+                    and imageData.imagetable:getImage(slot.originalIndex) or nil
             else
                 slot.oob = true
             end
@@ -541,11 +521,6 @@ end
 function EditorRoom:applyTileEdits(edits)
     if not imageData then return end
     if not activeLayerObj() then return end
-    -- Perf-Nachtrag US1: eine offene Verschiebe-Sitzung erst materialisieren,
-    -- damit die folgenden Positions-Schreibzugriffe nicht von einem
-    -- spaeteren flushLayerShift() ueberschrieben werden (Malen nach Shift
-    -- muss den Shift respektieren, nicht umgekehrt).
-    EditorRoom:flushLayerShift()
     for _, edit in ipairs(edits or {}) do
         local hash = ImageStoreCodec.hashTile(edit.newImage)
         local existing = imageData.hashIndex[hash]
@@ -563,67 +538,23 @@ function EditorRoom:applyTileEdits(edits)
     needsRedraw = true
 end
 
--- Perf-Nachtrag US1 (Review nach Hardware-Test, 2026-09-01): ein einzelner
--- 1px-Shift kostete vorher pro Tastendruck einen vollen 375-Tile-Rebuild +
--- Rehash — gemessen ~192.000 image:sample()-Aufrufe + 375 image.new() fuer
--- EINEN Schritt (Standalone-Messung, tests/../measure_shift.lua-Vorlage,
--- siehe ADR-043). Auf dem Geraet mehrere hundert ms, also spuerbar ruckelig
--- beim Halten der Pfeiltaste. shiftActiveLayer dekodiert die Ebene jetzt nur
--- EINMAL pro Verschiebe-Sitzung (pendingShift.grid) und akkumuliert weitere
--- Tastendruecke lediglich als Wrap-Versatz (offX,offY) — O(1) je Tastendruck.
--- Materialisiert (375 Tiles neu bauen + hashen + recomposite) wird ERST in
--- flushLayerShift(), am Ende der Geste. Beide zusammen bleiben fuer EINEN
--- Schritt exakt aequivalent zu LayerModel.shiftLayerContent (Offset-Algebra:
--- N sequentielle 1px-Shifts == ein Shift um den akkumulierten Versatz, siehe
--- Test "shiftActiveLayer: N kleine Schritte == EIN grosser Schritt").
---
--- Spec 010 US1 (FR-001..005): verschiebt den Pixelinhalt der AKTIVEN Ebene
--- des currentFrame um genau 1 nativen Pixel (Wrap-Around). Wird von der
--- ZoomRoom (B + Pfeiltaste) aufgerufen.
-function EditorRoom:shiftActiveLayer(direction)
+-- Spec 010 US1 (revidiert 2026-09-01, Einschraenkung aus dem Hardware-Test —
+-- ADR-043): verschiebt den Pixelinhalt der Zelle `cellIdx` der aktiven Ebene
+-- um 1 nativen Pixel. Ausgangszelle + der eine Nachbar in Schieberichtung
+-- bilden fuer den Schritt einen 2-Tile-Streifen, der als Ganzes verschoben
+-- wird: der Inhalt wandert in den Nachbarn und bleibt dort, dessen abgewandte
+-- Randkante faellt weg; die freigewordene Kante der Ausgangszelle wird
+-- geleert. KEIN Wrap, KEINE Ganz-Ebenen-Verschiebung. `cellIdx` ist die
+-- Zielzelle (1..375); ohne Angabe die Zelle unter dem Editor-Cursor.
+-- Aufgerufen von der ZoomRoom (B + Pfeiltaste) mit der Zelle unter dem
+-- Zoom-Cursor. Nur der aktuelle Frame ist betroffen (FR-004).
+function EditorRoom:shiftActiveLayer(direction, cellIdx)
     if not imageData then return false end
     local entry = currentEntry()
     if not entry then return false end
-    local layer = activeLayerObj()
-    if not layer then return false end
-    local dx, dy = LayerModel.shiftDelta(direction)
-    if not dx then return false end
-
-    if pendingShift and (pendingShift.frame ~= currentFrame or pendingShift.layerRef ~= layer) then
-        -- Frame/Ebene hat sich unter einer offenen Sitzung geaendert (sollte
-        -- ausserhalb der ZoomRoom-Geste nicht vorkommen) -- defensiv flushen.
-        EditorRoom:flushLayerShift()
-    end
-
-    if not pendingShift then
-        local getTile = function(idx) return imageData.imagetable:getImage(idx) end
-        pendingShift = {
-            frame = currentFrame,
-            layerRef = layer,
-            grid = LayerModel.decodeLayerGrid(layer, getTile),
-            offX = 0, offY = 0,
-        }
-    end
-
-    local width = LayerModel.GRID_COLS * LayerModel.TILE_PX
-    local height = LayerModel.GRID_ROWS * LayerModel.TILE_PX
-    pendingShift.offX = (pendingShift.offX + dx) % width
-    pendingShift.offY = (pendingShift.offY + dy) % height
-    return true
-end
-
--- Materialisiert eine offene Verschiebe-Sitzung (pendingShift): baut die 375
--- Tiles der Ebene aus dem dekodierten Raster + Wrap-Versatz neu auf (Dedup
--- ueber hashIndex, wie zuvor) und kompositiert den Frame neu. Idempotent
--- (No-op ohne offene Sitzung; false). MUSS vor jeder Aktion laufen, die
--- kanonische Tiles/positions liest oder schreibt — siehe ZoomRoom
--- (AButtonDown/commitAndReturnToEditor/zoomIntoPixelRoom/commitForTerminate/
--- BButtonUp) sowie EditorRoom:applyTileEdits/entered/buildPauseMenuImage.
-function EditorRoom:flushLayerShift()
-    if not pendingShift then return false end
-    local ps = pendingShift
-    pendingShift = nil
-    if not imageData then return false end
+    if not activeLayerObj() then return false end
+    cellIdx = cellIdx or cursorCellIndex()
+    local getTile = function(idx) return imageData.imagetable:getImage(idx) end
     local registerTile = function(img)
         local hash = ImageStoreCodec.hashTile(img)
         local existing = imageData.hashIndex[hash]
@@ -634,14 +565,18 @@ function EditorRoom:flushLayerShift()
         imageData.hashIndex[hash] = idx
         return idx
     end
-    LayerModel.materializeShiftedGrid(ps.layerRef, ps.grid, ps.offX, ps.offY, registerTile)
-    recompositeCurrentFrame()
+    local changed = LayerModel.shiftTileContent(
+        entry, imageData.activeLayer or 1, cellIdx, direction, getTile, registerTile)
+    if not changed then return false end
+    for _, ci in ipairs(changed) do
+        recompositeCell(ci)
+    end
     return true
 end
 
 -- Frischer 3x3-Zoom-Kontext an der aktuellen Cursorposition — von der ZoomRoom
--- nach einem Shift genutzt. Solange eine Verschiebe-Sitzung offen ist, liest
--- buildZoomContext() die Vorschau direkt aus pendingShift (kein Flush).
+-- nach einem Shift genutzt (jetzt nur 1-2 Tiles betroffen, aber der volle
+-- Kontext ist billig genug).
 function EditorRoom:currentZoomContext()
     return buildZoomContext()
 end
@@ -941,11 +876,6 @@ end
 function EditorRoom:entered()
     clearMoveTimers()
     endStroke()
-    -- Perf-Nachtrag US1: defensives Sicherheitsnetz -- die ZoomRoom-Ausgaenge
-    -- flushen bereits selbst, aber eine Rueckkehr in den EditorRoom darf nie
-    -- mit einer noch offenen (nicht materialisierten) Verschiebe-Sitzung
-    -- weiterlaufen.
-    EditorRoom:flushLayerShift()
     zoomTickAccu = 0
     crankAccumDegrees = 0
     bUsedForZoom = false
@@ -1004,10 +934,6 @@ local PAUSE_TILE_SCALE = PAUSE_TILE_SIZE / TILE_PX
 
 function EditorRoom:buildPauseMenuImage()
     if not imageData then return nil end
-    -- Perf-Nachtrag US1: gameWillPause() kann waehrend einer offenen
-    -- Verschiebe-Sitzung feuern (B in der ZoomRoom gehalten, Home-Taste) --
-    -- kein Tastenereignis auf ZoomRoom-Seite wuerde das sonst flushen.
-    EditorRoom:flushLayerShift()
 
     -- CR-06 (FR-011): frisches, aufsteigendes Set tatsaechlich referenzierter
     -- Tile-Indizes — NICHT imagetable:getLength() (zaehlt nie mehr referenzierte

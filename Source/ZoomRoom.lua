@@ -291,24 +291,8 @@ end
 
 -- ── Interne Aktionen ──────────────────────────────────────────────────────────
 
--- Perf-Nachtrag US1 (EditorRoom.pendingShift/flushLayerShift): eine offene
--- Verschiebe-Sitzung haelt die 375 Tiles der aktiven Ebene absichtlich noch
--- NICHT materialisiert (siehe shiftActiveLayerContent unten). Bevor die
--- ZoomRoom kanonische Tiles liest/verlaesst oder der Nutzer zu malen
--- beginnt, MUSS deshalb zuerst materialisiert werden — sonst wuerde ein
--- spaeterer Flush einen dazwischen gemalten Strich wieder ueberschreiben.
--- Aktualisiert den 3x3-Kontext danach nur, wenn tatsaechlich etwas
--- geflusht wurde (No-op sonst, z.B. wenn nie geshiftet wurde).
-local function flushShiftAndRefresh()
-    if not (editorRoom and editorRoom.flushLayerShift) then return end
-    if editorRoom:flushLayerShift() and editorRoom.currentZoomContext then
-        ZoomRoom:setFromEditorContext(editorRoom:currentZoomContext())
-    end
-end
-
 -- Zoom-In: Arbeitsbild des Cursor-Slots an PixelRoom übergeben (Z-02: nur in-bounds).
 local function zoomIntoPixelRoom()
-    flushShiftAndRefresh()
     local slotRow, slotCol = getSlotForCell(cursorRow, cursorCol)
     local slot = slots[slotRow][slotCol]
     if not slot or slot.oob then
@@ -345,10 +329,6 @@ local function collectEdits()
 end
 
 local function commitAndReturnToEditor()
-    -- Perf-Nachtrag US1: unbedingt flushen -- ohne Malstrich seit dem letzten
-    -- Shift wuerde applyTileEdits() (das selbst auch flusht) unten gar nicht
-    -- aufgerufen, und eine offene Sitzung ginge beim Raumwechsel verloren.
-    if editorRoom and editorRoom.flushLayerShift then editorRoom:flushLayerShift() end
     local edits = collectEdits()
     if #edits > 0 then
         editorRoom:applyTileEdits(edits)
@@ -356,27 +336,31 @@ local function commitAndReturnToEditor()
     switchRoomFunction(editorRoom)
 end
 
--- Spec 010 US1 (FR-001..005): B + Pfeiltaste verschiebt den Inhalt der AKTIVEN
--- Ebene um genau 1 nativen Pixel. Vorher werden offene Zell-Edits des
--- Zoomrasters committet (das flusht intern eine evtl. offene Verschiebe-
--- Sitzung zuerst, siehe applyTileEdits). editorRoom:shiftActiveLayer()
--- baut die 375 Tiles NICHT mehr sofort neu — es akkumuliert nur einen
--- Wrap-Versatz (Perf-Nachtrag, EditorRoom.pendingShift); danach wird der
--- 3x3-Kontext trotzdem frisch geholt, aber jetzt direkt aus dem
--- schwebenden Pixelraster synthetisiert statt aus real gebauten Tiles
--- (buildZoomContext). Nur der aktuelle Frame ist betroffen (FR-004).
+-- Spec 010 US1 (revidiert 2026-09-01, Einschraenkung aus dem Hardware-Test):
+-- B + Pfeiltaste verschiebt den Inhalt der Zelle unter dem Zoom-Cursor um 1
+-- nativen Pixel (nicht den ganzen Screen). Der Inhalt wandert dabei in die
+-- Nachbarzelle in Schieberichtung und bleibt dort (2-Tile-Streifen, siehe
+-- LayerModel.shiftTileContent). Vorher werden offene Zell-Edits des
+-- Zoomrasters committet. Danach den 3x3-Kontext frisch holen, aber den
+-- Zoom-Cursor stehen lassen, damit wiederholtes B + Pfeil dieselbe Zelle
+-- weiterschiebt. Nur der aktuelle Frame ist betroffen (FR-004).
 local function shiftActiveLayerContent(direction)
     if not (editorRoom and editorRoom.shiftActiveLayer) then return end
     local edits = collectEdits()
     if #edits > 0 and editorRoom.applyTileEdits then
         editorRoom:applyTileEdits(edits)
     end
-    if editorRoom:shiftActiveLayer(direction) then
+    local sr, sc = getSlotForCell(cursorRow, cursorCol)
+    local slot = slots[sr] and slots[sr][sc]
+    if not slot or slot.oob then return end
+    if editorRoom:shiftActiveLayer(direction, slot.frameIndexPos) then
         if editorRoom.currentZoomContext then
-            -- setFromEditorContext() setzt `ticks` auf 0 zurueck. Das ist hier
-            -- gewollt: ein Ebenen-Shift ist kein Zoom, also soll eine
-            -- angefangene Zoom-Out-Akkumulation nicht mitgeschleppt werden.
+            -- setFromEditorContext() zentriert den Cursor und setzt `ticks`
+            -- auf 0. Cursor hier bewusst zuruecksetzen (dieselbe Zelle bleibt
+            -- Ziel); `ticks`-Reset ist gewollt (ein Shift ist kein Zoom).
+            local savedRow, savedCol = cursorRow, cursorCol
             ZoomRoom:setFromEditorContext(editorRoom:currentZoomContext())
+            cursorRow, cursorCol = savedRow, savedCol
         end
         needsRedraw = true
         backgroundDirty = true
@@ -594,10 +578,6 @@ end
 
 -- Terminate-Hook (Contract E-03): ausstehende Änderungen ohne Room-Wechsel committen.
 function ZoomRoom:commitForTerminate()
-    -- Perf-Nachtrag US1: eine offene Verschiebe-Sitzung darf beim Beenden
-    -- (Home-Taste) nicht verloren gehen (unabhaengig davon, ob zusaetzlich
-    -- ungesicherte Malstriche vorliegen).
-    if editorRoom and editorRoom.flushLayerShift then editorRoom:flushLayerShift() end
     local edits = collectEdits()
     if #edits > 0 and editorRoom then
         editorRoom:applyTileEdits(edits)
@@ -686,17 +666,6 @@ function ZoomRoom:inputHandler()
         end,
         AButtonUp = function()
             endStroke()
-        end,
-        -- Perf-Nachtrag US1: B-Release ist der natuerliche Abschluss einer
-        -- Verschiebe-Sitzung (materialisiert + aktualisiert die 3x3-Vorschau
-        -- auf echte Tiles). Kein Muss fuer die Korrektheit -- jeder echte
-        -- Ausgang aus der ZoomRoom flusht bereits selbst (zoomIntoPixelRoom,
-        -- commitAndReturnToEditor, commitForTerminate, buildPauseMenuImage) --
-        -- haelt die Sitzungsdauer aber an eine einfache, vorhersehbare
-        -- Grenze ("solange B gehalten wird") statt sie unbestimmt offen zu
-        -- lassen.
-        BButtonUp = function()
-            flushShiftAndRefresh()
         end
     }
 end

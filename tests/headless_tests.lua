@@ -1934,14 +1934,11 @@ check(lastPickerLabel() == "Tile 1", "Picker: Wrap zurueck auf den Abwahl-Slot (
 
 -- ── US1: Pixel-Shift (Spec 010) ───────────────────────────────────────────
 
-section("LayerModel: shiftLayerContent verschiebt den Pixelinhalt um 1 Pixel (Spec 010, US1)")
+section("LayerModel: shiftTileContent verschiebt nur die Cursor-Zelle; Inhalt wandert in den Nachbarn und bleibt (Spec 010, US1, revidiert)")
 do
-    local it = playdate.graphics.imagetable.new(3)
+    local it = playdate.graphics.imagetable.new(2)
     it:setImage(1, newMockImage(16, 16, "white"))
-    it:setImage(2, newMockImage(16, 16, "black"))
-    local corner = newMockImage(16, 16, "white"); corner.pixels["0,0"] = true
-    it:setImage(3, corner)
-    local reg, nextIdx = {}, 3
+    local reg, nextIdx = {}, 1
     local getT = function(i) return it:getImage(i) end
     local regT = function(img)
         local h = ImageStoreCodec.hashTile(img)
@@ -1950,30 +1947,146 @@ do
         return nextIdx
     end
 
+    -- Basisebene, Zelle 1 traegt ein Tile mit einem schwarzen Pixel an der
+    -- RECHTEN Kante (15,5); Zelle 2 (rechter Nachbar) hat Pixel an der linken
+    -- Kante (0,10) und ganz rechts aussen (15,7).
     local e = LayerModel.newFrameLayersFromFlat(pos375(1))
-    e.layers[1].positions[1] = 3  -- Zelle 1 (oben links) traegt das Eck-Pixel-Tile
-    check(LayerModel.shiftLayerContent(e, 1, "right", getT, regT) == true, "'right' laeuft durch")
-    local c1 = it:getImage(e.layers[1].positions[1])
-    check(c1:sample(1, 0) == "black" and c1:sample(0, 0) ~= "black",
-        "'right': schwarzes Pixel wandert (0,0) -> (1,0), Tiles neu berechnet (FR-002)")
-    check(LayerModel.shiftLayerContent(e, 1, "left", getT, regT) == true, "'left' laeuft durch")
-    check(it:getImage(e.layers[1].positions[1]):sample(0, 0) == "black", "'left' macht 'right' exakt rueckgaengig")
-    check(LayerModel.shiftLayerContent(e, 1, "down", getT, regT) == true, "'down' laeuft durch")
-    check(it:getImage(e.layers[1].positions[1]):sample(0, 1) == "black", "'down': Pixel wandert (0,0) -> (0,1)")
+    local curTile = newMockImage(16, 16, "white"); curTile.pixels["15,5"] = true
+    local nbTile = newMockImage(16, 16, "white"); nbTile.pixels["0,10"] = true; nbTile.pixels["15,7"] = true
+    it:setImage(2, curTile); reg[ImageStoreCodec.hashTile(curTile)] = 2; nextIdx = 2
+    it:setImage(3, nbTile); reg[ImageStoreCodec.hashTile(nbTile)] = 3; nextIdx = 3
+    e.layers[1].positions[1] = 2
+    e.layers[1].positions[2] = 3
 
-    -- Wrap-Around: Pixel am rechten Bildrand (Zelle 25) erscheint nach 'right'
-    -- links in Zelle 1 wieder (kein Datenverlust, spec.md Edge Case / FR-005)
+    local changed = LayerModel.shiftTileContent(e, 1, 1, "right", getT, regT)
+    check(type(changed) == "table" and #changed == 2 and changed[1] == 1 and changed[2] == 2,
+        "'right' auf Zelle 1: genau Zelle 1 + rechter Nachbar (2) geaendert (nicht der ganze Screen)")
+    local c1 = it:getImage(e.layers[1].positions[1])
+    check(c1:sample(15, 5) ~= "black", "Zelle 1: das Kantenpixel ist ausgetreten (nicht mehr bei (15,5))")
+    check(c1:sample(0, 5) ~= "black", "Zelle 1: die von der Schieberichtung abgewandte Spalte 0 ist geleert")
+    local c2 = it:getImage(e.layers[1].positions[2])
+    check(c2:sample(0, 5) == "black", "Nachbar: der austretende Streifen der Zelle 1 sitzt jetzt an der linken Kante (0,5)")
+    check(c2:sample(1, 10) == "black", "Nachbar: sein alter Inhalt (0,10) ist als Teil des 2-Tile-Streifens mitgewandert -> (1,10)")
+    check(c2:sample(0, 10) ~= "black", "Nachbar: an (0,10) ist jetzt der Streifen der Zelle 1 (leer hier), nicht mehr das alte Pixel")
+    check(c2:sample(15, 7) ~= "black" and c2:sample(14, 7) ~= "black",
+        "Nachbar: sein aeusserstes Pixel (15,7) ist an der abgewandten Kante rausgeschoben (kein Wrap, nicht an Zelle 3 weitergereicht)")
+    check(e.layers[1].positions[3] == 1, "Zelle 3 (naechster Nachbar) unveraendert -- die Verschiebung reicht nicht weiter")
+
+    -- Wiederholtes Druecken: der Inhalt wandert Spalte fuer Spalte weiter in
+    -- den Nachbarn und bleibt dort (Akkumulation).
+    local e3 = LayerModel.newFrameLayersFromFlat(pos375(1))
+    local edge2 = newMockImage(16, 16, "white"); edge2.pixels["15,9"] = true; edge2.pixels["14,9"] = true
+    it:setImage(20, edge2); reg[ImageStoreCodec.hashTile(edge2)] = 20
+    e3.layers[1].positions[1] = 20
+    LayerModel.shiftTileContent(e3, 1, 1, "right", getT, regT)  -- 15,9->raus in Nachbar 0,9 ; 14,9->15,9
+    LayerModel.shiftTileContent(e3, 1, 1, "right", getT, regT)  -- 15,9->raus in Nachbar 0,9 ; Nachbar 0,9->1,9
+    local n2 = it:getImage(e3.layers[1].positions[2])
+    check(n2:sample(1, 9) == "black" and n2:sample(0, 9) == "black",
+        "2x 'right': beide urspruenglichen Pixel sind in den Nachbarn gewandert und geblieben ((0,9)+(1,9))")
+    local s1 = it:getImage(e3.layers[1].positions[1])
+    check(s1:sample(15, 9) ~= "black" and s1:sample(14, 9) ~= "black",
+        "2x 'right': die Ausgangszelle hat diese Pixel abgegeben")
+
+    -- Innerhalb der Zelle: ein Pixel, das NICHT an der Schiebekante liegt,
+    -- wandert nur 1px und bleibt in der Zelle.
     local e2 = LayerModel.newFrameLayersFromFlat(pos375(1))
-    local edge = newMockImage(16, 16, "white"); edge.pixels["15,0"] = true
-    it:setImage(60, edge)
-    e2.layers[1].positions[25] = 60
-    LayerModel.shiftLayerContent(e2, 1, "right", getT, regT)
-    check(it:getImage(e2.layers[1].positions[1]):sample(0, 0) == "black",
-        "'right' Wrap: Randpixel aus Zelle 25 erscheint links in Zelle 1 (FR-005, kein Datenverlust)")
+    local mid = newMockImage(16, 16, "white"); mid.pixels["4,4"] = true
+    it:setImage(10, mid); reg[ImageStoreCodec.hashTile(mid)] = 10
+    e2.layers[1].positions[1] = 10
+    LayerModel.shiftTileContent(e2, 1, 1, "right", getT, regT)
+    local m1 = it:getImage(e2.layers[1].positions[1])
+    check(m1:sample(5, 4) == "black" and m1:sample(4, 4) ~= "black",
+        "'right' innerhalb der Zelle: (4,4) -> (5,4), Pixel bleibt in der Zelle")
+    check(m1:sample(0, 4) ~= "black", "freigewordene Spalte 0 ist leer (Nicht-Tinte)")
 end
 
-section("EditorRoom: shiftActiveLayer wirkt nur auf die aktive Ebene + aktuellen Frame (Spec 010, US1, FR-004)")
-loadEditorV11("shift2l", {
+section("LayerModel: shiftTileContent -- alle vier Richtungen + Raster-Rand ohne Nachbar (Spec 010, US1)")
+do
+    local it = playdate.graphics.imagetable.new(1)
+    it:setImage(1, newMockImage(16, 16, "white"))
+    local reg, nextIdx = {}, 1
+    local getT = function(i) return it:getImage(i) end
+    local regT = function(img)
+        local h = ImageStoreCodec.hashTile(img)
+        if reg[h] then return reg[h] end
+        nextIdx = nextIdx + 1; it:setImage(nextIdx, img); reg[h] = nextIdx
+        return nextIdx
+    end
+    local function freshEntryAt(cellIdx, pixKey)
+        local e = LayerModel.newFrameLayersFromFlat(pos375(1))
+        local t = newMockImage(16, 16, "white"); t.pixels[pixKey] = true
+        local idx = regT(t)
+        e.layers[1].positions[cellIdx] = idx
+        return e
+    end
+
+    -- Zelle 27 = Raster (2,2): hat in alle vier Richtungen einen Nachbarn.
+    -- "up": Kantenpixel (7,0) tritt oben aus -> Nachbar 2 (Zelle darueber)
+    -- bekommt es an der UNTEREN Kante (7,15).
+    local eu = freshEntryAt(27, "7,0")
+    local cu = LayerModel.shiftTileContent(eu, 1, 27, "up", getT, regT)
+    check(#cu == 2 and cu[1] == 2 and cu[2] == 27, "'up' Zelle 27: Zelle 2 (darueber) + 27 geaendert")
+    check(it:getImage(eu.layers[1].positions[2]):sample(7, 15) == "black",
+        "'up': austretender oberer Streifen landet an der Unterkante des oberen Nachbarn (7,15)")
+
+    -- "down": Kantenpixel (7,15) -> Nachbar 52 (darunter) an der OBERKANTE (7,0).
+    local ed = freshEntryAt(27, "7,15")
+    LayerModel.shiftTileContent(ed, 1, 27, "down", getT, regT)
+    check(it:getImage(ed.layers[1].positions[52]):sample(7, 0) == "black",
+        "'down': austretender unterer Streifen landet an der Oberkante des unteren Nachbarn (7,0)")
+
+    -- "left": Kantenpixel (0,7) -> Nachbar 26 (links) an der RECHTEN Kante (15,7).
+    local el = freshEntryAt(27, "0,7")
+    LayerModel.shiftTileContent(el, 1, 27, "left", getT, regT)
+    check(it:getImage(el.layers[1].positions[26]):sample(15, 7) == "black",
+        "'left': austretender linker Streifen landet an der Rechtskante des linken Nachbarn (15,7)")
+
+    -- Raster-Rand: Zelle 1 nach "up" -> KEIN Nachbar, nur Zelle 1 aendert
+    -- sich, der austretende obere Streifen faellt weg.
+    local eEdge = freshEntryAt(1, "3,0")
+    local ce = LayerModel.shiftTileContent(eEdge, 1, 1, "up", getT, regT)
+    check(#ce == 1 and ce[1] == 1, "'up' an der Rasterkante (Zelle 1): nur Zelle 1 geaendert (kein Nachbar)")
+    check(it:getImage(eEdge.layers[1].positions[1]):sample(3, 0) ~= "black",
+        "'up' an der Kante: das Kantenpixel ist weg (faellt aus dem Raster)")
+
+    -- Zelle 25 (Raster (25,1), rechter Rand) nach "right" -> kein Nachbar.
+    local eR = freshEntryAt(25, "15,4")
+    local cR = LayerModel.shiftTileContent(eR, 1, 25, "right", getT, regT)
+    check(#cR == 1 and cR[1] == 25, "'right' am rechten Rasterrand (Zelle 25): nur Zelle 25 geaendert")
+end
+
+section("LayerModel: shiftTileContent auf oberer Ebene -- Nicht-Tinte = transparent, leere Zelle -> absent (Spec 010, US1)")
+do
+    local it = playdate.graphics.imagetable.new(1)
+    it:setImage(1, newMockImage(16, 16, "white"))
+    local reg, nextIdx = {}, 1
+    local getT = function(i) return it:getImage(i) end
+    local regT = function(img)
+        local h = ImageStoreCodec.hashTile(img)
+        if reg[h] then return reg[h] end
+        nextIdx = nextIdx + 1; it:setImage(nextIdx, img); reg[h] = nextIdx
+        return nextIdx
+    end
+    -- 3-Ebenen-Entry; obere Ebene (layerIndex 1) ist aktiv. Zelle 27 traegt
+    -- ein echtes Obere-Ebene-Tile (kColorClear-Grund) mit EINEM Ink-Pixel an
+    -- der rechten Kante (15,5); Nachbar 28 ist "absent" (0).
+    local e = LayerModel.newFrameLayersFromFlat(pos375(1))
+    e.layers[2].positions[27] = regT((function() local t = newMockImage(16,16,"clear"); t.pixels["15,5"] = true; return t end)())
+    e.layers[2].positions[28] = 0
+
+    local ch = LayerModel.shiftTileContent(e, 2, 27, "right", getT, regT)
+    check(#ch == 2, "obere Ebene: Zelle + Nachbar geaendert")
+    check(e.layers[2].positions[27] == 0,
+        "obere Ebene: die Ausgangszelle ist nach dem Austritt komplett transparent -> 'absent' (0)")
+    check(e.layers[2].positions[28] ~= 0,
+        "obere Ebene: der zuvor leere Nachbar traegt jetzt ein Tile (der austretende Streifen)")
+    check(it:getImage(e.layers[2].positions[28]):sample(0, 5) == "black",
+        "obere Ebene: der Streifen liegt an der linken Kante des Nachbarn (0,5)")
+end
+
+section("EditorRoom: shiftActiveLayer(dir, cellIdx) verschiebt genau diese Zelle + Nachbar, Rest unberuehrt (Spec 010, US1, FR-004)")
+do
+loadEditorV11("shift1t", {
     { frameIndex = 0, duration = 100, layers = {
         { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
         { layerIndex = 1, name = "Ink",  positions = pos375(0), visible = true },
@@ -1983,126 +2096,89 @@ loadEditorV11("shift2l", {
     } },
 }, 4)
 local sd = EditorRoom:getImageData()
-local corner = newMockImage(16, 16, "white"); corner.pixels["0,0"] = true
-sd.imagetable:setImage(4, corner)
-sd.frameLayers[1].layers[2].positions[1] = 4
+-- echtes Obere-Ebene-Tile: kColorClear-Grund + EIN Ink-Pixel an der Rechtskante
+local curTile = newMockImage(16, 16, "clear"); curTile.pixels["15,5"] = true
+sd.imagetable:setImage(4, curTile)
+sd.frameLayers[1].layers[2].positions[1] = 4   -- Zelle 1, obere Ebene
 sd.activeLayer = 2
 local f2before = {}
 for i = 1, 375 do f2before[i] = sd.frameLayers[2].layers[1].positions[i] end
-check(EditorRoom:shiftActiveLayer("right") == true, "shiftActiveLayer('right') laeuft durch")
--- Perf-Nachtrag US1: shiftActiveLayer materialisiert NICHT mehr sofort (siehe
--- naechster Testabschnitt) -- flushLayerShift() explizit anstossen, um das
--- Ergebnis wie bisher direkt pruefen zu koennen.
-check(EditorRoom:flushLayerShift() == true, "flushLayerShift() materialisiert die schwebende Verschiebung")
-local shiftedTile = sd.imagetable:getImage(sd.frameLayers[1].layers[2].positions[1])
-check(shiftedTile:sample(1, 0) == "black" and shiftedTile:sample(0, 0) ~= "black",
-    "aktive Ebene 2: Inhalt um 1 nach rechts verschoben")
-check(sd.frameLayers[1].layers[1].positions[1] == 1, "Basisebene (nicht aktiv) unveraendert")
+local pos3before = {}
+for i = 3, 375 do pos3before[i] = sd.frameLayers[1].layers[2].positions[i] end
+
+check(EditorRoom:shiftActiveLayer("right", 1) == true, "shiftActiveLayer('right', 1) laeuft durch")
+check(sd.frameLayers[1].layers[2].positions[1] == 0,
+    "Zelle 1 (obere Ebene): nach dem Austritt komplett transparent -> absent")
+local nb = sd.imagetable:getImage(sd.frameLayers[1].layers[2].positions[2])
+check(nb and nb:sample(0, 5) == "black", "Zelle 2: austretender Streifen an der linken Kante angekommen")
+check(sd.frameLayers[1].layers[1].positions[1] == 1, "Basisebene (nicht aktiv) an Zelle 1 unveraendert")
+local rest3ok = true
+for i = 3, 375 do if sd.frameLayers[1].layers[2].positions[i] ~= pos3before[i] then rest3ok = false end end
+check(rest3ok, "obere Ebene: alle Zellen ausser 1 und 2 unveraendert (kein Ganz-Ebenen-Shift)")
 local f2same = true
 for i = 1, 375 do if sd.frameLayers[2].layers[1].positions[i] ~= f2before[i] then f2same = false end end
 check(f2same, "Frame 2 vollstaendig unveraendert (FR-004)")
-check(#sd.frames[1] == 375, "flacher Composite-Cache nach dem Shift neu aufgebaut")
+check(sd.frames[1][1] ~= nil and sd.frames[1][2] ~= nil, "Composite-Cache an Zelle 1 + 2 nachgezogen")
 
--- Struktur ueberlebt Speichern + Laden (Pixel-Ebene: Simulator T058)
-sd.id = "shift2l-rt"
+-- ohne cellIdx -> Zelle unter dem Editor-Cursor (Default (1,1) -> Zelle 1)
+local curTile2 = newMockImage(16, 16, "clear"); curTile2.pixels["15,8"] = true
+sd.imagetable:setImage(5, curTile2)
+sd.frameLayers[1].layers[2].positions[1] = 5
+check(EditorRoom:shiftActiveLayer("right") == true, "shiftActiveLayer('right') ohne cellIdx nutzt die Cursor-Zelle")
+check(sd.imagetable:getImage(sd.frameLayers[1].layers[2].positions[2]):sample(0, 8) == "black",
+    "...und verschiebt genau die Cursor-Zelle (1) in den Nachbarn (2)")
+
+-- Struktur ueberlebt Speichern + Laden
+sd.id = "shift1t-rt"
 local shco = ImageStoreCodec.newSaveOperation(sd)
 while coroutine.status(shco) ~= "dead" do coroutine.resume(shco) end
 local shrl
-local shlco = ImageStoreCodec.newLoadOperation("shift2l-rt")
+local shlco = ImageStoreCodec.newLoadOperation("shift1t-rt")
 while coroutine.status(shlco) ~= "dead" do local ok, r = coroutine.resume(shlco); if ok and r then shrl = r end end
 check(shrl and #shrl.frameLayers[1].layers == 3 and #shrl.frameLayers[1].layers[2].positions == 375,
     "nach Save+Reload: 3 Ebenen, 375 Positionen erhalten")
 check(shrl and shrl.frameLayers[1].layers[1].positions[1] == 1, "nach Save+Reload: Basisebene unveraendert")
+end
 
-section("EditorRoom: Verschiebung ist gepuffert -- N Schritte + 1 Flush == N sofortige Einzelschritte (Perf-Nachtrag US1)")
+section("ZoomRoom: B + Pfeiltaste verschiebt die Zelle unter dem Zoom-Cursor (Spec 010, US1, FR-001)")
 do
-loadEditorV11("shiftbuf", {
-    { frameIndex = 0, duration = 100, layers = {
-        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
-        { layerIndex = 1, name = "Ink",  positions = pos375(0), visible = true },
-    } },
-}, 4)
-local sb = EditorRoom:getImageData()
-local corner2 = newMockImage(16, 16, "white"); corner2.pixels["0,0"] = true
-sb.imagetable:setImage(4, corner2)
-sb.frameLayers[1].layers[2].positions[1] = 4
-sb.activeLayer = 2
-
-check(EditorRoom:shiftActiveLayer("right") == true, "1. shiftActiveLayer('right') laeuft durch")
-check(sb.frameLayers[1].layers[2].positions[1] == 4, "VOR dem Flush: Zelle 1 unveraendert (Verschiebung ist gepuffert)")
-check(EditorRoom:shiftActiveLayer("right") == true, "2. shiftActiveLayer('right') (selbe Sitzung, akkumuliert nur den Versatz)")
-check(EditorRoom:shiftActiveLayer("right") == true, "3. shiftActiveLayer('right') (selbe Sitzung)")
-check(sb.frameLayers[1].layers[2].positions[1] == 4, "nach 3 gepufferten Schritten immer noch nicht materialisiert")
-check(EditorRoom:flushLayerShift() == true, "flushLayerShift() materialisiert die Sitzung EINMAL")
-check(EditorRoom:flushLayerShift() == false, "erneuter Flush ohne offene Sitzung ist ein No-op")
-local afterTile = sb.imagetable:getImage(sb.frameLayers[1].layers[2].positions[1])
-check(afterTile:sample(3, 0) == "black" and afterTile:sample(0, 0) ~= "black",
-    "3x 'right' gepuffert + 1x Flush == ein Schritt um den akkumulierten Versatz 3")
-
--- Referenz: dieselbe Nettoverschiebung UNGEPUFFERT ueber drei sofortige
--- LayerModel.shiftLayerContent()-Aufrufe -- muss zum selben Pixel-Ergebnis
--- fuehren (beweist die Offset-Algebra hinter der Pufferung).
-local cmpEntry = LayerModel.newFrameLayersFromFlat(pos375(0))
-local cmpTable = { [1] = newMockImage(16, 16, "white") }
-local cmpCorner = newMockImage(16, 16, "white"); cmpCorner.pixels["0,0"] = true
-cmpTable[2] = cmpCorner
-local cmpNext = 2
-local cmpReg = {}
-cmpEntry.layers[1].positions[1] = 2
-local cmpGetTile = function(i) return cmpTable[i] end
-local cmpRegisterTile = function(img)
-    local h = ImageStoreCodec.hashTile(img)
-    if cmpReg[h] then return cmpReg[h] end
-    cmpNext = cmpNext + 1; cmpTable[cmpNext] = img; cmpReg[h] = cmpNext
-    return cmpNext
-end
-for _ = 1, 3 do
-    LayerModel.shiftLayerContent(cmpEntry, 1, "right", cmpGetTile, cmpRegisterTile)
-end
-local cmpFinal = cmpTable[cmpEntry.layers[1].positions[1]]
-check(cmpFinal:sample(3, 0) == "black" and cmpFinal:sample(0, 0) ~= "black",
-    "Referenz: 3x sofortiger LayerModel.shiftLayerContent landet am selben Pixel (3,0)")
+    -- Mock-EditorRoom: prueft, dass ZoomRoom die Richtung UND eine Zell-Nummer
+    -- (die Cursor-Zelle) durchreicht.
+    local shiftArgs = {}
+    local edMock = {
+        applyTileEdits = noop,
+        shiftActiveLayer = function(_, dir, cellIdx)
+            table.insert(shiftArgs, { dir = dir, cellIdx = cellIdx }); return true
+        end,
+        currentZoomContext = function()
+            return { slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} }
+        end,
+    }
+    ctxSlots[2][2].frameIndexPos = 138   -- Cursor-Slot traegt eine Zell-Nummer
+    ZoomRoom:init(noop, {}, edMock)
+    ZoomRoom:setFromEditorContext({ slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} })
+    local zh = ZoomRoom:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    zh.upButtonDown()  -- ohne B -> nur Cursorbewegung
+    check(#shiftArgs == 0, "Pfeil ohne B verschiebt nichts (nur Cursor, Regressionsschutz)")
+    heldButtons[playdate.kButtonB] = true
+    zh.rightButtonDown()
+    heldButtons[playdate.kButtonB] = false
+    check(shiftArgs[1] and shiftArgs[1].dir == "right" and shiftArgs[1].cellIdx == 138,
+        "B + Pfeil ruft editorRoom:shiftActiveLayer(dir, <Cursor-Zelle>) auf")
 end
 
-section("EditorRoom: Malstrich waehrend offener Verschiebe-Sitzung flusht sie zuerst (applyTileEdits)")
+section("ZoomRoom: B + Pfeil verschiebt die echte Cursor-Zelle in den Nachbarn (Integration, Spec 010, US1)")
 do
-loadEditorV11("shiftpaint", {
-    { frameIndex = 0, duration = 100, layers = {
-        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
-        { layerIndex = 1, name = "Ink",  positions = pos375(0), visible = true },
-    } },
-}, 4)
-local sp = EditorRoom:getImageData()
-local corner3 = newMockImage(16, 16, "white"); corner3.pixels["0,0"] = true
-sp.imagetable:setImage(4, corner3)
-sp.frameLayers[1].layers[2].positions[1] = 4
-sp.activeLayer = 2
-
-check(EditorRoom:shiftActiveLayer("right") == true, "Shift oeffnet eine Sitzung an Zelle 1")
-check(sp.frameLayers[1].layers[2].positions[1] == 4, "VOR dem Malen/Flush: Zelle 1 unveraendert")
-
-local paintedTile = newMockImage(16, 16, "white"); paintedTile.pixels["5,5"] = true
-EditorRoom:applyTileEdits({ { frameIndexPos = 50, newImage = paintedTile } })  -- andere Zelle als die verschobene
-
-check(sp.frameLayers[1].layers[2].positions[1] ~= 4,
-    "applyTileEdits() hat die Sitzung zuerst geflusht (Zelle 1 jetzt materialisiert)")
-local shiftedAt1 = sp.imagetable:getImage(sp.frameLayers[1].layers[2].positions[1])
-check(shiftedAt1:sample(1, 0) == "black" and shiftedAt1:sample(0, 0) ~= "black",
-    "...und die Verschiebung ist tatsaechlich in Zelle 1 angekommen (nicht vom Flush ueberschrieben)")
-local paintedAt50 = sp.imagetable:getImage(sp.frameLayers[1].layers[2].positions[50])
-check(paintedAt50:sample(5, 5) == "black", "der Malstrich an Zelle 50 wurde zusaetzlich angewendet")
-end
-
-section("ZoomRoom: B-Release / Raum-Ausgang materialisiert eine offene Verschiebe-Sitzung (Perf-Nachtrag US1)")
-do
-loadEditorV11("zoomshift", {
+loadEditorV11("zoomshift1t", {
     { frameIndex = 0, duration = 100, layers = {
         { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
     } },
 }, 2)
 local zs = EditorRoom:getImageData()
-local corner4 = newMockImage(16, 16, "white"); corner4.pixels["0,0"] = true
-zs.imagetable:setImage(2, corner4)
+-- Editor-Cursor auf (1,1) -> Zoom-Kontext hat Zelle 1 im Zentrum (Slot 2,2).
+local curTile = newMockImage(16, 16, "white"); curTile.pixels["15,6"] = true
+zs.imagetable:setImage(2, curTile)
 zs.frameLayers[1].layers[1].positions[1] = 2
 
 local pixelMock = { setCurrentTile = noop }
@@ -2112,87 +2188,12 @@ local zih = ZoomRoom:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
 heldButtons[playdate.kButtonB] = true
 zih.rightButtonDown()
-check(zs.frameLayers[1].layers[1].positions[1] == 2, "B+Rechts: VOR jedem Flush unveraendert (gepuffert)")
 heldButtons[playdate.kButtonB] = false
-zih.BButtonUp()
-check(zs.frameLayers[1].layers[1].positions[1] ~= 2, "BButtonUp materialisiert die Sitzung")
-local flushedTile = zs.imagetable:getImage(zs.frameLayers[1].layers[1].positions[1])
-check(flushedTile:sample(1, 0) == "black" and flushedTile:sample(0, 0) ~= "black",
-    "...mit dem korrekt um 1 verschobenen Pixel")
-
--- Advisor-Punkt: ohne BButtonUp (Home-Taste waehrend B noch gehalten) darf
--- die Sitzung trotzdem nicht verloren gehen -- commitForTerminate() muss
--- selbst flushen.
-loadEditorV11("zoomshiftterm", {
-    { frameIndex = 0, duration = 100, layers = {
-        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
-    } },
-}, 2)
-local zt = EditorRoom:getImageData()
-local corner5 = newMockImage(16, 16, "white"); corner5.pixels["0,0"] = true
-zt.imagetable:setImage(2, corner5)
-zt.frameLayers[1].layers[1].positions[1] = 2
-ZoomRoom:init(function() end, pixelMock, EditorRoom)
-ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
-local zih2 = ZoomRoom:inputHandler()
-for b in pairs(heldButtons) do heldButtons[b] = nil end
-heldButtons[playdate.kButtonB] = true
-zih2.rightButtonDown()
-check(zt.frameLayers[1].layers[1].positions[1] == 2, "Sitzung offen, KEIN BButtonUp aufgerufen")
-ZoomRoom:commitForTerminate()  -- simuliert gameWillTerminate() waehrend B noch haelt
-check(zt.frameLayers[1].layers[1].positions[1] ~= 2,
-    "commitForTerminate() materialisiert die Sitzung trotzdem (kein Datenverlust beim Beenden)")
-heldButtons[playdate.kButtonB] = false
-
--- Reinzoomen in den PixelRoom (B haelt + Kurbel vorwaerts) waehrend eine
--- Sitzung offen ist, OHNE B loszulassen: muss ebenfalls flushen, sonst
--- zeigt "All Similar" im PixelRoom auf einen bereits verwaisten Tile-Index.
-loadEditorV11("zoomshiftpx", {
-    { frameIndex = 0, duration = 100, layers = {
-        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
-    } },
-}, 2)
-local zp = EditorRoom:getImageData()
-local corner6 = newMockImage(16, 16, "white"); corner6.pixels["0,0"] = true
-zp.imagetable:setImage(2, corner6)
-zp.frameLayers[1].layers[1].positions[1] = 2
-local pixelMock2 = { setCurrentTile = noop }
-ZoomRoom:init(function() end, pixelMock2, EditorRoom)
-ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
-local zih3 = ZoomRoom:inputHandler()
-for b in pairs(heldButtons) do heldButtons[b] = nil end
-heldButtons[playdate.kButtonB] = true
-zih3.rightButtonDown()  -- Shift, Sitzung bleibt offen
-check(zp.frameLayers[1].layers[1].positions[1] == 2, "Sitzung offen vor dem Reinzoomen")
-crankTicksValue = 4
-ZoomRoom:update()  -- B haelt + Kurbel vorwaerts -> zoomIntoPixelRoom()
-crankTicksValue = 0
-check(zp.frameLayers[1].layers[1].positions[1] ~= 2,
-    "Reinzoomen in den PixelRoom flusht die Sitzung zuerst (originalIndex bleibt fuer 'All Similar' korrekt)")
-heldButtons[playdate.kButtonB] = false
+check(zs.frameLayers[1].layers[1].positions[1] ~= 2, "B+Rechts: die Cursor-Zelle (1) wurde neu berechnet")
+check(zs.imagetable:getImage(zs.frameLayers[1].layers[1].positions[2]):sample(0, 6) == "black",
+    "B+Rechts: austretender Streifen der Cursor-Zelle liegt jetzt im rechten Nachbarn (Zelle 2)")
+check(zs.frameLayers[1].layers[1].positions[3] == 1, "andere Zellen der Basisebene unveraendert (kein Ganz-Screen-Shift)")
 end
-
-section("ZoomRoom: B + Pfeiltaste loest den Ebenen-Shift aus (Spec 010, US1, FR-001)")
-local shiftCalls = {}
-local edMock = {
-    applyTileEdits = noop,
-    shiftActiveLayer = function(_, dir) table.insert(shiftCalls, dir); return true end,
-    currentZoomContext = function()
-        return { slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} }
-    end,
-}
-ZoomRoom:init(noop, {}, edMock)
-ZoomRoom:setFromEditorContext({ slots = ctxSlots, gridState = ctxGridState, showGrid = true, imageData = {} })
-local zh = ZoomRoom:inputHandler()
-for b in pairs(heldButtons) do heldButtons[b] = nil end
-zh.upButtonDown()  -- ohne B -> nur Cursorbewegung
-check(#shiftCalls == 0, "Pfeil ohne B verschiebt nichts (nur Cursor, Regressionsschutz)")
-heldButtons[playdate.kButtonB] = true
-zh.rightButtonDown()
-zh.upButtonDown()
-heldButtons[playdate.kButtonB] = false
-check(shiftCalls[1] == "right" and shiftCalls[2] == "up",
-    "B + Pfeil ruft editorRoom:shiftActiveLayer mit der Richtung auf (FR-001)")
 
 -- ── SelectionRoom: Kreis-Schwenk des selektierten Eintrags (Spec 006 US6, ───
 -- revidiert) ──────────────────────────────────────────────────────────────

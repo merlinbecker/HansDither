@@ -271,27 +271,24 @@ function LayerModel.compositeToTiles(entry, getTile, registerTile)
     return out
 end
 
--- ── Pixel-Verschiebung (US1, contracts/layer-api.md "Layer:shift") ─────────
+-- ── Pixel-Verschiebung EINES Tiles (US1, revidiert 2026-09-01) ─────────────
 --
--- Design-Entscheidung (spec.md Edge Cases nennt "wraps or clips gracefully
--- (no data loss)" — beides zugleich ist nicht moeglich): WRAP-AROUND, weil
--- nur das garantiert, dass wirklich KEIN Bildinhalt verloren geht (analog
--- PixelRoom-Crank-Rotation).
+-- Einschraenkung aus dem Hardware-Test (ADR-043): B + Pfeiltaste verschiebt
+-- den Inhalt der Zelle unter dem Cursor um 1 nativen Pixel, NICHT den
+-- gesamten Screen. Der Inhalt wandert dabei in die Nachbarzelle in
+-- Schieberichtung und bleibt dort: Ausgangszelle UND dieser eine Nachbar
+-- bilden fuer den Schritt einen gemeinsamen 2-Tile-Streifen (32x16 bzw.
+-- 16x32), der als Ganzes um 1px verschoben wird. Die von der Schieberichtung
+-- abgewandte Randkante der Ausgangszelle wird mit dem ebenenabhaengigen
+-- "Nicht-Tinte"-Zustand gefuellt (weiss auf der Basisebene, transparent auf
+-- den oberen Ebenen); die abgewandte Randkante des Nachbarn faellt weg (KEIN
+-- Wrap, KEIN Weiterreichen an eine dritte Zelle). Liegt die Ausgangszelle am
+-- Rand des 25x15-Rasters, faellt der austretende Streifen weg und nur die
+-- Ausgangszelle aendert sich.
 --
--- Perf-Nachtrag (Review nach Hardware-Test, 2026-09-01, ADR-043): urspruenglich
--- eine einzige Funktion (dekodieren -> verschobenes Zweitraster bauen ->
--- alle 375 Tiles neu aufbauen), gemessen ~192.000 image:sample()-Aufrufe +
--- 375 image.new() FUER EINEN 1px-Schritt. In drei Bausteine zerlegt, damit
--- EditorRoom.shiftActiveLayer den Decode nur EINMAL pro Verschiebe-Sitzung
--- zahlt (siehe dort) und wiederholte Tastendruecke bloss den Lese-Versatz
--- verschieben, statt ein zweites 96000-Zellen-Raster zu kopieren:
---
---   decodeLayerGrid(layer, getTile)                 -- einmal: Pixel lesen
---   materializeShiftedGrid(layer, grid, offX, offY, registerTile)  -- einmal: Tiles bauen
---   imageFromGrid(grid, offX, offY, tileCol0, tileRow0)            -- Live-Vorschau, 1 Tile
---
--- shiftLayerContent bleibt als synchroner Einzelschritt (bestehende Aufrufer/
--- Tests bleiben unveraendert gueltig) — nur ein duenner Wrapper der drei.
+-- Die Operation ist lokal (max. 2 Tiles je Tastendruck, ~2500 Ops) und
+-- braucht die frueher noetige aufgeschobene Ganz-Ebenen-Materialisierung
+-- (ADR-043, erste Fassung) nicht mehr.
 
 -- Richtung -> (dx,dy) fuer einen 1-Pixel-Schritt. nil bei ungueltiger Richtung.
 function LayerModel.shiftDelta(direction)
@@ -303,113 +300,119 @@ function LayerModel.shiftDelta(direction)
     return nil
 end
 
--- Dekodiert den vollen 400x240-Pixelinhalt einer Ebene als 3-Zustands-Codes
--- (grid[gy][gx]). "absent" (0) Zellen zaehlen als voll-transparent. Reiner
--- Lesevorgang, mutiert weder layer noch die Imagetable.
-function LayerModel.decodeLayerGrid(layer, getTile)
-    local cols, rows, tilePx = LayerModel.GRID_COLS, LayerModel.GRID_ROWS, LayerModel.TILE_PX
-    local grid = {}
-    for gy = 0, rows * tilePx - 1 do grid[gy] = {} end
-    for ty = 0, rows - 1 do
-        for tx = 0, cols - 1 do
-            local pos = ty * cols + tx + 1
-            local tileIndex = layer.positions[pos]
-            local img = (tileIndex and tileIndex ~= LayerModel.ABSENT) and getTile(tileIndex) or nil
-            for py = 0, tilePx - 1 do
-                for px = 0, tilePx - 1 do
-                    local gx = tx * tilePx + px
-                    local gy2 = ty * tilePx + py
-                    grid[gy2][gx] = img and PixelTransparency.sampleState(img, px, py)
-                        or PixelTransparency.TRANSPARENT
-                end
-            end
-        end
-    end
-    return grid
-end
-
--- Baut alle 375 Tiles der Ebene aus einem dekodierten Pixelraster (siehe
--- decodeLayerGrid) neu auf, GELESEN durch einen Wrap-Versatz (offX,offY) —
--- das Verschieben selbst ist also nur eine Indexverschiebung beim Lesen,
--- keine zweite 96000-Zellen-Kopie (spart das fruehere "shifted"-Zweitraster
--- auch im synchronen Einzelschritt-Fall). Schreibt layer.positions; komplett
--- transparente Tiles werden auf oberen Ebenen als "absent" (0) abgelegt.
-function LayerModel.materializeShiftedGrid(layer, grid, offX, offY, registerTile)
-    local gfx = playdate.graphics
-    local cols, rows, tilePx = LayerModel.GRID_COLS, LayerModel.GRID_ROWS, LayerModel.TILE_PX
-    local width, height = cols * tilePx, rows * tilePx
-
-    for ty = 0, rows - 1 do
-        for tx = 0, cols - 1 do
-            local pos = ty * cols + tx + 1
-            local img = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
-            local allTransparent = true
-            gfx.pushContext(img)
-                for py = 0, tilePx - 1 do
-                    for px = 0, tilePx - 1 do
-                        local gx = (tx * tilePx + px - offX) % width
-                        local gy = (ty * tilePx + py - offY) % height
-                        local state = grid[gy][gx]
-                        if state ~= PixelTransparency.TRANSPARENT then
-                            allTransparent = false
-                            gfx.setColor(PixelTransparency.toColor(state))
-                            gfx.drawPixel(px, py)
-                        end
-                    end
-                end
-            gfx.popContext()
-
-            if allTransparent and layer.layerIndex ~= 0 then
-                layer.positions[pos] = LayerModel.ABSENT
-            else
-                layer.positions[pos] = registerTile(img)
-            end
-        end
-    end
-end
-
--- Synthetisiert EIN 16x16-Tile-Bild direkt aus einem dekodierten Pixelraster
--- an Kachelposition (tileCol0,tileRow0) (0-basiert), gelesen durch denselben
--- Wrap-Versatz wie materializeShiftedGrid — fuer eine Live-Vorschau, WAEHREND
--- eine Verschiebe-Sitzung noch offen ist, ohne alle 375 Tiles neu zu
--- bauen/hashen (EditorRoom.buildZoomContext).
-function LayerModel.imageFromGrid(grid, offX, offY, tileCol0, tileRow0)
-    local gfx = playdate.graphics
-    local tilePx = LayerModel.TILE_PX
-    local width, height = LayerModel.GRID_COLS * tilePx, LayerModel.GRID_ROWS * tilePx
-    local img = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
-    gfx.pushContext(img)
-        for py = 0, tilePx - 1 do
-            for px = 0, tilePx - 1 do
-                local gx = (tileCol0 * tilePx + px - offX) % width
-                local gy = (tileRow0 * tilePx + py - offY) % height
-                local state = grid[gy][gx]
-                if state ~= PixelTransparency.TRANSPARENT then
-                    gfx.setColor(PixelTransparency.toColor(state))
-                    gfx.drawPixel(px, py)
-                end
-            end
-        end
-    gfx.popContext()
-    return img
-end
-
--- Verschiebt den gesamten 400x240-Pixelinhalt der Ebene active1 um genau 1
--- nativen Pixel in Richtung "up"|"down"|"left"|"right" und baut alle 375
--- Tiles der Ebene neu auf (synchroner Einzelschritt — siehe Perf-Nachtrag
--- oben; EditorRoom.shiftActiveLayer nutzt fuer Mehrfach-Schritte stattdessen
--- decodeLayerGrid/materializeShiftedGrid direkt).
+-- Verschiebt den Inhalt der Zelle cellIdx (1-basiert, 1..375) der aktiven
+-- Ebene um genau 1 nativen Pixel in Richtung "up"|"down"|"left"|"right".
 --
 -- getTile(index)->image (16x16 der Imagetable), registerTile(image)->
 -- dedupter 1-basierter Index. "absent" (0) Zellen zaehlen als voll-clear.
-function LayerModel.shiftLayerContent(entry, active1, direction, getTile, registerTile)
+-- Rueckgabe: sortierte Liste der tatsaechlich geaenderten Zell-Indizes
+-- (1 oder 2 Eintraege), oder nil bei ungueltiger Eingabe.
+function LayerModel.shiftTileContent(entry, active1, cellIdx, direction, getTile, registerTile)
     local layer = LayerModel.getLayer(entry, active1)
-    if not layer then return false end
+    if not layer then return nil end
     local dx, dy = LayerModel.shiftDelta(direction)
-    if not dx then return false end
-    local grid = LayerModel.decodeLayerGrid(layer, getTile)
-    LayerModel.materializeShiftedGrid(layer, grid, dx, dy, registerTile)
-    return true
+    if not dx then return nil end
+    local cols, rows, tilePx = LayerModel.GRID_COLS, LayerModel.GRID_ROWS, LayerModel.TILE_PX
+    if type(cellIdx) ~= "number" or cellIdx < 1 or cellIdx > cols * rows then return nil end
+
+    local gfx = playdate.graphics
+    local offState = (layer.layerIndex == 0) and PixelTransparency.EMPTY or PixelTransparency.TRANSPARENT
+    local last = tilePx - 1
+
+    -- Nachbarzelle in Schieberichtung (0-basierte Zell-Koordinaten).
+    local cx, cy = (cellIdx - 1) % cols, (cellIdx - 1) // cols
+    local nx, ny = cx + dx, cy + dy
+    local neighborIdx = (nx >= 0 and nx < cols and ny >= 0 and ny < rows)
+        and (ny * cols + nx + 1) or nil
+
+    -- 16x16-Raster einer Zelle als 3-Zustands-Codes ("absent" -> voll clear).
+    local function decodeCell(idx)
+        local tileIndex = layer.positions[idx]
+        local img = (tileIndex and tileIndex ~= LayerModel.ABSENT) and getTile(tileIndex) or nil
+        local g = {}
+        for py = 0, last do
+            g[py] = {}
+            for px = 0, last do
+                g[py][px] = img and PixelTransparency.sampleState(img, px, py)
+                    or PixelTransparency.TRANSPARENT
+            end
+        end
+        return g
+    end
+
+    -- 16x16-Raster als (dedupliziertes) Tile in layer.positions[idx] schreiben;
+    -- komplett transparent auf oberen Ebenen -> "absent" (0).
+    local function writeCell(idx, g)
+        local img = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
+        local allTransparent = true
+        gfx.pushContext(img)
+            for py = 0, last do
+                for px = 0, last do
+                    local state = g[py][px]
+                    if state ~= PixelTransparency.TRANSPARENT then
+                        allTransparent = false
+                        gfx.setColor(PixelTransparency.toColor(state))
+                        gfx.drawPixel(px, py)
+                    end
+                end
+            end
+        gfx.popContext()
+        if allTransparent and layer.layerIndex ~= 0 then
+            layer.positions[idx] = LayerModel.ABSENT
+        else
+            layer.positions[idx] = registerTile(img)
+        end
+    end
+
+    local cur = decodeCell(cellIdx)
+
+    -- Ausgangszelle: um 1px verschoben, die von der Schieberichtung abgewandte
+    -- Randkante wird mit offState gefuellt.
+    local newCur = {}
+    for py = 0, last do
+        newCur[py] = {}
+        for px = 0, last do
+            local sx, sy = px - dx, py - dy
+            if sx >= 0 and sx <= last and sy >= 0 and sy <= last then
+                newCur[py][px] = cur[sy][sx]
+            else
+                newCur[py][px] = offState
+            end
+        end
+    end
+    writeCell(cellIdx, newCur)
+    local changed = { cellIdx }
+
+    if neighborIdx then
+        -- Nachbar = zweite Haelfte des 2-Tile-Streifens: sein der Ausgangszelle
+        -- zugewandter Rand bekommt den austretenden Streifen der Ausgangszelle,
+        -- der Rest schiebt in dieselbe Richtung mit, der abgewandte Rand faellt
+        -- weg. edgeX/edgeY zeigen auf die austretende Kante der Ausgangszelle.
+        local edgeX, edgeY
+        if dx == 1 then edgeX = last elseif dx == -1 then edgeX = 0 end
+        if dy == 1 then edgeY = last elseif dy == -1 then edgeY = 0 end
+        local nb = decodeCell(neighborIdx)
+        local newNb = {}
+        for py = 0, last do
+            newNb[py] = {}
+            for px = 0, last do
+                local sx, sy = px - dx, py - dy
+                if sx >= 0 and sx <= last and sy >= 0 and sy <= last then
+                    newNb[py][px] = nb[sy][sx]
+                else
+                    -- 0 ist in Lua truthy, daher deckt "edgeX or px" den Fall
+                    -- edgeX == 0 korrekt ab (edgeX ist nil nur auf der NICHT-
+                    -- Schiebeachse).
+                    newNb[py][px] = cur[edgeY or py][edgeX or px]
+                end
+            end
+        end
+        writeCell(neighborIdx, newNb)
+        changed[#changed + 1] = neighborIdx
+    end
+
+    table.sort(changed)
+    return changed
 end
 
 return LayerModel
