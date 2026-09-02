@@ -11,7 +11,7 @@
 Hans-Dither gains four editing capabilities:
 
 1. **Precise Pixel Shifting (US1, P1)**: hold B + arrow keys in Zoom View to shift the content of **the tile under the cursor** 1 pixel at a time; the strip that crosses the boundary moves into the neighbour tile in that direction (2-tile strip, no wrap). *(Revised 2026-09-01, from hardware testing — was "the active layer's content"; see ADR-043.)*
-2. **Transparency Support (US2, P1)**: per-pixel transparency stored as `kColorClear` in the tile bitmap. The non-ink pixel state is **white on Layer 1**, **transparent on Layers 2–3**. Painting in Pixel View is **A only** — the A-press eraser reaches that non-ink state; B does not paint. *(Fifth Round, from hardware testing — supersedes "B places the non-ink state".)*
+2. **Transparency Support (US2, P1)**: per-pixel transparency stored as `kColorClear` in the tile bitmap. Layer 1 stays 2-state (ink/white); Layers 2–3 have 3 reachable paint states (ink/white/transparent) and default to transparent (never white) wherever no tile is placed yet. Painting in Pixel View is **A only** — on Layer 1 it toggles ink/white; on Layers 2–3 it cycles ink → white → transparent → ink; B does not paint. *(Sixth Round, from a debugging session — supersedes the Fifth Round's Layers 2–3 ink/transparent-only toggle.)*
 3. **Layer & Frame Switching (US3, P1)**: every frame has a **fixed structure of exactly 3 layers** (no add/delete, like the 12-frame cap). **B + Up/Down** cycles the active layer; **B + Left/Right** steps frames (B + Right on the last frame appends one). *(Fourth Round, from hardware testing — supersedes "Up/Down + Crank".)*
 4. **Frame Management View (US4, P2)**: hold B + Crank backward in Tile View to open a list of all frames; reorder frames and delete frames (min. 1). No Layer View — layers are fixed.
 5. **Tile Picker & Eyedropper Toast (US5, Fourth Round)**: turning the Crank (no B) in Tile View opens a filmstrip picker over the *referenced* tiles (~30°/tile, wraparound, auto-hide); the eyedropper (short B-tap) shows "Tile N picked" briefly.
@@ -144,14 +144,14 @@ specs/010-layer-management-with-transparency/
 
 ```text
 Source/                          # flat — there is NO Rooms/ or Models/ dir
-├── EditorRoom.lua               # "Tile View": B+D-Pad layer/frame switch, Crank tile picker, composite cache, shift entry, B+Crank-back → US4
-├── ZoomRoom.lua                 # "Zoom View": B + arrows → shift the cursor's tile into its neighbour (ADR-043)
-├── PixelRoom.lua                # "Pixel View": 3-state grid, layer-dependent off-state, A-only paint (B does not paint — Fifth Round)
+├── EditorRoom.lua               # "Tile View": B+D-Pad layer/frame switch, Crank tile picker, composite cache (pixel-perfect via LayerModel.compositeCellTile/compositeToTiles, T053), shift entry, B+Crank-back → US4
+├── ZoomRoom.lua                 # "Zoom View": B + arrows → shift the cursor's tile into its neighbour (ADR-043); onion-skin backdrop (LayerModel.compositeBelow) shows layers below the active one through absent/transparent pixels while editing (Seventh Round)
+├── PixelRoom.lua                # "Pixel View": layer-dependent paint cycle (Layer 1: 2-state ink/white; Layers 2-3: 3-state ink/white/transparent), A-only paint (B does not paint — Fifth/Sixth Round)
 ├── FrameManagementView.lua      # NEW (US4): list/reorder/delete frames
-├── LayerModel.lua               # NEW: plain-table frame-layer model (always 3), compositing, shiftTileContent
+├── LayerModel.lua               # NEW: plain-table frame-layer model (always 3), compositing (compositeAt/compositeToFlat = cheap cell-level pick; compositeCellTile/compositeToTiles = pixel-perfect merge, wired into the render path Seventh Round; compositeBelow = onion-skin backdrop), shiftTileContent
 ├── PixelTransparency.lua        # NEW: 3-code pixel state ↔ gfx colours
 ├── ImageStore.lua               # MODIFY: createImage emits 3-layer frameLayers
-├── ImageStoreCodec.lua          # MODIFY: v1.1 save/load, pad-to-3, 3-class hash, layered prune
+├── ImageStoreCodec.lua          # MODIFY: v1.1 save/load (load path now pixel-perfect via compositeToTiles, Seventh Round), pad-to-3, 3-class hash, layered prune
 └── main.lua                     # MODIFY: import + wire FrameManagementView
 
 tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story

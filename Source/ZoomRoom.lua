@@ -122,7 +122,12 @@ local function buildWorkingImage(slotRow, slotCol)
     if base then
         img = base:copy()
     else
-        img = gfx.image.new(TILE_PX, TILE_PX, gfx.kColorWhite)
+        -- Spec 010 (US2): eine noch nicht in der Tilemap vorhandene Zelle
+        -- ("absent") faengt auf der Basisebene weiss an, auf den Ebenen 2-3
+        -- dagegen transparent - sonst wuerde ein neues Tile auf einer oberen
+        -- Ebene die darunterliegenden Ebenen faelschlich weiss verdecken.
+        local blank = activeLayerIsBase and gfx.kColorWhite or gfx.kColorClear
+        img = gfx.image.new(TILE_PX, TILE_PX, blank)
     end
     local baseRow = (slotRow - 1) * CELLS_PER_TILE
     local baseCol = (slotCol - 1) * CELLS_PER_TILE
@@ -182,12 +187,29 @@ end
 -- - Editier-Ergebnis ist real einheitlich, keine Subpixel-Illusion vortaeuschen).
 -- Wird sowohl beim einmaligen Cache-Aufbau (alle Zellen) als auch beim
 -- Overlay-Redraw (nur changedCells) verwendet (Spec 008, AD-035).
+--
+-- Onion-Skin (Bugfix, Debugging-Session 2026-09-01): fehlt der aktiven Ebene
+-- an dieser Stelle ein Pixel (kColorClear oder die Zelle traegt ueberhaupt
+-- kein Tile bei — "absent"), scheint slot.backgroundImage durch (die darunter
+-- liegenden Ebenen, pixelgenau vorkompositiert von EditorRoom.buildZoomContext
+-- via LayerModel.compositeBelow). Rein visuell — editiert/committet wird
+-- weiterhin ausschliesslich fg (die aktive Ebene selbst, siehe buildWorkingImage).
+local function sampleWithBackground(fg, bg, px, py)
+    local sample = fg and fg:sample(px, py) or nil
+    if sample == nil or sample == gfx.kColorClear then
+        sample = bg and bg:sample(px, py) or gfx.kColorWhite
+    end
+    return sample
+end
+
 local function drawCell(r, c)
     local x = OFFSET_X + (c - 1) * CELL_SIZE
     local y = OFFSET_Y + (r - 1) * CELL_SIZE
     local sr, sc = getSlotForCell(r, c)
     local slot = slots[sr][sc]
-    local base = (slot and not slot.oob) and (slot.editedImage or slot.originalImage) or nil
+    local fg = (slot and not slot.oob) and (slot.editedImage or slot.originalImage) or nil
+    local bg = (slot and not slot.oob) and slot.backgroundImage or nil
+    local base = fg or bg
 
     if base and gridState[r][c] == baselineGrid[r][c] then
         local baseRow = (sr - 1) * CELLS_PER_TILE
@@ -195,10 +217,10 @@ local function drawCell(r, c)
         local px = (c - baseCol - 1) * PX_PER_CELL
         local py = (r - baseRow - 1) * PX_PER_CELL
         local quadrants = {
-            { base:sample(px, py), x, y },
-            { base:sample(px + 1, py), x + SUBPIXEL_SIZE, y },
-            { base:sample(px, py + 1), x, y + SUBPIXEL_SIZE },
-            { base:sample(px + 1, py + 1), x + SUBPIXEL_SIZE, y + SUBPIXEL_SIZE }
+            { sampleWithBackground(fg, bg, px, py), x, y },
+            { sampleWithBackground(fg, bg, px + 1, py), x + SUBPIXEL_SIZE, y },
+            { sampleWithBackground(fg, bg, px, py + 1), x, y + SUBPIXEL_SIZE },
+            { sampleWithBackground(fg, bg, px + 1, py + 1), x + SUBPIXEL_SIZE, y + SUBPIXEL_SIZE }
         }
         for _, q in ipairs(quadrants) do
             gfx.setColor(q[1] == gfx.kColorBlack and gfx.kColorBlack or gfx.kColorWhite)

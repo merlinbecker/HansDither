@@ -3,18 +3,20 @@
 -- Malvorgang setzt genau 1 nativen Pixel (FR-011).
 -- "All Similar" und "Invert" bleiben als Systemmenü-Funktionen erhalten (FR-015).
 --
--- Spec 010 (US2, 5. Runde — Hardware-Test): gemalt wird AUSSCHLIESSLICH mit A.
--- A-Druck toggelt zwischen Tinte (OPAQUE) und dem ebenenabhaengigen
--- "Nicht-Tinte"-Zustand (offState): EMPTY/weiss auf der Basisebene,
--- TRANSPARENT/kColorClear auf den Ebenen 2-3 (Radierer, wie Spec 008). Auf
--- einer oberen Ebene erreicht ein A-Strich auf Tinte damit direkt den
--- transparenten Zustand — eine dedizierte dritte Maltaste ("Y" in den
--- Plan-Artefakten) existiert auf der Playdate nicht. B malt NICHT (frueher
--- FR-007): B ist allein der Zoom-Out-Modifier — B halten + Kurbel zurueck
--- verlaesst den PixelRoom (update(), Contract PR-01); ein einzelner B-Tipp
--- bleibt folgenlos. Transparente Pixel landen als kColorClear im Tile und
--- werden ueber den 3-Zustands-hashTile getrennt dedupliziert (spec.md Edge
--- Case Z.104).
+-- Spec 010 (US2, 6. Runde — Hardware-Test): gemalt wird AUSSCHLIESSLICH mit A.
+-- Auf der Basisebene toggelt ein A-Strich zwischen Tinte (OPAQUE) und EMPTY/
+-- weiss (2 Zustaende, wie zuvor) — die Basisebene kennt keine Transparenz.
+-- Auf den Ebenen 2-3 durchlaeuft ein A-Strich stattdessen einen 3-Zustands-
+-- Zyklus OPAQUE -> EMPTY/weiss -> TRANSPARENT/kColorClear -> OPAQUE: ein
+-- gemalter Strich malt zunaechst Tinte, ein weiterer A-Strich auf demselben
+-- Pixel macht daraus weiss, ein dritter macht daraus transparent (Radierer).
+-- Eine dedizierte dritte Maltaste ("Y" in den Plan-Artefakten) existiert auf
+-- der Playdate nicht, daher zyklt A durch alle 3 Zustaende. B malt NICHT
+-- (frueher FR-007): B ist allein der Zoom-Out-Modifier — B halten + Kurbel
+-- zurueck verlaesst den PixelRoom (update(), Contract PR-01); ein einzelner
+-- B-Tipp bleibt folgenlos. Transparente Pixel landen als kColorClear im Tile
+-- und werden ueber den 3-Zustands-hashTile getrennt dedupliziert (spec.md
+-- Edge Case Z.104).
 import "CoreLibs/graphics"
 import "PixelTransparency"
 import "PencilCursor"
@@ -153,9 +155,12 @@ local function rotateGridCounterClockwise()
 end
 
 -- Pencil-Strich: der A-Tastendruck bestimmt den Malwert des ganzen Strichs.
---  * A auf Tinte -> Strich malt den ebenenabhaengigen "Nicht-Tinte"-Zustand
---    (offState: weiss auf Ebene 1, transparent auf Ebenen 2-3 — Radierer,
---    Spec 008 / FR-008); sonst OPAQUE.
+--  * Basisebene (offState == EMPTY): 2-Zustands-Toggle wie bisher — A auf
+--    Tinte malt weiss, sonst Tinte (FR-008).
+--  * Ebenen 2-3 (offState == TRANSPARENT): 3-Zustands-Zyklus OPAQUE -> EMPTY
+--    -> TRANSPARENT -> OPAQUE (weiss ist auf den oberen Ebenen ein
+--    eigenstaendiger, mit A erreichbarer Malzustand, nicht nur ein
+--    Durchgangswert zu transparent).
 -- Bewegungen mit gehaltenem A malen denselben Wert weiter. B startet keinen
 -- Strich (Spec 010, 5. Runde — Hardware-Test) — nur A malt.
 local strokeValue = nil   -- 3-Zustands-Code des laufenden Strichs, nil = kein Strich
@@ -168,10 +173,22 @@ local function paintCurrentCell(value)
     end
 end
 
+-- Naechster Malwert fuer einen A-Strich, ausgehend vom aktuellen Zustand der
+-- Zelle unter dem Cursor (6. Runde): auf Ebenen 2-3 ein 3-Zustands-Zyklus,
+-- auf der Basisebene weiterhin ein 2-Zustands-Toggle.
+local function nextStrokeValue(current)
+    if offState == TRANSPARENT then
+        if current == OPAQUE then return EMPTY
+        elseif current == EMPTY then return TRANSPARENT
+        else return OPAQUE end
+    end
+    return (current == OPAQUE) and offState or OPAQUE
+end
+
 local function beginStroke()
     local _, row, col = gridView:getSelection()
     if not (row and col and gridState[row]) then return end
-    strokeValue = (gridState[row][col] == OPAQUE) and offState or OPAQUE
+    strokeValue = nextStrokeValue(gridState[row][col])
     paintCurrentCell(strokeValue)
 end
 

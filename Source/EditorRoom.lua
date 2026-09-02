@@ -204,12 +204,44 @@ local function activeLayerObj()
     return entry.layers[imageData.activeLayer]
 end
 
--- Kompositiert genau eine Zelle des aktuellen Frames neu in den flachen
--- Cache + die Tilemap (nach einer Einzelzellen-Mutation).
+-- Hängt ein Tile an die Imagetable an; wächst die Table notfalls durch Neuaufbau
+-- (gemeinsame Implementierung im Codec, Spec 010 T053).
+local function appendTileImage(img)
+    local newTable, idx = ImageStoreCodec.appendTileToImagetable(imageData.imagetable, img)
+    if newTable ~= imageData.imagetable then
+        imageData.imagetable = newTable
+        if tilemap then
+            tilemap:setImageTable(newTable)
+        end
+    end
+    return idx
+end
+
+-- getTile/registerTile-Closures fuer die LayerModel-Kompositierfunktionen
+-- (compositeCellTile/compositeToTiles): registerTile dedupliziert ueber
+-- imageData.hashIndex und haengt neue gemergte Tiles ueber appendTileImage()
+-- an (waechst imageData.imagetable + tilemap bei Bedarf).
+local function getTile(idx) return imageData.imagetable:getImage(idx) end
+local function registerTile(img)
+    local hash = ImageStoreCodec.hashTile(img)
+    local existing = imageData.hashIndex[hash]
+    if existing and imagesEqual(imageData.imagetable:getImage(existing), img) then
+        return existing
+    end
+    local idx = appendTileImage(img)
+    imageData.hashIndex[hash] = idx
+    return idx
+end
+
+-- Kompositiert genau eine Zelle des aktuellen Frames pixelgenau neu in den
+-- flachen Cache + die Tilemap (nach einer Einzelzellen-Mutation). Task T053:
+-- compositeCellTile() statt der zellenweisen Einzel-Tile-Auswahl, damit
+-- transparente Pixel einer oberen Ebene die darunterliegende Ebene wirklich
+-- durchscheinen lassen (nicht nur den Leerzustand der Tilemap-Zelle zeigen).
 local function recompositeCell(cellIdx)
     local entry = currentEntry()
     if not entry or not imageData.frames[currentFrame] then return end
-    local idx = LayerModel.compositeAt(entry, cellIdx)
+    local idx = LayerModel.compositeCellTile(entry, cellIdx, getTile, registerTile)
     imageData.frames[currentFrame][cellIdx] = idx
     if tilemap then
         local x = ((cellIdx - 1) % GRID_COLS) + 1
@@ -220,12 +252,12 @@ local function recompositeCell(cellIdx)
     needsRedraw = true
 end
 
--- Kompositiert den gesamten aktuellen Frame neu (nach Frame-Wechsel,
--- "clear screen", Ebenen-Add/Delete).
+-- Kompositiert den gesamten aktuellen Frame pixelgenau neu (nach Frame-
+-- Wechsel, "clear screen", Ebenen-Add/Delete; Task T053, siehe recompositeCell).
 local function recompositeCurrentFrame()
     local entry = currentEntry()
     if not entry then return end
-    imageData.frames[currentFrame] = LayerModel.compositeToFlat(entry)
+    imageData.frames[currentFrame] = LayerModel.compositeToTiles(entry, getTile, registerTile)
     updateTilemapFrame()
     pickerTileList = nil  -- Tile-Menge kann sich geaendert haben
     needsRedraw = true
@@ -248,25 +280,6 @@ function EditorRoom:getActiveLayerInfo()
     if not entry then return nil end
     local i = LayerModel.clampActive(entry, imageData.activeLayer or 1)
     return { index = i, count = #entry.layers, name = entry.layers[i].name }
-end
-
--- Hängt ein Tile an die Imagetable an; wächst die Table notfalls durch Neuaufbau.
-local function appendTileImage(img)
-    local it = imageData.imagetable
-    local n = it:getLength()
-    local ok = pcall(function() it:setImage(n + 1, img) end)
-    if not ok or it:getLength() < n + 1 then
-        local grown = gfx.imagetable.new(n + 1)
-        for i = 1, n do
-            grown:setImage(i, it:getImage(i))
-        end
-        grown:setImage(n + 1, img)
-        imageData.imagetable = grown
-        if tilemap then
-            tilemap:setImageTable(grown)
-        end
-    end
-    return n + 1
 end
 
 -- ── Mal-Operationen (data-model.md) ───────────────────────────────────────────
@@ -371,7 +384,7 @@ local function tickForward()
         -- Neuer Frame = tiefe Kopie des aktuellen (mit allen Ebenen).
         local copy = LayerModel.cloneFrameLayers(entries[currentFrame])
         entries[#entries + 1] = copy
-        imageData.frames[#entries] = LayerModel.compositeToFlat(copy)
+        imageData.frames[#entries] = LayerModel.compositeToTiles(copy, getTile, registerTile)
         currentFrame = currentFrame + 1
     else
         currentFrame = 1
@@ -453,6 +466,7 @@ end
 local function buildZoomContext()
     -- Spec 010: die Zoomkette editiert ausschliesslich die AKTIVE Ebene.
     -- "absent" (0) einer oberen Ebene -> kein Quellbild (leere Zelle).
+    local entry = currentEntry()
     local layer = activeLayerObj()
     local positions = layer and layer.positions or imageData.frames[currentFrame]
     local slots = {}
@@ -468,6 +482,17 @@ local function buildZoomContext()
                 slot.originalIndex = positions[slot.frameIndexPos]
                 slot.originalImage = (slot.originalIndex and slot.originalIndex ~= 0)
                     and imageData.imagetable:getImage(slot.originalIndex) or nil
+                -- Onion-Skin (Bugfix, Debugging-Session 2026-09-01): rein
+                -- visueller Hintergrund aus allen Ebenen UNTERHALB der
+                -- aktiven Ebene, pixelgenau kompositiert (LayerModel.
+                -- compositeBelow) — lässt Layer 1 (& ggf. Layer 2) durch die
+                -- transparenten Stellen der aktiven Ebene durchscheinen,
+                -- statt sie beim Bearbeiten zu verdecken. Wird NICHT editiert
+                -- oder committet, nur von ZoomRoom:drawCell() zum Anzeigen
+                -- unbearbeiteter Zellen genutzt.
+                slot.backgroundImage = entry
+                    and LayerModel.compositeBelow(entry, slot.frameIndexPos, imageData.activeLayer, getTile)
+                    or nil
             else
                 slot.oob = true
             end
@@ -522,15 +547,7 @@ function EditorRoom:applyTileEdits(edits)
     if not imageData then return end
     if not activeLayerObj() then return end
     for _, edit in ipairs(edits or {}) do
-        local hash = ImageStoreCodec.hashTile(edit.newImage)
-        local existing = imageData.hashIndex[hash]
-        local idx
-        if existing and imagesEqual(imageData.imagetable:getImage(existing), edit.newImage) then
-            idx = existing
-        else
-            idx = appendTileImage(edit.newImage)
-            imageData.hashIndex[hash] = idx
-        end
+        local idx = registerTile(edit.newImage)
         writeActiveLayerPosition(edit.frameIndexPos, idx)
         recompositeCell(edit.frameIndexPos)
     end
@@ -554,17 +571,6 @@ function EditorRoom:shiftActiveLayer(direction, cellIdx)
     if not entry then return false end
     if not activeLayerObj() then return false end
     cellIdx = cellIdx or cursorCellIndex()
-    local getTile = function(idx) return imageData.imagetable:getImage(idx) end
-    local registerTile = function(img)
-        local hash = ImageStoreCodec.hashTile(img)
-        local existing = imageData.hashIndex[hash]
-        if existing and imagesEqual(imageData.imagetable:getImage(existing), img) then
-            return existing
-        end
-        local idx = appendTileImage(img)
-        imageData.hashIndex[hash] = idx
-        return idx
-    end
     local changed = LayerModel.shiftTileContent(
         entry, imageData.activeLayer or 1, cellIdx, direction, getTile, registerTile)
     if not changed then return false end

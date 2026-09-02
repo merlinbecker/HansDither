@@ -450,11 +450,18 @@ function ImageStoreCodec.newLoadOperation(id)
             frameLayers[1] = LayerModel.newFrameLayersFromFlat(emptyFrame)
         end
 
-        -- Flaches, kompositiertes Array fuer Tilemap/Vorschau/Pause-Ansicht.
+        -- Flaches, PIXELGENAU kompositiertes Array fuer Tilemap/Vorschau/
+        -- Pause-Ansicht (Task T053: transparente Pixel einer oberen Ebene
+        -- muessen die Basisebene direkt nach dem Laden durchscheinen lassen,
+        -- nicht erst nach der ersten Bearbeitung). Neu gemergte Tiles werden
+        -- ueber makeTileRegistrar() dedupliziert; eine dabei gewachsene
+        -- Imagetable wird unten in imageData.imagetable uebernommen.
+        local getTile, registerTile, getImagetable = ImageStoreCodec.makeTileRegistrar(imagetable, hashIndex)
         local validatedFrames = {}
         for i, entry in ipairs(frameLayers) do
-            validatedFrames[i] = LayerModel.compositeToFlat(entry)
+            validatedFrames[i] = LayerModel.compositeToTiles(entry, getTile, registerTile)
         end
+        imagetable = getImagetable()
 
         -- Erstelle Ergebnis
         local imageData = {
@@ -618,6 +625,50 @@ function ImageStoreCodec.hashTile(image)
     end
 
     return string.format("%08x", hash)
+end
+
+-- Haengt ein Tile-Bild an eine Imagetable an; waechst die Table per Neuaufbau,
+-- falls sie nicht mehr Platz hat (SDK: imagetable:setImage() ueber die
+-- urspruengliche Laenge hinaus schlaegt fehl/ist undefiniert). Rueckgabe:
+-- (imagetable, neuerIndex) — imagetable kann sich geaendert haben (Neuaufbau
+-- statt In-Place), daher IMMER den Rueckgabewert weiterverwenden.
+function ImageStoreCodec.appendTileToImagetable(imagetable, img)
+    local n = imagetable:getLength()
+    local ok = pcall(function() imagetable:setImage(n + 1, img) end)
+    if not ok or imagetable:getLength() < n + 1 then
+        local grown = gfx.imagetable.new(n + 1)
+        for i = 1, n do
+            grown:setImage(i, imagetable:getImage(i))
+        end
+        grown:setImage(n + 1, img)
+        imagetable = grown
+    end
+    return imagetable, n + 1
+end
+
+-- Baut wiederverwendbare getTile/registerTile-Closures fuer die LayerModel-
+-- Kompositierfunktionen (compositeCellTile/compositeToTiles): registerTile
+-- dedupliziert ueber hashIndex (identischer Dedup-Pfad wie EditorRoom-Commits)
+-- und waechst die Imagetable bei Bedarf ueber appendTileToImagetable(). Da
+-- eine gewachsene Imagetable ein NEUES Objekt ist, liefert die dritte
+-- Rueckgabe getImagetable() den jeweils aktuellen Stand — nach allen
+-- registerTile-Aufrufen abfragen und im Aufrufer persistieren
+-- (imageData.imagetable / tilemap:setImageTable()).
+function ImageStoreCodec.makeTileRegistrar(imagetable, hashIndex)
+    local getTile = function(idx) return imagetable:getImage(idx) end
+    local registerTile = function(img)
+        local hash = ImageStoreCodec.hashTile(img)
+        local existing = hashIndex[hash]
+        if existing and ImageStoreCodec.imagesVisiblyEqual(imagetable:getImage(existing), img) then
+            return existing
+        end
+        local newTable, idx = ImageStoreCodec.appendTileToImagetable(imagetable, img)
+        imagetable = newTable
+        hashIndex[hash] = idx
+        return idx
+    end
+    local function getImagetable() return imagetable end
+    return getTile, registerTile, getImagetable
 end
 
 -- Erzeugt die frames.json Tabellenstruktur

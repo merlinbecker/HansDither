@@ -1167,14 +1167,16 @@ local function pixelCursorToOrigin(h)
     for _ = 1, 16 do h.upButtonDown(); h.upButtonUp() end
 end
 
-section("PixelRoom: 'Nicht-Tinte'-Zustand ist ebenenabhaengig, nur A malt (Spec 010, US2, 5. Runde)")
+section("PixelRoom: 'Nicht-Tinte'-Zustand ist ebenenabhaengig, nur A malt (Spec 010, US2, 6. Runde)")
 local tpTile = nil
 local tpZoom = { setNewTile = function(_, t) tpTile = t end, updateExistingTile = function(_, t) tpTile = t end }
 local T = PixelTransparency.TRANSPARENT
 
--- OBERE Ebene: offState = TRANSPARENT. A toggelt Tinte <-> transparent; B malt NICHT.
+-- OBERE Ebene: offState = TRANSPARENT. Ausgangszustand einer noch nicht
+-- gemalten oberen Ebene ist transparent (Spec 010 US2/Fix); A durchlaeuft
+-- den 3-Zustands-Zyklus Tinte -> weiss -> transparent -> Tinte; B malt NICHT.
 PixelRoom:init(noop, tpZoom)
-PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1, T)
+PixelRoom:setCurrentTile({ sample = function() return "clear" end }, 1, T)
 PixelRoom:entered()
 local tph = PixelRoom:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
@@ -1183,7 +1185,7 @@ pixelCursorToOrigin(tph)
 
 tph.AButtonDown(); tph.AButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile:sample(0, 0) == "black", "obere Ebene: A auf leerem Pixel -> Tinte")
+check(tpTile:sample(0, 0) == "black", "obere Ebene: A auf transparentem (leerem) Pixel -> Tinte")
 
 -- B malt NICHT mehr (frueher FR-007): ein B-Tipp laesst das Pixel unveraendert.
 tph.BButtonDown(); tph.BButtonUp()
@@ -1192,9 +1194,18 @@ check(tpTile:sample(0, 0) == "black", "obere Ebene: B-Tipp auf Tinte ist folgenl
 
 tph.AButtonDown(); tph.AButtonUp()
 PixelRoom:commitForTerminate()
-check(tpTile:sample(0, 0) == "clear", "obere Ebene: A auf Tinte -> radiert nach transparent (nicht weiss!)")
+check(tpTile:sample(0, 0) == "white", "obere Ebene: A auf Tinte -> weiss (3-Zustands-Zyklus, 6. Runde)")
 
--- BASISEBENE: offState = EMPTY (Default). A toggelt Tinte <-> weiss; B malt NICHT.
+tph.AButtonDown(); tph.AButtonUp()
+PixelRoom:commitForTerminate()
+check(tpTile:sample(0, 0) == "clear", "obere Ebene: A auf weiss -> transparent")
+
+tph.AButtonDown(); tph.AButtonUp()
+PixelRoom:commitForTerminate()
+check(tpTile:sample(0, 0) == "black", "obere Ebene: A auf transparent -> wieder Tinte (Zyklus geschlossen)")
+
+-- BASISEBENE: offState = EMPTY (Default). A toggelt Tinte <-> weiss (2 Zustaende,
+-- keine Transparenz auf der Basisebene); B malt NICHT.
 PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1)  -- kein offStateCode -> EMPTY
 PixelRoom:entered()
 local bh = PixelRoom:inputHandler()
@@ -1209,18 +1220,17 @@ bh.AButtonDown(); bh.AButtonUp()   -- Tinte -> weiss
 PixelRoom:commitForTerminate()
 check(tpTile:sample(0, 0) == "white", "Basisebene: A auf Tinte -> radiert nach weiss")
 
-section("PixelRoom: transparenter Strich + Ruecklesen aus dem Tile (Spec 010, US2)")
+section("PixelRoom: 3-Zustands-Strich + Ruecklesen aus dem Tile (Spec 010, US2, 6. Runde)")
 local strokeTile = nil
 local strokeZoom = { setNewTile = function(_, t) strokeTile = t end, updateExistingTile = function(_, t) strokeTile = t end }
 PixelRoom:init(noop, strokeZoom)
-PixelRoom:setCurrentTile({ sample = function() return "white" end }, 1, T)   -- obere Ebene
+PixelRoom:setCurrentTile({ sample = function() return "clear" end }, 1, T)   -- obere Ebene, transparenter Ausgangszustand
 PixelRoom:entered()
 local sh = PixelRoom:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
 pixelCursorToOrigin(sh)
 
--- Erst Tinte ueber 3 Zellen, dann ein A-Strich, der auf Tinte startet, radiert
--- sie nach transparent zurueck (offState der oberen Ebene).
+-- Erst Tinte ueber 3 Zellen malen.
 heldButtons[playdate.kButtonA] = true
 sh.AButtonDown()
 sh.rightButtonDown(); sh.rightButtonUp()
@@ -1231,7 +1241,18 @@ PixelRoom:commitForTerminate()
 check(strokeTile:sample(0, 0) == "black" and strokeTile:sample(1, 0) == "black"
     and strokeTile:sample(2, 0) == "black", "A gehalten + Bewegung malt einen Tinten-Strich")
 
-pixelCursorToOrigin(sh)   -- Cursor zurueck auf (0,0) = Tinte -> Strichwert = offState (transparent)
+pixelCursorToOrigin(sh)   -- Cursor zurueck auf (0,0) = Tinte -> Strichwert = naechster Zyklus-Wert (weiss)
+heldButtons[playdate.kButtonA] = true
+sh.AButtonDown()
+sh.rightButtonDown(); sh.rightButtonUp()
+sh.rightButtonDown(); sh.rightButtonUp()
+sh.AButtonUp()
+heldButtons[playdate.kButtonA] = false
+PixelRoom:commitForTerminate()
+check(strokeTile:sample(0, 0) == "white" and strokeTile:sample(1, 0) == "white"
+    and strokeTile:sample(2, 0) == "white", "A gehalten auf Tinte + Bewegung malt den Strich weiss (3-Zustands-Zyklus)")
+
+pixelCursorToOrigin(sh)   -- Cursor zurueck auf (0,0) = weiss -> Strichwert = transparent
 heldButtons[playdate.kButtonA] = true
 sh.AButtonDown()
 sh.rightButtonDown(); sh.rightButtonUp()
@@ -1240,7 +1261,7 @@ sh.AButtonUp()
 heldButtons[playdate.kButtonA] = false
 PixelRoom:commitForTerminate()
 check(strokeTile:sample(0, 0) == "clear" and strokeTile:sample(1, 0) == "clear"
-    and strokeTile:sample(2, 0) == "clear", "A gehalten auf Tinte + Bewegung radiert den Strich nach transparent")
+    and strokeTile:sample(2, 0) == "clear", "A gehalten auf weiss + Bewegung malt den Strich transparent")
 
 -- Ruecklesen: ein Tile mit transparentem Pixel laedt als TRANSPARENT-Zelle
 local reload = newMockImage(16, 16, "white")
@@ -1610,6 +1631,17 @@ local data = EditorRoom:getImageData()
 check(data ~= nil and #data.frameLayers[1].layers == 3, "Frame hat immer 3 Ebenen (geladen, obere leer ergaenzt)")
 check(data.activeLayer == 1, "aktive Ebene startet bei 1")
 
+-- Spec 010 (Fix 3, T053-Verdrahtung): der Mock-Sheet-Zuschnitt kann Tile-
+-- Inhalte nicht wirklich kopieren (sheet:draw() ist im Test ein No-op) und
+-- liefert daher fuer alle Sheet-Slices identische, komplett transparente
+-- Tiles. Fuer einen realitaetsnahen Pixelvergleich (compositeCellTile
+-- dedupliziert jetzt echt ueber den Bildinhalt) wird Tile 2 hier explizit
+-- als unterscheidbares Schwarz-Tile hinterlegt — genau wie es im echten SDK
+-- (mit einem echten Sheet-Inhalt) der Fall waere.
+local blackTile2 = newMockImage(16, 16, "black")
+data.imagetable:setImage(2, blackTile2)
+data.hashIndex[ImageStoreCodec.hashTile(blackTile2)] = 2
+
 data.activeLayer = 2
 local eh = EditorRoom:inputHandler()
 eh.AButtonDown(); eh.AButtonUp()                       -- malt Zelle 1 (Cursor 1,1)
@@ -1631,6 +1663,20 @@ check(data.frameLayers[1].layers[2].positions[2] == 0,
     "A erneut (Radierer) auf oberer Ebene -> Zelle wieder 'absent' (0), nicht opak-weiss")
 check(data.frames[1][2] == 1, "Composite faellt an Zelle 2 auf die Basisebene (Tile 1) zurueck")
 check(data.frameLayers[1].layers[1].positions[2] == 1, "Basisebene an Zelle 2 weiterhin unveraendert")
+
+-- Bugfix (Debugging-Session 2026-09-01): "wenn man Layer 2 aktiviert, sollte
+-- man Layer 1 noch durchsehen" -- buildZoomContext() muss fuer die aktuelle
+-- Cursor-Zelle (hier Zelle 2, radiert/absent auf Ebene 2) einen Onion-Skin-
+-- Hintergrund aus der Basisebene liefern, damit die Zoomkette Layer 1 durch
+-- die transparente/absente Stelle von Layer 2 hindurch anzeigen kann.
+local zctx = EditorRoom:currentZoomContext()
+local centerSlot = zctx.slots[2][2]
+check(centerSlot.frameIndexPos == 2, "Zentrum des Zoom-Kontexts entspricht der Cursor-Zelle (2)")
+check(centerSlot.originalImage == nil, "Ebene 2 selbst liefert an Zelle 2 kein Bild (absent)")
+check(centerSlot.backgroundImage ~= nil,
+    "Onion-Skin-Hintergrund vorhanden -> Basisebene bleibt sichtbar, obwohl Ebene 2 an dieser Zelle leer ist")
+check(centerSlot.backgroundImage == data.imagetable:getImage(1),
+    "Hintergrund ist exakt das Basisebenen-Tile (Tile 1), pixelgenau via LayerModel.compositeBelow")
 
 section("EditorRoom: Mehr-Ebenen-Edit ueberlebt Speichern + Laden (Spec 010, T031)")
 data.id = "edit2layer-rt"
@@ -2347,24 +2393,68 @@ check(LayerModel.compositeToFlat(comp)[1] == 9,
     "unsichtbare Ebene wird uebersprungen -> Character (Tile 9) gewinnt Zelle 1")
 
 -- compositeToTiles: pixel-genaue Ueberblendung. Die Basisebene traegt IMMER
--- bei (nie "absent"), daher merged die Funktion jede Zelle, an der eine obere
--- Ebene Inhalt hat. Zellen mit nur der Basisebene bleiben unveraendert.
--- (Noch NICHT im Renderpfad verdrahtet, T053 — die Merge-Rate ist dort vor
--- dem Verdrahten zu druecken, z.B. nur bei tatsaechlich transparenten Pixeln
--- der oberen Ebene.)
+-- bei (nie "absent"). Traegt eine obere Ebene mit tatsaechlich transparenten
+-- Pixeln bei, wird gemerged; ist das oberste beitragende Tile hingegen
+-- vollstaendig opak, deckt es die Ebenen darunter ohnehin komplett ab und
+-- dessen Index bleibt unveraendert (kein unnoetiges neues Tile). Zellen mit
+-- nur der Basisebene bleiben ebenfalls unveraendert.
+-- (T053 jetzt in den Renderpfad verdrahtet: EditorRoom/ImageStoreCodec
+-- nutzen dies statt compositeToFlat; die Merge-Rate wird durch die
+-- Opak-Kurzschluss-Pruefung in compositeCellTile niedrig gehalten.)
 do
     local c2 = LayerModel.newFrameLayersFromFlat(flat)  -- flat: gerade Zellen = Tile 2, ungerade = Tile 1
-    c2.layers[2].positions[4] = 7     -- Zelle 4: Basis (2) + Character (7)
-    c2.layers[2].positions[1] = 8     -- Zelle 1: Basis (1) + Character (8) +
-    c2.layers[3].positions[1] = 9     -- Effects (9)
+    c2.layers[2].positions[4] = 7     -- Zelle 4: Basis (2) + Character (7, mit Transparenz)
+    c2.layers[2].positions[1] = 8     -- Zelle 1: Basis (1) + Character (8, mit Transparenz) +
+    c2.layers[3].positions[1] = 9     -- Effects (9, mit Transparenz)
     local registered = 0
-    local getT = function(i) return newMockImage(16, 16, "white") end
+    -- Tiles 7/8/9 tragen ein transparentes Pixel, damit sie NICHT ueber den
+    -- Opak-Kurzschluss zurueckgegeben werden, sondern echt gemerged werden
+    -- (siehe compositeCellTile: vollstaendig opake oberste Tiles decken
+    -- alles darunter ab und werden unveraendert durchgereicht).
+    local getT = function(i)
+        local img = newMockImage(16, 16, "white")
+        img.pixels["0,0"] = "clear"
+        return img
+    end
     local regT = function(img) registered = registered + 1; return 100 + registered end
     local out = LayerModel.compositeToTiles(c2, getT, regT)
     check(out[2] == 2, "Zelle 2 (nur Basisebene) -> Basistile-Index unveraendert, kein neues Tile")
-    check(out[4] >= 101 and out[1] >= 101, "Zellen mit oberer Ebene -> zusammengefuehrtes Tile")
+    check(out[4] >= 101 and out[1] >= 101, "Zellen mit transparentem oberem Tile -> zusammengefuehrtes Tile")
     check(registered == 2, "genau 2 Merges (Zelle 1 + Zelle 4), nicht pro leerer Zelle")
     check(#out == 375, "375 Positionen")
+end
+
+section("LayerModel: compositeBelow liefert Onion-Skin-Hintergrund fuer die Zoomkette (Bugfix, Debugging-Session 2026-09-01)")
+do
+    local c3 = LayerModel.newFrameLayersFromFlat(flat)  -- Basis: gerade Zellen = 2, ungerade = 1
+    c3.layers[2].positions[1] = 20   -- Ebene 2 traegt an Zelle 1 bei
+    c3.layers[3].positions[1] = 30   -- Ebene 3 traegt ebenfalls an Zelle 1 bei
+    local seen = {}
+    local getT = function(i) seen[#seen + 1] = i; return newMockImage(16, 16, "white") end
+
+    check(LayerModel.compositeBelow(c3, 1, 1, getT) == nil,
+        "aktive Ebene = Basis (1) -> nichts darunter, nil (Aufrufer faellt auf Weiss zurueck)")
+
+    seen = {}
+    local bg2 = LayerModel.compositeBelow(c3, 1, 2, getT)
+    check(bg2 ~= nil, "aktive Ebene = 2 -> Hintergrund aus Ebene 1 (Basis) vorhanden")
+    check(#seen == 1 and seen[1] == 1, "nur die Basisebene (Tile 1) traegt zum Hintergrund unter Ebene 2 bei")
+
+    seen = {}
+    local bg3 = LayerModel.compositeBelow(c3, 1, 3, getT)
+    check(bg3 ~= nil, "aktive Ebene = 3 -> Hintergrund aus Ebenen 1+2 vorhanden (zusammengefuehrt)")
+    check(#seen == 2 and seen[1] == 1 and seen[2] == 20,
+        "Basis (1) UND Ebene 2 (20) tragen zum Hintergrund unter Ebene 3 bei, unten-nach-oben")
+
+    check(LayerModel.compositeBelow(c3, 2, 2, getT) ~= nil,
+        "Basisebene traegt praktisch immer bei -> Hintergrund unter Ebene 2 auch fuer unbearbeitete Zellen vorhanden")
+
+    -- unsichtbare Ebene zaehlt nicht zum Hintergrund
+    c3.layers[2].visible = false
+    seen = {}
+    local bg3b = LayerModel.compositeBelow(c3, 1, 3, getT)
+    check(bg3b ~= nil and #seen == 1 and seen[1] == 1,
+        "ausgeblendete Ebene 2 traegt nicht zum Hintergrund unter Ebene 3 bei -> nur Basis (1)")
 end
 
 -- ── ImageStoreCodec: 3-Zustands-Hash & Vergleich (spec.md Edge Case Z.104) ──

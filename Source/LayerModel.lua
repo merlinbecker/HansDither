@@ -196,10 +196,80 @@ end
 
 -- ── Compositing (US3, data-model.md "Example: Three-Layer Frame") ──────────
 
+-- Sammelt die von unten nach oben sichtbar beitragenden Ebenen-Tile-Indizes
+-- an Zelle pos (Basisebene traegt praktisch immer bei, obere Ebenen nur bei
+-- Nicht-"absent"). Gemeinsame Grundlage fuer compositeCellTile/compositeBelow.
+local function contributingStack(entry, pos, uptoLayer1)
+    local stack = {}
+    local limit = uptoLayer1 or #entry.layers
+    for i = 1, limit do
+        local layer = entry.layers[i]
+        if layer and layer.visible ~= false and layer.positions[pos] and layer.positions[pos] ~= LayerModel.ABSENT then
+            stack[#stack + 1] = layer.positions[pos]
+        end
+    end
+    return stack
+end
+
+-- Prueft, ob ein 16x16-Tile-Bild VOLLSTAENDIG opak ist (kein einziges
+-- kColorClear-Pixel). Ein vollstaendig opakes oberstes Tile deckt jede
+-- tiefere Ebene komplett ab — das Ergebnis ist dann exakt dieses Tile selbst,
+-- ein Zusammenfuehren waere unnoetig (und wuerde nur ein ueberfluessiges
+-- Duplikat-Tile registrieren).
+local function isFullyOpaque(img)
+    if not img then return false end
+    local gfx = playdate.graphics
+    local tilePx = LayerModel.TILE_PX
+    for y = 0, tilePx - 1 do
+        for x = 0, tilePx - 1 do
+            if img:sample(x, y) == gfx.kColorClear then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+-- Kompositiert GENAU EINE Zelle pixelgenau (WYSIWYG, research.md R3): traegt
+-- nur eine Ebene bei, bleibt der Tile-Index unveraendert (kein neues Tile);
+-- ist das oberste beitragende Tile bereits vollstaendig opak, deckt es alles
+-- darunter ohnehin komplett ab -> ebenfalls kein neues Tile noetig, dessen
+-- Index bleibt unveraendert. Erst wenn das oberste Tile selbst transparente
+-- Pixel enthaelt UND mehrere Ebenen beitragen, wird ein zusammengefuehrtes
+-- 16x16-Tile gebaut (untere Ebene zuerst, daraufliegende nicht-transparente
+-- Pixel der oberen Ebenen ueberdecken sie — kColorClear-Pixel lassen die
+-- untere Ebene durchscheinen, SDK: image:draw() respektiert die Maske).
+-- getTile(index)->image, registerTile(image)->dedupliziert 1-basierter Index
+-- werden vom Aufrufer (EditorRoom/ImageStoreCodec) injiziert.
+function LayerModel.compositeCellTile(entry, pos, getTile, registerTile)
+    local stack = contributingStack(entry, pos)
+    if #stack == 0 then
+        return LayerModel.WHITE_TILE
+    elseif #stack == 1 then
+        return stack[1]
+    elseif isFullyOpaque(getTile(stack[#stack])) then
+        return stack[#stack]
+    else
+        local gfx = playdate.graphics
+        local tilePx = LayerModel.TILE_PX
+        local merged = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
+        gfx.pushContext(merged)
+            for s = 1, #stack do
+                local img = getTile(stack[s])
+                if img then
+                    img:draw(0, 0)
+                end
+            end
+        gfx.popContext()
+        return registerTile(merged)
+    end
+end
+
 -- Guenstiges Compositing auf Tile-Zellen-Ebene: von oben nach unten gewinnt
 -- die erste Ebene mit positions[pos] ~= 0 (und visible). Traegt keine Ebene
--- etwas bei, faellt die Zelle auf das Weiss-Tile zurueck. Fuer WYSIWYG mit
--- Pixel-genauer Ueberblendung siehe compositeToTiles().
+-- etwas bei, faellt die Zelle auf das Weiss-Tile zurueck. NICHT pixelgenau —
+-- nur fuer Kontexte ohne getTile/registerTile (z.B. reine Zellen-Zaehlung).
+-- Fuer WYSIWYG-Rendering siehe compositeCellTile()/compositeToTiles().
 function LayerModel.compositeAt(entry, pos)
     local layers = entry.layers
     for i = #layers, 1, -1 do
@@ -213,7 +283,9 @@ end
 
 -- Kompositiert alle 375 Positionen in ein flaches Array (Tilemap-Rendering,
 -- Vorschau, Pause-Ansicht — exakt das Format, das der Rest der Codebasis vor
--- Spec 010 ueberall erwartet hat).
+-- Spec 010 ueberall erwartet hat). NICHT pixelgenau (siehe compositeAt) —
+-- nur fuer Kontexte ohne getTile/registerTile. Fuer WYSIWYG siehe
+-- compositeToTiles().
 function LayerModel.compositeToFlat(entry)
     local out = {}
     for pos = 1, LayerModel.POSITIONS do
@@ -222,53 +294,54 @@ function LayerModel.compositeToFlat(entry)
     return out
 end
 
--- WYSIWYG-Compositing mit pixelgenauer Ueberblendung (research.md R3): fuer
--- jede Zelle, an der MEHRERE sichtbare Ebenen beitragen, wird ein
--- zusammengefuehrtes 16x16-Tile gebaut (untere Ebene zuerst, daraufliegende
--- nicht-transparente Pixel der oberen Ebenen). Zellen mit nur EINER
--- beitragenden Ebene bleiben unveraendert bei deren Tile-Index (kein neues
--- Tile). getTile(index)->image, registerTile(image)->dedupter 1-basierter
--- Index werden vom Aufrufer (EditorRoom/ImageStoreCodec) injiziert.
---
--- ACHTUNG (noch NICHT im Renderpfad verdrahtet, Task T053): die Basisebene
--- traegt immer bei, daher merged diese Funktion JEDE Zelle mit oberer-Ebenen-
--- Inhalt und registriert dafuer ein Tile. Vor dem Verdrahten ist die
--- Merge-Rate zu druecken (z.B. nur mergen, wenn das obere Tile wirklich
--- kColorClear-Pixel enthaelt; ein voll deckendes oberes Tile occludet und
--- braucht keinen Merge). compositeToFlat() ist der aktuelle Renderpfad.
+-- WYSIWYG-Compositing mit pixelgenauer Ueberblendung (research.md R3, Task
+-- T053 — jetzt in den Renderpfad verdrahtet: EditorRoom.recompositeCell/
+-- recompositeCurrentFrame und der v1.1-Ladepfad nutzen dies statt der
+-- zellenweisen Einzel-Tile-Auswahl aus compositeToFlat, damit transparente
+-- Pixel einer oberen Ebene die darunterliegende Ebene wirklich durchscheinen
+-- lassen statt nur den Leerzustand der Tilemap-Zelle zu zeigen). Fuer jede
+-- Zelle, an der MEHRERE sichtbare Ebenen beitragen, wird ein
+-- zusammengefuehrtes 16x16-Tile gebaut; Zellen mit nur EINER beitragenden
+-- Ebene bleiben unveraendert bei deren Tile-Index (kein neues Tile).
 function LayerModel.compositeToTiles(entry, getTile, registerTile)
-    local gfx = playdate.graphics
-    local tilePx = LayerModel.TILE_PX
     local out = {}
     for pos = 1, LayerModel.POSITIONS do
-        -- Von unten nach oben beitragende Ebenen sammeln
-        local stack = {}
-        for i = 1, #entry.layers do
-            local layer = entry.layers[i]
-            if layer.visible ~= false and layer.positions[pos] and layer.positions[pos] ~= LayerModel.ABSENT then
-                stack[#stack + 1] = layer.positions[pos]
-            end
-        end
-        if #stack == 0 then
-            out[pos] = LayerModel.WHITE_TILE
-        elseif #stack == 1 then
-            out[pos] = stack[1]
-        else
-            local merged = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
-            gfx.pushContext(merged)
-                for s = 1, #stack do
-                    local img = getTile(stack[s])
-                    if img then
-                        -- kColorClear-Pixel der oberen Ebene lassen die
-                        -- untere durch (SDK: image:draw respektiert die Maske)
-                        img:draw(0, 0)
-                    end
-                end
-            gfx.popContext()
-            out[pos] = registerTile(merged)
-        end
+        out[pos] = LayerModel.compositeCellTile(entry, pos, getTile, registerTile)
     end
     return out
+end
+
+-- Onion-Skin-Hintergrund fuer die Zoom-View-Anzeige (rein visuell, NICHT
+-- persistiert/dedupliziert): kompositiert pixelgenau alle sichtbaren Ebenen
+-- STRIKT UNTERHALB der 1-basierten aktiven Ebene activeLayer1 an Zelle pos,
+-- damit die aktive Ebene beim Bearbeiten ueber den darunterliegenden Ebenen
+-- angezeigt werden kann (spec.md "Layer Rendering Order": transparente Pixel
+-- lassen tiefere Ebenen durchscheinen). Liefert nil, wenn activeLayer1 <= 1
+-- (die Basisebene hat nichts darunter) oder keine tiefere Ebene an dieser
+-- Zelle etwas beitraegt — der Aufrufer faellt dann auf Weiss zurueck.
+-- getTile(index)->image wird vom Aufrufer injiziert; KEIN registerTile, das
+-- Ergebnisbild wird nie in die Imagetable geschrieben.
+function LayerModel.compositeBelow(entry, pos, activeLayer1, getTile)
+    if not activeLayer1 or activeLayer1 <= 1 then return nil end
+    local stack = contributingStack(entry, pos, activeLayer1 - 1)
+    if #stack == 0 then
+        return nil
+    elseif #stack == 1 then
+        return getTile(stack[1])
+    else
+        local gfx = playdate.graphics
+        local tilePx = LayerModel.TILE_PX
+        local merged = gfx.image.new(tilePx, tilePx, gfx.kColorClear)
+        gfx.pushContext(merged)
+            for s = 1, #stack do
+                local img = getTile(stack[s])
+                if img then
+                    img:draw(0, 0)
+                end
+            end
+        gfx.popContext()
+        return merged
+    end
 end
 
 -- ── Pixel-Verschiebung EINES Tiles (US1, revidiert 2026-09-01) ─────────────
