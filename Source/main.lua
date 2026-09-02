@@ -21,6 +21,9 @@ import "CoreLibs/object"
 -- weitere Module wie ImageStore/RoomOperation importieren die Räume selbst)
 import "PixelTransparency"
 import "LayerModel"
+import "UndoHistory"        -- Spec 011: Ringpuffer der letzten 3 riskanten Operationen
+import "ShakeDetector"      -- Spec 011: Links-Rechts-Schuettelerkennung auf dem Accelerometer
+import "UndoPrompt"         -- Spec 011: modaler Undo-Bestaetigungsdialog
 import "TitleRoom"
 import "PixelRoom"
 import "ZoomRoom"
@@ -56,7 +59,7 @@ TitleRoom:init(switchRoom, SelectionRoom)
 SelectionRoom:init(switchRoom, EditorRoom)
 EditorRoom:init(switchRoom, ZoomRoom, SelectionRoom, FrameManagementView)
 ZoomRoom:init(switchRoom, PixelRoom, EditorRoom)
-PixelRoom:init(switchRoom, ZoomRoom)
+PixelRoom:init(switchRoom, ZoomRoom, EditorRoom)   -- Spec 011: EditorRoom fuer Rotation-Snapshot + Schuettel-Weiterleitung (T014)
 FrameManagementView:init(switchRoom, EditorRoom)
 
 -- Startraum aktivieren (wie switchRoom, nur ohne pop — der Stack ist noch leer)

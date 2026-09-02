@@ -17,6 +17,9 @@ import "CoreLibs/object"
 import "Bauchbinde"
 import "PencilCursor"
 import "LayerModel"
+import "UndoHistory"     -- Spec 011: Ringpuffer der letzten 3 riskanten Operationen
+import "ShakeDetector"   -- Spec 011: Links-Rechts-Schuettelerkennung
+import "UndoPrompt"      -- Spec 011: modaler Undo-Bestaetigungsdialog
 import "ImageStoreCodec"
 import "RoomOperation"
 import "loadingBar"
@@ -87,6 +90,13 @@ local bauchbindeVisible = true   -- abgeleitet aus lastActivityMs (data-model.md
 
 local overlay = loadingBar.new()
 local bauchbinde = Bauchbinde.new(gfx)
+
+-- Spec 011: Undo-Verlauf (bis 3 riskante Operationen) + Schuettel-Detektor.
+-- Reiner Sitzungszustand -- clearUndoHistory() beim Laden eines Bildes und beim
+-- Verlassen des Editors zur Auswahl (FR-008). Der Detektor wird ab Phase 3 in
+-- den update()-Schleifen aller drei Editier-Raeume gefuettert.
+local undoHistory = UndoHistory.new()
+local shakeDetector = ShakeDetector.new()
 
 -- keyRepeat-Timer je Richtung
 local moveTimers = {}
@@ -591,6 +601,7 @@ end
 
 local function handleLoadError(err)
     loadingOperation = nil
+    undoHistory:clear()   -- Spec 011 FR-008: Verlauf ist sitzungslokal
     print("EditorRoom: Load failed:", tostring(err))
     if switchRoomFunction and selectionRoom then
         switchRoomFunction(selectionRoom)
@@ -609,6 +620,8 @@ local function handleLoadSuccess(result)
     zoomTickAccu = 0
     cursor.x = 1
     cursor.y = 1
+    undoHistory:clear()     -- Spec 011 FR-008: frischer Verlauf je geladenem Bild
+    shakeDetector:reset()
 
     -- Spec 010: defensiv — falls ein Aufrufer nur flache frames liefert,
     -- je Frame eine Basisebene daraus bauen. imageData.frames bleibt der
@@ -648,6 +661,7 @@ local function handleSaveAndExit()
         return ImageStoreCodec.newSaveOperation(imageData)
     end, function()
         savingOperation = nil
+        undoHistory:clear()   -- Spec 011 FR-008: Editor verlassen -> Verlauf leeren
         if switchRoomFunction and selectionRoom then
             switchRoomFunction(selectionRoom)
         end
@@ -925,6 +939,14 @@ end
 
 function EditorRoom:getImageData()
     return imageData
+end
+
+-- Spec 011 (FR-008): Undo-Verlauf ist reiner Sitzungszustand. Wird beim Laden
+-- eines Bildes und beim Verlassen des Editors zur Auswahl geleert; oeffentlich
+-- fuer Tests und defensive Aufrufer.
+function EditorRoom:clearUndoHistory()
+    undoHistory:clear()
+    shakeDetector:reset()
 end
 
 -- Spec 006 R4/CR-05..CR-07: 400x240-Bild fuer playdate.setMenuImage(); relevanter

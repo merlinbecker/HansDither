@@ -297,6 +297,14 @@ playdate = {
     -- Spec 006: absolute Tick-Grenzen fuer die UNVERAENDERTE B+Crank-Zoomkette
     -- (CR-01) — separat von crankChangeValue, testbar ueber crankTicksValue
     getCrankTicks = function(ticksPerRevolution) return crankTicksValue end,
+    -- Spec 011: Beschleunigungssensor. Werte test-gesteuert ueber accelXYZ;
+    -- accelRunning/accel*Count fuer Lebenszyklus-/Poll-Assertions.
+    startAccelerometer = function() accelRunning = true; accelStartCount = accelStartCount + 1 end,
+    stopAccelerometer = function() accelRunning = false; accelStopCount = accelStopCount + 1 end,
+    readAccelerometer = function()
+        accelReadCount = accelReadCount + 1
+        return accelXYZ[1], accelXYZ[2], accelXYZ[3]
+    end,
 }
 
 -- Von Tests gesetzt, um Crank-Rotation/-Dock-Zustand zu simulieren
@@ -304,6 +312,14 @@ playdate = {
 crankChangeValue = 0
 crankDockedValue = false
 crankTicksValue = 0
+
+-- Spec 011: von Tests gesetzt, um den Beschleunigungssensor zu simulieren
+-- (siehe playdate.readAccelerometer/startAccelerometer oben)
+accelXYZ = { 0, 0, 1 }
+accelRunning = false
+accelStartCount = 0
+accelStopCount = 0
+accelReadCount = 0
 
 -- Spec 006: von getSystemMenu()/setMenuImage() befuellt (siehe oben), von
 -- Tests gelesen
@@ -517,6 +533,11 @@ ImageStore = strictTable("ImageStore", {
 -- ueber diese dofile-Aufrufe).
 dofile("Source/PixelTransparency.lua")
 dofile("Source/LayerModel.lua")
+
+-- Spec 011: eigenstaendige, SDK-freie Module — VOR EditorRoom/ZoomRoom/PixelRoom
+dofile("Source/UndoHistory.lua")
+dofile("Source/ShakeDetector.lua")
+dofile("Source/UndoPrompt.lua")
 
 dofile("Source/Bauchbinde.lua")     -- Namenszeile des SelectionRoom
 dofile("Source/RoomOperation.lua")  -- Coroutine-Antrieb für SyncService (Spec 004)
@@ -2738,6 +2759,151 @@ check(mockLastTilemap.lastFrame ~= nil, "Tilemap nach Rueckkehr aktualisiert (cu
 
 -- Zurueck auf den echten Raum-Graphen fuer eventuelle Folgetests
 EditorRoom:init(function(room) editorSwitchedTo = room end, ZoomRoom, {}, nil)
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011: Schuettel-Undo — Foundational-Module (Phase 2)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+section("Spec 011: UndoHistory — Ringpuffer, Verdraengung, peekValid (V1-V4, FR-006/007)")
+do
+    local function contentEntry(frameIdx)
+        return { kind = "content", op = "clear", frameIndex = frameIdx, layerArrayIndex = 1, cells = {} }
+    end
+    local function deleteEntry(idx)
+        return { kind = "deleteFrame", op = "deleteFrame", index = idx, frameLayersEntry = {}, framesEntry = {} }
+    end
+    local function imgData(nFrames)
+        local fl = {}
+        for i = 1, nFrames do fl[i] = { layers = {} } end
+        return { frameLayers = fl }
+    end
+
+    local h = UndoHistory.new()
+    check(h:isEmpty(), "V3: neue History ist leer")
+    check(h.MAX == 3, "MAX == 3")
+
+    -- V1: 4x push -> nur die letzten 3, aeltester verdraengt (FIFO)
+    local e1 = contentEntry(1)
+    h:push(e1); h:push(contentEntry(2)); h:push(contentEntry(3)); h:push(contentEntry(4))
+    check(#h.entries == 3, "V1: nach 4x push nur 3 Eintraege")
+    local stillThere = false
+    for _, e in ipairs(h.entries) do if e == e1 then stillThere = true end end
+    check(not stillThere, "V1: der zuerst gepushte Eintrag ist verdraengt")
+
+    -- V3: push + pop -> wieder leer
+    local h2 = UndoHistory.new()
+    h2:push(contentEntry(1)); h2:pop()
+    check(h2:isEmpty(), "V3: nach push + pop wieder leer")
+
+    -- V4: clear() leert auch bei 3 Eintraegen
+    h:clear()
+    check(h:isEmpty(), "V4: clear() leert vollstaendig")
+
+    -- V2: peekValid verwirft content-Eintrag mit fehlendem Ziel-Frame (FR-006)
+    local h3 = UndoHistory.new()
+    h3:push(contentEntry(1))
+    h3:push(contentEntry(5))   -- ungueltig gegen ein 3-Frame-Bild
+    local e, reason = h3:peekValid(imgData(3))
+    check(e ~= nil and e.frameIndex == 1, "V2: peekValid ueberspringt content mit fehlendem frameIndex")
+    check(#h3.entries == 1, "V2: der ungueltige Eintrag wurde entfernt")
+    check(reason == nil, "V2: reason nil (kein frame-limit-Fall)")
+
+    -- FR-007: deleteFrame-Undo bei 12 Frames ist nicht anwendbar, liefert reason
+    local h4 = UndoHistory.new()
+    h4:push(deleteEntry(3))
+    local e4, r4 = h4:peekValid(imgData(12))
+    check(e4 == nil, "FR-007: deleteFrame-Undo bei 12 Frames nicht anwendbar (kein Dialog)")
+    check(r4 == "frame-limit", "FR-007: reason == 'frame-limit'")
+    check(#h4.entries == 0, "FR-007: der nicht anwendbare Eintrag wurde entfernt")
+
+    -- deleteFrame unter 12 Frames ist anwendbar
+    local h5 = UndoHistory.new()
+    h5:push(deleteEntry(2))
+    local e5 = h5:peekValid(imgData(3))
+    check(e5 ~= nil and e5.kind == "deleteFrame", "deleteFrame-Undo bei < 12 Frames anwendbar")
+
+    -- coalesceTarget: nur bei gleichem op/Ziel UND runOpen
+    local h6 = UndoHistory.new()
+    local run = { kind = "content", op = "shift", frameIndex = 2, layerArrayIndex = 1, cells = {}, runOpen = true }
+    h6:push(run)
+    check(h6:coalesceTarget("shift", 2, 1) == run, "coalesceTarget: offener Run wird fortgesetzt")
+    check(h6:coalesceTarget("shift", 3, 1) == nil, "coalesceTarget: anderes Ziel -> nil")
+    run.runOpen = false
+    check(h6:coalesceTarget("shift", 2, 1) == nil, "coalesceTarget: geschlossener Run -> nil")
+end
+
+section("Spec 011: ShakeDetector — Kantenerkennung, Fehlalarm-Freiheit, Refraktaer (V12-V16)")
+do
+    -- V12: saubere Links-Rechts-Folge feuert
+    local d = ShakeDetector.new()
+    check(d:feed(1.0, 0, 0, 0) == false, "V12: erster +x-Ausschlag feuert noch nicht")
+    check(d:feed(-1.0, 0, 0, 200) == true, "V12: -x-Ausschlag <= W ms danach -> Kante")
+
+    -- V16: Refraktaersperre unterdrueckt das Feuern innerhalb R
+    check(d:feed(1.0, 0, 0, 600) == false, "V16: +x waehrend Refraktaer (600 < 200+1200) feuert nicht")
+    check(d:feed(-1.0, 0, 0, 700) == false, "V16: -x waehrend Refraktaer feuert nicht")
+    check(d:feed(1.0, 0, 0, 1500) == false, "nach Refraktaer: erster neuer Ausschlag, noch keine Kante")
+    check(d:feed(-1.0, 0, 0, 1600) == true, "V16: nach Refraktaer feuert eine neue Sequenz wieder")
+
+    -- V13: 300 ruhige Samples feuern nie
+    local d2 = ShakeDetector.new()
+    local fired = false
+    for i = 1, 300 do
+        if d2:feed(0.1, 0, 0.99, i * 33) then fired = true end
+    end
+    check(not fired, "V13: 300 ruhige Samples (|x| < T) feuern nie")
+
+    -- V14: Ausschlaege > W ms auseinander feuern nicht
+    local d3 = ShakeDetector.new()
+    d3:feed(1.0, 0, 0, 0)
+    check(d3:feed(-1.0, 0, 0, 900) == false, "V14: -x 900 ms nach +x (> W) -> keine Kante")
+
+    -- V15: nur positive Ausschlaege feuern nie
+    local d4 = ShakeDetector.new()
+    fired = false
+    for i = 1, 10 do
+        if d4:feed(1.0, 0, 0, i * 50) then fired = true end
+    end
+    check(not fired, "V15: nur +x-Ausschlaege feuern nie")
+
+    -- reset() setzt den Zustand zurueck
+    local d5 = ShakeDetector.new()
+    d5:feed(1.0, 0, 0, 0)
+    d5:reset()
+    check(d5:feed(-1.0, 0, 0, 100) == false, "reset(): der vorherige +x-Ausschlag zaehlt nicht mehr")
+end
+
+section("Spec 011: UndoPrompt — modaler Dialog, handleA/handleB, No-op bei offen (V17-V19)")
+do
+    UndoPrompt.reset()
+    local calls = 0
+    UndoPrompt.open("Undo Rotation?", function() calls = calls + 1 end)
+    check(UndoPrompt.isOpen() == true, "open() -> isOpen")
+
+    -- V19: zweites open() aendert label/onConfirm nicht
+    local otherCalls = 0
+    UndoPrompt.open("Undo Clear Screen?", function() otherCalls = otherCalls + 1 end)
+    UndoPrompt.handleA()
+    check(calls == 1 and otherCalls == 0, "V19: zweites open() ist No-op (erster onConfirm laeuft, genau einmal)")
+    check(UndoPrompt.isOpen() == false, "V17: handleA schliesst den Dialog")
+
+    -- V18: handleB schliesst ohne onConfirm
+    local cbCalls = 0
+    UndoPrompt.open("Undo Frame loeschen?", function() cbCalls = cbCalls + 1 end)
+    UndoPrompt.handleB()
+    check(cbCalls == 0, "V18: handleB ruft onConfirm nicht")
+    check(UndoPrompt.isOpen() == false, "V18: handleB schliesst den Dialog")
+
+    UndoPrompt.draw()  -- No-op bei geschlossenem Dialog
+    check(true, "draw() bei geschlossenem Dialog wirft nicht")
+
+    -- offener Dialog: die gfx-Aufrufe (setColor/fillRect/drawRect/drawText +
+    -- Integer-Division) muessen gegen den strikten SDK-Mock durchlaufen
+    UndoPrompt.open("Undo Pixel-Verschiebung?", nil)
+    UndoPrompt.draw()
+    check(UndoPrompt.isOpen(), "draw() bei offenem Dialog laeuft ohne erfundene SDK-API durch")
+    UndoPrompt.reset()
+end
 
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 
