@@ -357,13 +357,20 @@ end
 function PixelRoom:update()
     processDirectionHold()
 
-    -- Spec 011: Schuettel-Sample lesen + an EditorRoom weiterreichen. Ein
-    -- erkanntes Schuetteln oeffnet den Undo-Dialog; bestaetigt der Nutzer,
-    -- committet commitAndReturnToEditor() und wechselt zurueck in den Tile View.
+    -- Spec 011: Schuettel-Sample lesen + an EditorRoom weiterreichen. Der
+    -- Callback committet bei erkannter Kante SOFORT und wechselt in den Tile
+    -- View. Review F9: danach MUSS update() zurueckkehren, sonst malt der Rest
+    -- (Crank-Block, Malraster + UndoPrompt.draw) das Pixel-Raster fuer einen
+    -- Frame ueber den neuen Raum.
     do
         local ax, ay, az = playdate.readAccelerometer()
         if ax and editorRoom and editorRoom.onShakeSample then
-            editorRoom:onShakeSample(ax, ay, az, commitAndReturnToEditor)
+            local roomLeft = false
+            editorRoom:onShakeSample(ax, ay, az, function()
+                roomLeft = true
+                commitAndReturnToEditor()
+            end)
+            if roomLeft then return end
         end
     end
 
@@ -388,6 +395,7 @@ function PixelRoom:update()
             if switchRoomFunction then
                 commitToZoomRoom()
                 switchRoomFunction(nextRoom)
+                return   -- Review F9: Raum gewechselt -> restliches update() nicht mehr ausfuehren
             end
         elseif ticks > 0 then
             -- Innerste Zoomstufe: Vorwärtszoom ist No-op

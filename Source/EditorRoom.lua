@@ -830,6 +830,7 @@ end
 local function handleLoadError(err)
     loadingOperation = nil
     undoHistory:clear()   -- Spec 011 FR-008: Verlauf ist sitzungslokal
+    UndoPrompt.reset()    -- Spec 011 (Review F5): einen evtl. offenen Undo-Dialog nicht in die Auswahl "durchlecken" lassen
     shiftRun = nil
     playdate.stopAccelerometer()
     print("EditorRoom: Load failed:", tostring(err))
@@ -851,6 +852,7 @@ local function handleLoadSuccess(result)
     cursor.x = 1
     cursor.y = 1
     undoHistory:clear()     -- Spec 011 FR-008: frischer Verlauf je geladenem Bild
+    UndoPrompt.reset()      -- Spec 011 (Review F5): ein aus dem Vorgaenger-Bild offener Dialog wird geschlossen
     shakeDetector:reset()
     shiftRun = nil
 
@@ -893,6 +895,7 @@ local function handleSaveAndExit()
     end, function()
         savingOperation = nil
         undoHistory:clear()   -- Spec 011 FR-008: Editor verlassen -> Verlauf leeren
+        UndoPrompt.reset()    -- Spec 011 (Review F5): Dialog nicht ueber den Room-Wechsel hinaus offen lassen
         shiftRun = nil
         playdate.stopAccelerometer()
         if switchRoomFunction and selectionRoom then
@@ -908,10 +911,17 @@ end
 local function buildSystemMenu()
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
+    -- Spec 011 (Review F3): das Systemmenue laeuft am modalen inputHandler
+    -- vorbei (FR-013 schluckt nur Tasten). Bei offenem Undo-Dialog darf keine
+    -- riskante Operation ausgeloest werden -- sonst legt z.B. "clear screen"
+    -- einen NEUEREN Verlaufseintrag an und "(A) Ja" naehme dann die falsche
+    -- (juengere) Aktion zurueck, nicht die im Dialog benannte.
     menu:addMenuItem("save + exit", function()
+        if UndoPrompt.isOpen() then return end
         handleSaveAndExit()
     end)
     menu:addMenuItem("clear screen", function()
+        if UndoPrompt.isOpen() then return end
         clearCurrentFrame()
     end)
     menu:addCheckmarkMenuItem("show grid", showGrid, function(checked)
@@ -1187,6 +1197,15 @@ function EditorRoom:clearUndoHistory()
     undoHistory:clear()
     shakeDetector:reset()
     shiftRun = nil
+end
+
+-- Spec 011 / Spec 010 US4 (Review F4): die FrameManagementView hat Frames
+-- umgeordnet oder geloescht. Der Undo-Verlauf referenziert Frames per Index --
+-- ohne dieses Nachziehen stellte ein spaeteres Undo Inhalt in den FALSCHEN
+-- Frame (stille Datenkorruption). Wird von FrameManagementView nach JEDER
+-- Strukturaenderung gerufen; op = { swapped = {a, b} } ODER { removed = idx }.
+function EditorRoom:onFramesReindexed(op)
+    undoHistory:remapFrames(op)
 end
 
 -- Spec 006 R4/CR-05..CR-07: 400x240-Bild fuer playdate.setMenuImage(); relevanter

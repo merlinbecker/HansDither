@@ -81,6 +81,44 @@ function UndoHistory:isEmpty()
     return #self.entries == 0
 end
 
+-- Spec 011 (Review F4): Frame-Umnummerierung durch die FrameManagementView
+-- nachziehen, damit ein spaeteres Undo nicht in den falschen Frame schreibt.
+--   op.swapped = {a, b} : Frame a und b haben die Plaetze getauscht
+--   op.removed = idx    : Frame idx wurde entfernt, hoehere ruecken auf
+-- content-Eintraege folgen ihrem frameIndex bzw. werden verworfen, wenn ihr
+-- Ziel-Frame geloescht wurde. deleteFrame-Eintraege tragen den Wiederher-
+-- stellungs-Slot (index); der rutscht mit, wird aber nie verworfen (FR-007).
+function UndoHistory:remapFrames(op)
+    if not op then return end
+    for i = #self.entries, 1, -1 do
+        local e = self.entries[i]
+        if op.swapped then
+            local a, b = op.swapped[1], op.swapped[2]
+            local key = (e.kind == "content" and "frameIndex")
+                or (e.kind == "deleteFrame" and "index") or nil
+            if key then
+                if e[key] == a then e[key] = b
+                elseif e[key] == b then e[key] = a end
+            end
+        elseif op.removed then
+            local r = op.removed
+            if e.kind == "content" then
+                if e.frameIndex == r then
+                    table.remove(self.entries, i)   -- Ziel-Frame ist weg -> Eintrag ungueltig
+                elseif e.frameIndex and e.frameIndex > r then
+                    e.frameIndex = e.frameIndex - 1
+                end
+            elseif e.kind == "deleteFrame" then
+                if e.index and e.index > r then
+                    e.index = e.index - 1
+                end
+                -- e.index == r bleibt: nach dem Entfernen ist genau dieser Slot
+                -- die richtige Einfuegestelle fuer das Undo.
+            end
+        end
+    end
+end
+
 -- Coalescing (data-model.md §4): den juengsten Eintrag liefern, wenn er
 -- denselben laufenden "Run" fortsetzt (gleiches op/Ziel UND runOpen == true).
 -- Sonst nil -> Aufrufer pusht einen neuen Eintrag.

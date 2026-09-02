@@ -3266,6 +3266,160 @@ do
     EditorRoom:clearUndoHistory()
 end
 
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011 Code-Review Nachbesserungen — Batch 1: Modal-/Undo-Korrektheit
+-- (Findings F3, F5, F4, F9)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+section("Review F4: UndoHistory:remapFrames zieht Frame-Umordnung/-Loeschung nach")
+do
+    -- (A) Swap komponiert wie die echte Frame-Datenbewegung: {1,2} dann {2,3}
+    -- schiebt den urspruenglichen Frame 1 auf Slot 3.
+    local h = UndoHistory.new()
+    h:push({ kind = "content", op = "clear", frameIndex = 1, layerArrayIndex = 1, cells = {} })
+    h:remapFrames({ swapped = { 1, 2 } })
+    check(h.entries[1].frameIndex == 2, "F4: swap {1,2} -> content frameIndex 1 wird 2")
+    h:remapFrames({ swapped = { 2, 3 } })
+    check(h.entries[1].frameIndex == 3, "F4: danach swap {2,3} -> frameIndex 2 wird 3 (Umordnung komponiert)")
+
+    -- (B) removed: hoehere Indizes ruecken auf, ein Eintrag AUF dem geloeschten
+    -- Frame wird verworfen (sein Ziel existiert nicht mehr).
+    local h2 = UndoHistory.new()
+    h2:push({ kind = "content", op = "clear",  frameIndex = 2, layerArrayIndex = 1, cells = {} })
+    h2:push({ kind = "content", op = "rotate", frameIndex = 4, layerArrayIndex = 1, cells = {} })
+    h2:push({ kind = "content", op = "shift",  frameIndex = 1, layerArrayIndex = 1, cells = {} })
+    h2:remapFrames({ removed = 2 })
+    check(#h2.entries == 2, "F4: removed 2 verwirft den content-Eintrag mit frameIndex == 2")
+    check(h2.entries[1].frameIndex == 3, "F4: removed 2 -> frameIndex 4 rueckt auf 3")
+    check(h2.entries[2].frameIndex == 1, "F4: removed 2 -> frameIndex 1 (< 2) unveraendert")
+
+    -- (C) deleteFrame-Slot (index) folgt Umordnung/Loeschung, wird nie verworfen.
+    local h3 = UndoHistory.new()
+    h3:push({ kind = "deleteFrame", op = "deleteFrame", index = 5, frameLayersEntry = {}, framesEntry = {} })
+    h3:remapFrames({ removed = 2 })
+    check(h3.entries[1].index == 4, "F4: removed 2 -> deleteFrame-Slot 5 rueckt auf 4")
+    h3:remapFrames({ swapped = { 4, 1 } })
+    check(h3.entries[1].index == 1, "F4: swap {4,1} -> deleteFrame-Slot 4 wird 1")
+    check(#h3.entries == 1, "F4: deleteFrame-Eintrag bleibt trotz Umordnung erhalten (FR-007)")
+end
+
+section("Review F4: FrameManagementView-Umordnung zieht den Undo-Verlauf mit (Integration)")
+loadEditorV11("s011f4", { threeLayerFrame(1), threeLayerFrame(2), threeLayerFrame(3) }, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    EditorRoom:clearUndoHistory()
+
+    -- Auf Frame 3 navigieren, Zelle 7 markant setzen, dann 'clear screen' ->
+    -- content-Eintrag mit frameIndex = 3.
+    bDpad("rightButtonDown", "rightButtonUp")   -- Frame 2
+    bDpad("rightButtonDown", "rightButtonUp")   -- Frame 3
+    d.frameLayers[3].layers[1].positions[7] = 2
+    mockMenuItemCallbacks["clear screen"]()
+    check(EditorRoom:hasUndo(), "Vorbedingung: content-Undo-Eintrag fuer Frame 3 vorhanden")
+    check(d.frameLayers[3].layers[1].positions[7] == 1
+        and d.frameLayers[3].layers[1].positions[1] == 1, "Vorbedingung: Frame 3 / Ebene 1 geleert")
+
+    -- In der FrameManagementView Frame 3 an Position 1 ziehen (zwei Swaps).
+    FrameManagementView:init(function() end, EditorRoom)
+    FrameManagementView:setImageData(d, 3)
+    local fh = FrameManagementView:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    fh.AButtonDown()        -- markiert Frame 3
+    fh.leftButtonDown()     -- swap 3<->2
+    fh.leftButtonDown()     -- swap 2<->1  -> Ex-Frame-3 liegt jetzt auf Index 1
+    check(d.frameLayers[1].layers[1].positions[7] == 1, "Ex-Frame-3 (geleert) liegt nach der Umordnung auf Index 1")
+
+    EditorRoom:entered()   -- Rueckkehr in den Tile View
+    check(EditorRoom:undoLast() == "applied", "F4: undoLast nach FMV-Umordnung -> 'applied'")
+    check(d.frameLayers[1].layers[1].positions[7] == 2, "F4: Clear in Ex-Frame-3 (Index 1) rueckgaengig -> Zelle 7 = 2")
+    check(d.frameLayers[1].layers[1].positions[1] == 3, "F4: uebrige Zellen von Ex-Frame-3 -> 3 (Basistile) zurueck")
+    check(d.frameLayers[2].layers[1].positions[1] == 1, "F4: Nachbar-Frame (Ex-Frame-1) unberuehrt (Basistile 1)")
+    check(d.frameLayers[3].layers[1].positions[1] == 2, "F4: Nachbar-Frame (Ex-Frame-2) unberuehrt (Basistile 2)")
+    EditorRoom:clearUndoHistory()
+end
+
+section("Review F3: Systemmenue ist bei offenem Undo-Dialog gesperrt")
+loadEditorV11("s011menu", { threeLayerFrame(1) }, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    UndoPrompt.reset()
+
+    -- Rotation-Eintrag anlegen und den Dialog dafuer oeffnen.
+    d.frameLayers[1].layers[1].positions[9] = 2
+    EditorRoom:recordRotation(9, d.imagetable:getImage(2))
+    d.frameLayers[1].layers[1].positions[9] = 1
+    d.frameLayers[1].layers[1].positions[20] = 3   -- Zeuge: 'clear screen' wuerde das auf 1 setzen
+    EditorRoom:undoRequest()
+    check(UndoPrompt.isOpen() and UndoPrompt.currentLabel() == "Undo Rotation?", "Vorbedingung: Rotation-Dialog offen")
+
+    -- 'clear screen' aus dem Systemmenue bei offenem Dialog: folgenlos.
+    mockMenuItemCallbacks["clear screen"]()
+    check(UndoPrompt.currentLabel() == "Undo Rotation?", "F3: 'clear screen' bei offenem Dialog legt KEINEN neuen Eintrag an")
+    check(d.frameLayers[1].layers[1].positions[20] == 3, "F3: 'clear screen' bei offenem Dialog liess die aktive Ebene unangetastet")
+
+    -- (A) Ja nimmt die im Dialog benannte Rotation zurueck (Aktion == Label).
+    UndoPrompt.handleA()
+    check(d.frameLayers[1].layers[1].positions[9] == 2, "F3: (A) Ja macht die Rotation rueckgaengig, nicht ein 'clear'")
+    EditorRoom:clearUndoHistory()
+end
+
+section("Review F5: ein neu geladenes Bild schliesst einen stehen gebliebenen Undo-Dialog")
+do
+    UndoPrompt.open("Undo Rotation?", function() error("stale onConfirm darf nie laufen") end)
+    check(UndoPrompt.isOpen(), "Vorbedingung: Dialog offen")
+    loadEditorV11("s011reset", { threeLayerFrame(1) }, 3)
+    check(not UndoPrompt.isOpen(), "F5: handleLoadSuccess ruft UndoPrompt.reset() -> Dialog zu")
+    EditorRoom:clearUndoHistory()
+end
+
+section("Review F9: Schuettel-Commit im Zoom View kehrt sofort aus update() zurueck")
+loadEditorV11("s011f9z", { threeLayerFrame(1) }, 3)
+do
+    EditorRoom:clearUndoHistory()          -- leerer Verlauf -> Schuetteln committet nur, oeffnet keinen Dialog
+    local lastRoom = nil
+    local pixelMock = { setCurrentTile = function() end }
+    ZoomRoom:init(function(r) lastRoom = r end, pixelMock, EditorRoom)
+    ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    heldButtons[playdate.kButtonB] = true   -- B gehalten: ohne den return wuerde der Crank-Block weiter-zoomen
+
+    accelXYZ = { 1.0, 0, 0 }; mockTimeMs = 41000; crankTicksValue = 0; ZoomRoom:update()
+    lastRoom = nil
+    -- 2. Sample kippt die Kante -> commitAndReturnToEditor(); im selben update() liegen 4 Crank-Ticks an
+    accelXYZ = { -1.0, 0, 0 }; mockTimeMs = 41200; crankTicksValue = 4; ZoomRoom:update()
+    check(lastRoom == EditorRoom, "F9: nach dem Schuettel-Commit laeuft der Crank-Block nicht mehr (kein Weiterzoomen in den PixelRoom)")
+
+    crankTicksValue = 0
+    heldButtons[playdate.kButtonB] = false
+    accelXYZ = { 0, 0, 1 }
+    EditorRoom:clearUndoHistory()
+end
+
+section("Review F9: Schuettel-Commit im Pixel View kehrt sofort aus update() zurueck")
+loadEditorV11("s011f9p", { threeLayerFrame(1) }, 3)
+do
+    EditorRoom:clearUndoHistory()
+    local lastRoom = nil
+    local zoomMock = { setNewTile = function() end }
+    PixelRoom:init(function(r) lastRoom = r end, zoomMock, EditorRoom)
+    PixelRoom:setCurrentTile(newMockImage(16, 16, "white"), 5, nil)
+    PixelRoom:entered()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    heldButtons[playdate.kButtonB] = true
+
+    accelXYZ = { 1.0, 0, 0 }; mockTimeMs = 42000; crankTicksValue = 0; PixelRoom:update()
+    lastRoom = nil
+    accelXYZ = { -1.0, 0, 0 }; mockTimeMs = 42200; crankTicksValue = -4; PixelRoom:update()
+    check(lastRoom == EditorRoom, "F9: nach dem Schuettel-Commit laeuft der Crank-Block nicht mehr (kein Zoom-Out in den ZoomRoom)")
+
+    crankTicksValue = 0
+    heldButtons[playdate.kButtonB] = false
+    accelXYZ = { 0, 0, 1 }
+    EditorRoom:clearUndoHistory()
+end
+
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 
 print("")

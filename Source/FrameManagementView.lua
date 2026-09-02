@@ -73,7 +73,13 @@ local function moveMarked(delta)
     if not marked then return end
     local target = marked + delta
     if target < 1 or target > frameCount() then return end  -- an den Enden geklemmt
-    swapFrames(marked, target)
+    local from = marked
+    swapFrames(from, target)
+    -- Spec 011 (Review F4): den Undo-Verlauf der Umordnung folgen lassen,
+    -- sonst zeigt ein spaeteres Undo auf den falschen Frame-Index.
+    if editorRoom and editorRoom.onFramesReindexed then
+        editorRoom:onFramesReindexed({ swapped = { from, target } })
+    end
     marked = target
     cursor = target
     needsRedraw = true
@@ -83,13 +89,21 @@ local function deleteMarked()
     if not marked then return end
     if frameCount() <= 1 then return end  -- mindestens 1 Frame bleibt (FR-020)
     -- Spec 011: geloeschten Frame (tiefe Kopie) + flachen Cache-Eintrag VOR dem
-    -- Entfernen in den Undo-Verlauf geben. Position = marked (Ursprungsindex).
-    if editorRoom and editorRoom.recordDeleteFrame then
-        local flatCopy = imageData.frames and LayerModel.copyArray(imageData.frames[marked]) or nil
-        editorRoom:recordDeleteFrame(marked, LayerModel.cloneFrameLayers(imageData.frameLayers[marked]), flatCopy)
+    -- Entfernen sichern. Reihenfolge (Review F4): erst entfernen, dann den
+    -- bestehenden Undo-Verlauf umnummerieren, ZULETZT den deleteFrame-Eintrag
+    -- mit dem Ursprungsindex anhaengen -- so wird er von der Umnummerierung
+    -- nicht selbst mitverschoben.
+    local removedIndex = marked
+    local layersCopy = LayerModel.cloneFrameLayers(imageData.frameLayers[removedIndex])
+    local flatCopy = imageData.frames and LayerModel.copyArray(imageData.frames[removedIndex]) or nil
+    table.remove(imageData.frameLayers, removedIndex)
+    if imageData.frames then table.remove(imageData.frames, removedIndex) end
+    if editorRoom and editorRoom.onFramesReindexed then
+        editorRoom:onFramesReindexed({ removed = removedIndex })
     end
-    table.remove(imageData.frameLayers, marked)
-    if imageData.frames then table.remove(imageData.frames, marked) end
+    if editorRoom and editorRoom.recordDeleteFrame then
+        editorRoom:recordDeleteFrame(removedIndex, layersCopy, flatCopy)
+    end
     marked = nil
     cursor = math.max(1, math.min(cursor, frameCount()))
     needsRedraw = true

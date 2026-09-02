@@ -634,12 +634,20 @@ end
 function ZoomRoom:update()
     processDirectionHold()
 
-    -- Spec 011: Schuettel-Sample lesen + an EditorRoom weiterreichen. Bei "(A) Ja"
-    -- committet undoCommitAndReturn() und wechselt in den Tile View (V25).
+    -- Spec 011: Schuettel-Sample lesen + an EditorRoom weiterreichen. Erkennt der
+    -- Detektor eine Kante, committet der Callback SOFORT (synchron) und wechselt
+    -- in den Tile View (V25). Review F9: danach MUSS update() zurueckkehren --
+    -- sonst laeuft der Rest (Crank-Block, gfx.clear + drawGrid + UndoPrompt.draw)
+    -- weiter und malt das Zoom-Raster fuer einen Frame ueber den neuen Raum.
     do
         local ax, ay, az = playdate.readAccelerometer()
         if ax and editorRoom and editorRoom.onShakeSample then
-            editorRoom:onShakeSample(ax, ay, az, commitAndReturnToEditor)
+            local roomLeft = false
+            editorRoom:onShakeSample(ax, ay, az, function()
+                roomLeft = true
+                commitAndReturnToEditor()
+            end)
+            if roomLeft then return end
         end
     end
 
@@ -655,9 +663,11 @@ function ZoomRoom:update()
         if ticks >= 4 then
             ticks = 0
             zoomIntoPixelRoom()
+            return   -- Review F9: Raum gewechselt -> restliches update() nicht mehr ausfuehren
         elseif ticks <= -4 then
             ticks = 0
             commitAndReturnToEditor()
+            return   -- Review F9: dito
         end
     else
         ticks = 0
