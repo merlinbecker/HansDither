@@ -1,8 +1,9 @@
 # Hans Dither – Räume & Steuerung
 
 Referenz für jeden Room der App: was er tut, was man dort machen kann, die
-komplette Tastenbelegung und die Einträge im Playdate-Systemmenü
-(„Kontextmenü", erreichbar über die ⊞-Menütaste).
+komplette Tastenbelegung (inkl. der tastenlosen **Schüttelgeste**) und die
+Einträge im Playdate-Systemmenü („Kontextmenü", erreichbar über die
+⊞-Menütaste).
 
 Stand: `Source/pdxinfo` buildNumber 32 · Spec 011 (Schüttel-Undo) enthalten.
 
@@ -49,29 +50,71 @@ Kacheln, Frame-Anzahl und eine Vorschau der ersten bis zu 120 Kacheln.
 Alle Räume zeichnen nur nach einer Zustandsänderung neu; der letzte
 Framebuffer bleibt sonst stehen.
 
-### Modaler Schüttel-Undo-Dialog (Tile-, Zoom-, Pixel-View)
-Einmaliges **Schütteln nach links und rechts** öffnet – sofern eine der
-letzten bis zu 3 *riskanten* Operationen rücknehmbar ist – einen modalen
-Dialog „Undo &lt;Operation&gt;?".
-
-| Taste | Wirkung im Dialog |
-|---|---|
-| **A** | Ja – Operation rückgängig machen |
-| **B** | Nein – Dialog schließen, nichts ändern |
-| D-Pad / Kurbel / A-Strich | wirkungslos (Dialog schluckt alles) |
-| erneutes Schütteln | wirkungslos |
-
-Rücknehmbare riskante Operationen: **Clear Screen**, **Frame löschen**,
-**90°-Pixel-Rotation**, **Pixel-Verschiebung** (eine B-Halte-Geste = ein
-Undo-Schritt). Normales Malen einzelner Pixel/Kacheln wird *nicht* erfasst.
-Wird der Dialog aus Zoom- oder Pixel-View ausgelöst, werden offene Edits
-committet und die Ansicht wechselt in den Tile View, wo das Ergebnis sichtbar
-ist. In der **FrameManagementView** ist die Geste inaktiv (B ist dort belegt).
-
 ### Beschleunigungssensor
 Läuft nur in Tile-, Zoom- und Pixel-View (Start beim Betreten, Stopp beim
 Rücksprung zur Auswahl). In Title-/Selection-Screen und FrameManagementView
-ist er aus (Batterie).
+ist er aus (Batterie). Er wird ausschließlich für die Schüttelgeste
+(nächster Abschnitt) ausgewertet.
+
+---
+
+## Die Schüttelgeste – Undo für riskante Operationen
+
+Die einzige Eingabe der App, die **keine Taste** benutzt. Sie nimmt eine der
+letzten bis zu **3 riskanten Operationen** zurück.
+
+### Ausführen
+Das Playdate **einmal kurz und deutlich nach links und wieder nach rechts
+kippen** (Bewegung entlang der Längsachse, wie ein „Nein"-Schütteln). Es
+zählt nur die *Sequenz* links→rechts – bloßes Rütteln oder eine einseitige
+Bewegung löst nichts aus. Zwischen zwei Erkennungen liegt eine kurze
+Abklingzeit (~1,2 s). Die genaue Bewegungsstärke wird noch auf echter
+Hardware feinjustiert.
+
+### Wo sie wirkt
+
+| Room | Schüttelgeste |
+|---|---|
+| **Tile View** (EditorRoom) | aktiv |
+| **Zoom View** (ZoomRoom) | aktiv – bei „(A) Ja" wird committet und in den Tile View gewechselt |
+| **Pixel View** (PixelRoom) | aktiv – bei „(A) Ja" wird committet und in den Tile View gewechselt |
+| **FrameManagementView** | **inaktiv** (B ist durch die Halte-Eintrittsgeste belegt); ein hier gelöschter Frame ist trotzdem rücknehmbar, sobald man zurück im Tile View ist |
+| Title- / SelectionRoom | inaktiv |
+
+Während eines Lade- oder Speichervorgangs im Editor ist die Geste ebenfalls
+gesperrt.
+
+### Was passiert beim Schütteln
+
+- **Gibt es eine rücknehmbare Operation** → modaler Dialog „Undo
+  &lt;Operation&gt;?".
+- **Gibt es keine** → nur eine kurze Statuszeile („Nothing to undo" bzw.
+  „cannot undo – frame limit", wenn ein Frame-Undo an der 12-Frame-Grenze
+  scheitert), **kein Dialog**.
+
+### Der Dialog
+
+| Eingabe | Wirkung |
+|---|---|
+| **A** | Ja – Operation rückgängig machen, Dialog schließen |
+| **B** | Nein – Dialog schließen, nichts ändern |
+| D-Pad / Kurbel / A-Strich | wirkungslos – der Dialog schluckt alle übrigen Eingaben, es passiert keine Editier-Aktion und kein Raumwechsel |
+| erneutes Schütteln | wirkungslos |
+
+### Rücknehmbare Operationen (der 3er-Verlauf)
+
+| Operation | ausgelöst in / durch |
+|---|---|
+| **Clear Screen** | Tile View, Systemmenü „clear screen" |
+| **Frame löschen** | FrameManagementView, 2× A auf dem markierten Frame |
+| **90°-Pixel-Rotation** | Pixel View, volle Kurbeldrehung ohne B |
+| **Pixel-Verschiebung** | Zoom View, B halten + D-Pad – **eine ganze B-Halte-Geste = ein Undo-Schritt** |
+
+Normales Malen einzelner Pixel oder Kacheln wird **nicht** erfasst. Der
+Verlauf hält nur die letzten 3 dieser Operationen (die vierte verdrängt die
+älteste); es sind also bis zu 3 Undos hintereinander möglich. Beim Laden
+eines anderen Bildes oder beim Verlassen des Editors ist der Verlauf leer.
+Kein Redo.
 
 ---
 
@@ -169,9 +212,10 @@ zurücknehmen.
 | **B halten + Kurbel vorwärts** | Zoom hinein → Zoom View |
 | **B halten + Kurbel rückwärts** | Frame-Verwaltung öffnen |
 | **Kurbel ohne B** | Tile-Picker-Overlay: je ca. 30° Netto-Drehung eine referenzierte Kachel weiter (Umlauf); blendet 1,5 s nach der letzten Drehung aus. Landet die Auswahl auf Weiß = Abwahl |
-| **Schütteln (links-rechts)** | Undo-Dialog (siehe oben), falls eine riskante Operation rücknehmbar ist |
+| **Schütteln (links-rechts)** | öffnet den Undo-Dialog für die letzte riskante Operation (Clear Screen / Frame löschen / Rotation / Pixel-Verschiebung); gibt es keine, erscheint nur eine kurze Meldung. Details: Abschnitt „Die Schüttelgeste" |
 
-Während eines Lade-/Speichervorgangs sind alle Editier-Eingaben gesperrt.
+Während eines Lade-/Speichervorgangs sind alle Editier-Eingaben gesperrt –
+auch die Schüttelgeste.
 
 ### Systemmenü
 
@@ -206,7 +250,7 @@ Schütteln zurücknehmen.
 | **B loslassen** | schließt die laufende Verschiebe-Geste ab (= **ein** Undo-Schritt für die ganze Geste) |
 | **B halten + Kurbel vorwärts** | Zoom hinein → Pixel View |
 | **B halten + Kurbel rückwärts** | offene Zell-Edits committen, zurück in den Tile View |
-| **Schütteln (links-rechts)** | Undo-Dialog; bei „A" wird committet und in den Tile View gewechselt |
+| **Schütteln (links-rechts)** | Undo-Dialog; „(A) Ja" committet die offenen Edits und wechselt in den Tile View. Details: Abschnitt „Die Schüttelgeste" |
 
 ### Systemmenü
 Keine eigenen Einträge – das Menü ist im Zoom View leer.
@@ -237,7 +281,7 @@ zurück in den Zoom View committen, Rotation per Schütteln zurücknehmen.
 | **B** | malt **nicht**. Einzelner B-Tipp: folgenlos |
 | **B halten + Kurbel rückwärts** | offene Edits committen, Zoom heraus → Zoom View |
 | **Kurbel ohne B** | Rotation: eine volle 360°-Drehung dreht die Kachel um 90° (Drehrichtung = Kurbelrichtung); Teildrehungen wirken nicht. Per Schütteln rücknehmbar |
-| **Schütteln (links-rechts)** | Undo-Dialog (nimmt u. a. die Rotation zurück; committet + wechselt in den Tile View) |
+| **Schütteln (links-rechts)** | Undo-Dialog (nimmt u. a. die Rotation zurück); „(A) Ja" committet und wechselt in den Tile View. Details: Abschnitt „Die Schüttelgeste" |
 
 ### Systemmenü
 
