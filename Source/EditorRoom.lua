@@ -273,6 +273,221 @@ local function recompositeCurrentFrame()
     needsRedraw = true
 end
 
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011: Schuettel-Undo (data-model.md §2-§4, contracts C-011-2)
+--
+-- undoHistory haelt bis zu 3 "content"- oder "deleteFrame"-Eintraege. Jede der
+-- vier riskanten Operationen sichert ihren Pre-Zustand VOR der Mutation:
+--   clear  -> recordClear()               (alle 375 Zellen der aktiven Ebene)
+--   rotate -> EditorRoom:recordRotation()  (1 Zelle; via ZoomRoom:setNewTile)
+--   shift  -> recordShiftCandidates()      (1-2 Zellen/Tastendruck, ein Run)
+--   delete -> EditorRoom:recordDeleteFrame() (via FrameManagementView)
+-- Ein bestaetigtes Undo wendet den juengsten anwendbaren Eintrag an und
+-- navigiert zum betroffenen Frame.
+-- ══════════════════════════════════════════════════════════════════════════════
+
+local shiftRun = nil   -- offener Verschiebe-Run (ein content-Eintrag), oder nil
+
+local UNDO_LABELS = {
+    clear       = "Undo Clear Screen?",
+    rotate      = "Undo Rotation?",
+    shift       = "Undo Pixel-Verschiebung?",
+    deleteFrame = "Undo Frame loeschen?",
+}
+local function labelFor(op)
+    return UNDO_LABELS[op] or "Undo?"
+end
+
+-- Bild der Imagetable an einem Positions-Index (0 = "absent" -> nil).
+local function tileImageAt(posIdx)
+    if not posIdx or posIdx == 0 then return nil end
+    return imageData.imagetable:getImage(posIdx)
+end
+
+-- Content-Eintrag: alle 375 Zellen der AKTIVEN Ebene (nur die -- "Clear Screen"
+-- leert trotz Namen nur die aktive Ebene, EditorRoom.clearCurrentFrame).
+local function recordClear()
+    local entry = currentEntry()
+    local layer = activeLayerObj()
+    if not entry or not layer then return end
+    local cells = {}
+    for i = 1, #layer.positions do
+        local p = layer.positions[i]
+        cells[i] = { prevPosIndex = p, prevImage = tileImageAt(p) }
+    end
+    undoHistory:push({
+        kind = "content", op = "clear",
+        frameIndex = currentFrame,
+        layerArrayIndex = imageData.activeLayer or 1,
+        cells = cells,
+    })
+end
+
+-- Content-Eintrag fuer eine einzelne rotierte Zelle. prevImage = das 16x16-Bild
+-- VOR der ersten Rotation der PixelRoom-Sitzung (PixelRoom haelt den Snapshot,
+-- ZoomRoom:setNewTile reicht ihn hier durch). Ein Eintrag je Sitzung.
+function EditorRoom:recordRotation(cellIdx, prevImage)
+    local entry = currentEntry()
+    local layer = activeLayerObj()
+    if not entry or not layer or not cellIdx then return end
+    undoHistory:push({
+        kind = "content", op = "rotate",
+        frameIndex = currentFrame,
+        layerArrayIndex = imageData.activeLayer or 1,
+        cells = { [cellIdx] = { prevPosIndex = layer.positions[cellIdx], prevImage = prevImage } },
+    })
+end
+
+-- Verschiebe-Run: candidateCells = {sourceIdx[, neighborIdx]} VOR shiftTileContent.
+-- Ein offener Run (undoHistory:coalesceTarget) sammelt weitere Zellen; ein
+-- bereits erfasster cellIdx wird NIE ueberschrieben (Snapshot = Run-Start).
+local function recordShiftCandidates(candidateCells)
+    local entry = currentEntry()
+    local layer = activeLayerObj()
+    if not entry or not layer then return end
+    local fi, li = currentFrame, imageData.activeLayer or 1
+    if not shiftRun then
+        shiftRun = undoHistory:coalesceTarget("shift", fi, li)
+    end
+    if not shiftRun then
+        shiftRun = { kind = "content", op = "shift", frameIndex = fi, layerArrayIndex = li,
+                     cells = {}, runOpen = true }
+        undoHistory:push(shiftRun)
+    end
+    for _, c in ipairs(candidateCells) do
+        if shiftRun.cells[c] == nil then
+            local p = layer.positions[c]
+            shiftRun.cells[c] = { prevPosIndex = p, prevImage = tileImageAt(p) }
+        end
+    end
+end
+
+-- Beendet den offenen Verschiebe-Run (ZoomRoom: B loslassen / Room verlassen /
+-- Commit). Weitere Shifts danach beginnen einen neuen Eintrag.
+function EditorRoom:endShiftRun()
+    if shiftRun then
+        shiftRun.runOpen = false
+        shiftRun = nil
+    end
+end
+
+-- deleteFrame-Eintrag; von FrameManagementView VOR table.remove aufgerufen.
+-- framesEntryCopy darf nil sein (defensiver Pfad ohne flachen Cache).
+function EditorRoom:recordDeleteFrame(index, frameLayersEntryCopy, framesEntryCopy)
+    if not frameLayersEntryCopy then return end
+    undoHistory:push({
+        kind = "deleteFrame", op = "deleteFrame",
+        index = index,
+        frameLayersEntry = frameLayersEntryCopy,
+        framesEntry = framesEntryCopy,
+    })
+end
+
+-- ── Anwendung ────────────────────────────────────────────────────────────────
+
+-- Loest den wiederherzustellenden Tile-Index einer Zelle auf. Bevorzugt den
+-- urspruenglichen Index (die Imagetable waechst zur Laufzeit nur, nummeriert nie
+-- um -- der Index bleibt die ganze Sitzung gueltig); registriert den Inhalt nur
+-- als Sicherheitsnetz neu, falls der Index doch nicht mehr passt.
+local function resolvePrevIndex(cell)
+    local idx = cell.prevPosIndex or 0
+    if idx == 0 then
+        return cell.prevImage and registerTile(cell.prevImage) or 0
+    end
+    local n = imageData.imagetable and imageData.imagetable:getLength() or 0
+    if idx <= n and (not cell.prevImage
+        or imagesEqual(imageData.imagetable:getImage(idx), cell.prevImage)) then
+        return idx
+    end
+    return cell.prevImage and registerTile(cell.prevImage) or idx
+end
+
+-- Stellt die gesicherten Zellen in der Ebene entry.layerArrayIndex des Frames
+-- entry.frameIndex wieder her (NICHT ueber activeLayerObj() -- der Eintrag kann
+-- eine andere Ebene betreffen als die aktuell aktive).
+local function applyContentEntry(entry)
+    local frameEntry = imageData.frameLayers and imageData.frameLayers[entry.frameIndex]
+    local layer = frameEntry and frameEntry.layers and frameEntry.layers[entry.layerArrayIndex]
+    if not layer then return end
+    currentFrame = entry.frameIndex          -- recomposite* arbeiten auf currentFrame
+    imageData.activeLayer = LayerModel.clampActive(frameEntry, imageData.activeLayer or 1)
+    for cellIdx, cell in pairs(entry.cells) do
+        layer.positions[cellIdx] = resolvePrevIndex(cell)
+    end
+    if entry.op == "clear" then
+        recompositeCurrentFrame()
+    else
+        for cellIdx in pairs(entry.cells) do
+            recompositeCell(cellIdx)
+        end
+        updateTilemapFrame()
+    end
+end
+
+local function applyDeleteFrameEntry(entry)
+    local n = #imageData.frameLayers
+    local i = math.min(entry.index, n + 1)
+    table.insert(imageData.frameLayers, i, entry.frameLayersEntry)
+    if imageData.frames and entry.framesEntry then
+        table.insert(imageData.frames, i, entry.framesEntry)
+    end
+    currentFrame = i
+    imageData.activeLayer = LayerModel.clampActive(imageData.frameLayers[i], imageData.activeLayer or 1)
+    updateTilemapFrame()
+    pickerTileList = nil
+end
+
+-- undoLast(): den von peekValid freigegebenen Eintrag anwenden + pop(). Keine
+-- Ablehnung an dieser Stelle -- peekValid hat die Anwendbarkeit garantiert.
+function EditorRoom:undoLast()
+    local entry = undoHistory:peekValid(imageData)
+    if not entry then return "empty" end
+    if entry.kind == "deleteFrame" then
+        applyDeleteFrameEntry(entry)
+    else
+        applyContentEntry(entry)
+    end
+    undoHistory:pop()
+    needsRedraw = true
+    return "applied"
+end
+
+function EditorRoom:hasUndo()
+    return (undoHistory:peekValid(imageData)) ~= nil
+end
+
+-- undoRequest(commitAndReturn?): Einstieg der erkannten Schuettel-Geste. Oeffnet
+-- den Dialog nur, wenn ein "(A) Ja" garantiert zu einem Undo fuehrt (FR-012);
+-- sonst nur eine kurze Meldung (FR-007/FR-009).
+--
+-- commitAndReturn wird aus ZoomRoom/PixelRoom uebergeben: offene Edits committen
+-- + zurueck in den Tile View. Das MUSS vor dem peekValid passieren, denn der
+-- Rotation-Eintrag entsteht erst beim Commit (ZoomRoom:setNewTile ->
+-- recordRotation). Sonst zeigte der Dialog das Label des aelteren Eintrags,
+-- waehrend "(A) Ja" die soeben committete Rotation rueckgaengig macht.
+function EditorRoom:undoRequest(commitAndReturn)
+    if commitAndReturn then commitAndReturn() end
+    local entry, reason = undoHistory:peekValid(imageData)
+    if entry then
+        UndoPrompt.open(labelFor(entry.op), function()
+            EditorRoom:undoLast()
+        end)
+        needsRedraw = true
+    else
+        showStatus(reason == "frame-limit" and "cannot undo - frame limit" or "Nothing to undo")
+    end
+end
+
+-- onShakeSample(x,y,z, commitAndReturn?): pro Frame aus den drei Editier-Raeumen
+-- gerufen. Feuert der Detektor eine Kante und ist der Editor nicht blockiert und
+-- kein Dialog offen (FR-015) -> undoRequest.
+function EditorRoom:onShakeSample(x, y, z, commitAndReturn)
+    if inputBlocked() or UndoPrompt.isOpen() then return end
+    if shakeDetector:feed(x, y, z, playdate.getCurrentTimeMilliseconds()) then
+        EditorRoom:undoRequest(commitAndReturn)
+    end
+end
+
 -- Spec 010 US3 (FR-013/014/017): aktive Ebene um delta zyklen (Wrap 1..count).
 local function cycleActiveLayer(delta)
     local entry = currentEntry()
@@ -462,6 +677,7 @@ local function clearCurrentFrame()
     if inputBlocked() then return end
     local layer = activeLayerObj()
     if not layer then return end
+    recordClear()   -- Spec 011: Pre-Zustand der aktiven Ebene VOR dem Leeren sichern
     local fill = (layer.layerIndex == 0) and 1 or 0
     for i = 1, #layer.positions do
         layer.positions[i] = fill
@@ -581,6 +797,18 @@ function EditorRoom:shiftActiveLayer(direction, cellIdx)
     if not entry then return false end
     if not activeLayerObj() then return false end
     cellIdx = cellIdx or cursorCellIndex()
+    -- Spec 011: Quell- + Nachbarzelle VOR der Verschiebung in den offenen Run
+    -- sichern (dieselben Zellen, die shiftTileContent gleich anfasst).
+    local dx, dy = LayerModel.shiftDelta(direction)
+    if dx then
+        local cand = { cellIdx }
+        local cx, cy = (cellIdx - 1) % GRID_COLS, (cellIdx - 1) // GRID_COLS
+        local nx, ny = cx + dx, cy + dy
+        if nx >= 0 and nx < GRID_COLS and ny >= 0 and ny < GRID_ROWS then
+            cand[#cand + 1] = ny * GRID_COLS + nx + 1
+        end
+        recordShiftCandidates(cand)
+    end
     local changed = LayerModel.shiftTileContent(
         entry, imageData.activeLayer or 1, cellIdx, direction, getTile, registerTile)
     if not changed then return false end
@@ -602,6 +830,8 @@ end
 local function handleLoadError(err)
     loadingOperation = nil
     undoHistory:clear()   -- Spec 011 FR-008: Verlauf ist sitzungslokal
+    shiftRun = nil
+    playdate.stopAccelerometer()
     print("EditorRoom: Load failed:", tostring(err))
     if switchRoomFunction and selectionRoom then
         switchRoomFunction(selectionRoom)
@@ -622,6 +852,7 @@ local function handleLoadSuccess(result)
     cursor.y = 1
     undoHistory:clear()     -- Spec 011 FR-008: frischer Verlauf je geladenem Bild
     shakeDetector:reset()
+    shiftRun = nil
 
     -- Spec 010: defensiv — falls ein Aufrufer nur flache frames liefert,
     -- je Frame eine Basisebene daraus bauen. imageData.frames bleibt der
@@ -662,6 +893,8 @@ local function handleSaveAndExit()
     end, function()
         savingOperation = nil
         undoHistory:clear()   -- Spec 011 FR-008: Editor verlassen -> Verlauf leeren
+        shiftRun = nil
+        playdate.stopAccelerometer()
         if switchRoomFunction and selectionRoom then
             switchRoomFunction(selectionRoom)
         end
@@ -875,6 +1108,7 @@ local function draw()
         bauchbinde:drawBottom(statusMessage, "left", 400, 240)
     end
     overlay:draw()
+    UndoPrompt.draw()   -- Spec 011: modaler Undo-Dialog ueber allem
 end
 
 -- ── Room-Lifecycle ────────────────────────────────────────────────────────────
@@ -908,6 +1142,10 @@ function EditorRoom:entered()
     bauchbindeVisible = true
     needsRedraw = true
 
+    -- Spec 011 (FR-017): Accelerometer nur waehrend der Editier-Views aktiv.
+    -- Idempotent -- ZoomRoom/PixelRoom starten ihn ebenfalls in entered().
+    playdate.startAccelerometer()
+
     if pendingImageId then
         local id = pendingImageId
         pendingImageId = nil
@@ -931,6 +1169,7 @@ function EditorRoom:entered()
         if tilemap then updateTilemapFrame() end
     else
         -- Kein Bild gesetzt: zurück zum Auswahlscreen
+        playdate.stopAccelerometer()   -- Spec 011: Editor verlassen -> Sensor aus
         if switchRoomFunction and selectionRoom then
             switchRoomFunction(selectionRoom)
         end
@@ -947,6 +1186,7 @@ end
 function EditorRoom:clearUndoHistory()
     undoHistory:clear()
     shakeDetector:reset()
+    shiftRun = nil
 end
 
 -- Spec 006 R4/CR-05..CR-07: 400x240-Bild fuer playdate.setMenuImage(); relevanter
@@ -1049,11 +1289,20 @@ function EditorRoom:update()
             showStatus("Save failed: " .. tostring(err))
         end)
         playdate.getCrankTicks(4)
-    elseif imageData then
+    elseif imageData and not UndoPrompt.isOpen() then
         handleCrank()
     end
 
-    if needsRedraw or operationRunning() then
+    -- Spec 011: Beschleunigungssensor lesen + Detektor fuettern. onShakeSample
+    -- gated selbst gegen inputBlocked()/offenen Dialog (FR-015). Ein erkanntes
+    -- Schuetteln setzt needsRedraw (via undoRequest), sodass der Dialog auch
+    -- ohne Tasteneingabe erscheint.
+    if imageData then
+        local ax, ay, az = playdate.readAccelerometer()
+        if ax then EditorRoom:onShakeSample(ax, ay, az) end
+    end
+
+    if needsRedraw or operationRunning() or UndoPrompt.isOpen() then
         draw()
         needsRedraw = false
     end
@@ -1061,14 +1310,19 @@ end
 
 function EditorRoom:inputHandler()
     return {
+        -- Spec 011 FR-013: bei offenem Undo-Dialog schluckt der Raum alle
+        -- Eingaben; nur A (Ja) und B (Nein) wirken auf den Dialog.
         AButtonDown = function()
+            if UndoPrompt.isOpen() then UndoPrompt.handleA(); needsRedraw = true; return end
             if inputBlocked() then return end
             beginStroke()
         end,
         AButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             endStroke()
         end,
         BButtonDown = function()
+            if UndoPrompt.isOpen() then UndoPrompt.handleB(); needsRedraw = true; return end
             -- CR-02: B-Druck zaehlt als Aktivitaet unabhaengig davon, ob
             -- spaeter Pipette, Zoom oder B+D-Pad-Navigation ausgeloest wird
             -- (sonst wuerde ein langes B-Halten ohne weitere Eingabe die
@@ -1079,6 +1333,7 @@ function EditorRoom:inputHandler()
             zoomTickAccu = 0
         end,
         BButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             -- CR-02: B-Release zaehlt IMMER als Aktivitaet, auch wenn die
             -- Pipette unten uebersprungen wird; pipette() setzt lastActivityMs
             -- zwar ebenfalls, aber nur im Nicht-Zoom/Nicht-Nav-Fall
@@ -1095,37 +1350,41 @@ function EditorRoom:inputHandler()
         -- Spec 010: B gehalten -> D-Pad wechselt Ebene (Hoch/Runter) bzw. Frame
         -- (Links/Rechts). Ohne B: normale Cursor-Bewegung (mit Key-Repeat).
         upButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
                 bDpadNav("layer", 1)
             else
                 startMove("up", 0, -1)
             end
         end,
-        upButtonUp = function() stopMove("up") end,
+        upButtonUp = function() if UndoPrompt.isOpen() then return end stopMove("up") end,
         downButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
                 bDpadNav("layer", -1)
             else
                 startMove("down", 0, 1)
             end
         end,
-        downButtonUp = function() stopMove("down") end,
+        downButtonUp = function() if UndoPrompt.isOpen() then return end stopMove("down") end,
         leftButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
                 bDpadNav("frame", -1)
             else
                 startMove("left", -1, 0)
             end
         end,
-        leftButtonUp = function() stopMove("left") end,
+        leftButtonUp = function() if UndoPrompt.isOpen() then return end stopMove("left") end,
         rightButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             if not inputBlocked() and playdate.buttonIsPressed(playdate.kButtonB) then
                 bDpadNav("frame", 1)
             else
                 startMove("right", 1, 0)
             end
         end,
-        rightButtonUp = function() stopMove("right") end
+        rightButtonUp = function() if UndoPrompt.isOpen() then return end stopMove("right") end
     }
 end
 

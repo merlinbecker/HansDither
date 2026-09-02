@@ -17,6 +17,7 @@
 --   B loslassen       : zurueck zum Tile View (currentFrame wird geklemmt)
 
 import "CoreLibs/graphics"
+import "LayerModel"   -- Spec 011: cloneFrameLayers/copyArray fuer den deleteFrame-Undo-Snapshot
 
 local gfx = playdate.graphics
 local SCREEN_WIDTH = 400
@@ -81,6 +82,12 @@ end
 local function deleteMarked()
     if not marked then return end
     if frameCount() <= 1 then return end  -- mindestens 1 Frame bleibt (FR-020)
+    -- Spec 011: geloeschten Frame (tiefe Kopie) + flachen Cache-Eintrag VOR dem
+    -- Entfernen in den Undo-Verlauf geben. Position = marked (Ursprungsindex).
+    if editorRoom and editorRoom.recordDeleteFrame then
+        local flatCopy = imageData.frames and LayerModel.copyArray(imageData.frames[marked]) or nil
+        editorRoom:recordDeleteFrame(marked, LayerModel.cloneFrameLayers(imageData.frameLayers[marked]), flatCopy)
+    end
     table.remove(imageData.frameLayers, marked)
     if imageData.frames then table.remove(imageData.frames, marked) end
     marked = nil

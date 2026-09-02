@@ -10,6 +10,7 @@ import "CoreLibs/crank"
 import "PencilCursor"
 import "PixelTransparency"
 import "ImageStoreCodec"
+import "UndoPrompt"   -- Spec 011: modaler Undo-Dialog (gemeinsames Singleton)
 
 local gfx = playdate.graphics
 
@@ -355,6 +356,7 @@ local function commitAndReturnToEditor()
     if #edits > 0 then
         editorRoom:applyTileEdits(edits)
     end
+    if editorRoom.endShiftRun then editorRoom:endShiftRun() end  -- Spec 011: Verschiebe-Run schliessen
     switchRoomFunction(editorRoom)
 end
 
@@ -557,8 +559,18 @@ end
 -- Empfängt ein bearbeitetes Tile von PixelRoom (Standardpfad: Dedup beim Commit).
 function ZoomRoom:setNewTile(tile)
     if lastEditedSlotRow and lastEditedSlotCol then
-        slots[lastEditedSlotRow][lastEditedSlotCol].editedImage = tile
+        local slot = slots[lastEditedSlotRow][lastEditedSlotCol]
+        slot.editedImage = tile
         decodeImageIntoGrids(tile, lastEditedSlotRow, lastEditedSlotCol)
+        -- Spec 011: hat der PixelRoom in dieser Sitzung rotiert, den Pre-Rotation-
+        -- Zustand dieser Zelle in den Undo-Verlauf geben (frameIndexPos = 1..375).
+        if pixelRoom and pixelRoom.consumeRotationSnapshot
+            and editorRoom and editorRoom.recordRotation then
+            local prevImg = pixelRoom:consumeRotationSnapshot()
+            if prevImg and slot.frameIndexPos then
+                editorRoom:recordRotation(slot.frameIndexPos, prevImg)
+            end
+        end
     end
     needsRedraw = true
     backgroundDirty = true -- Spec 008 (AD-035): Quellbild des Slots hat sich geaendert
@@ -614,17 +626,30 @@ function ZoomRoom:entered()
     ticks = 0
     needsRedraw = true
     backgroundDirty = true -- Spec 008 (AD-035): defensiv, setFromEditorContext() setzt es bereits
+    playdate.startAccelerometer()   -- Spec 011 (FR-017): Sensor in den Editier-Views aktiv
+    if editorRoom and editorRoom.endShiftRun then editorRoom:endShiftRun() end  -- Spec 011: Run nicht ueber Zoom->Pixel->Zoom offen lassen
     playdate.getSystemMenu():removeAllMenuItems()
 end
 
 function ZoomRoom:update()
     processDirectionHold()
 
+    -- Spec 011: Schuettel-Sample lesen + an EditorRoom weiterreichen. Bei "(A) Ja"
+    -- committet undoCommitAndReturn() und wechselt in den Tile View (V25).
+    do
+        local ax, ay, az = playdate.readAccelerometer()
+        if ax and editorRoom and editorRoom.onShakeSample then
+            editorRoom:onShakeSample(ax, ay, az, commitAndReturnToEditor)
+        end
+    end
+
     -- Zoom-Trigger: B gehalten + Crank. Ticks in jedem Update lesen (stateful),
     -- ohne B verwerfen — sonst entlaedt sich aufgestauter Zaehler beim ersten B-Frame.
     local crankTicks = playdate.getCrankTicks(4) or 0
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
-    if bHeld then
+    if UndoPrompt.isOpen() then
+        ticks = 0   -- Spec 011: bei offenem Dialog keine Zoom-/Shift-Aktion
+    elseif bHeld then
         -- Standard-Lua statt pdc-Kurzform "+=" (haelt die Datei headless testbar)
         ticks = ticks + crankTicks
         if ticks >= 4 then
@@ -638,9 +663,10 @@ function ZoomRoom:update()
         ticks = 0
     end
 
-    if needsRedraw then
+    if needsRedraw or UndoPrompt.isOpen() then
         gfx.clear(gfx.kColorWhite)
         drawGrid()
+        UndoPrompt.draw()   -- Spec 011: modaler Dialog ueber dem Zoom-Raster
         needsRedraw = false
     end
 
@@ -650,6 +676,7 @@ end
 -- Pfeil-Down-Handler: mit gehaltenem B verschiebt die Pfeiltaste den
 -- Ebeneninhalt um 1 Pixel (US1, FR-001), sonst bewegt sie den Cursor.
 local function arrowDown(direction)
+    if UndoPrompt.isOpen() then return end   -- Spec 011 FR-013: Dialog schluckt D-Pad
     if playdate.buttonIsPressed(playdate.kButtonB) then
         shiftActiveLayerContent(direction)
     else
@@ -658,36 +685,33 @@ local function arrowDown(direction)
 end
 
 function ZoomRoom:inputHandler()
+    -- Spec 011 FR-013: bei offenem Undo-Dialog schluckt der Raum alle Eingaben;
+    -- nur A (Ja) und B (Nein) wirken auf den Dialog.
     return {
-        upButtonDown = function()
-            arrowDown("up")
-        end,
-        upButtonUp = function()
-            stopDirectionHold("up")
-        end,
-        downButtonDown = function()
-            arrowDown("down")
-        end,
-        downButtonUp = function()
-            stopDirectionHold("down")
-        end,
-        leftButtonDown = function()
-            arrowDown("left")
-        end,
-        rightButtonDown = function()
-            arrowDown("right")
-        end,
-        leftButtonUp = function()
-            stopDirectionHold("left")
-        end,
-        rightButtonUp = function()
-            stopDirectionHold("right")
-        end,
+        upButtonDown = function() arrowDown("up") end,
+        upButtonUp = function() if UndoPrompt.isOpen() then return end stopDirectionHold("up") end,
+        downButtonDown = function() arrowDown("down") end,
+        downButtonUp = function() if UndoPrompt.isOpen() then return end stopDirectionHold("down") end,
+        leftButtonDown = function() arrowDown("left") end,
+        rightButtonDown = function() arrowDown("right") end,
+        leftButtonUp = function() if UndoPrompt.isOpen() then return end stopDirectionHold("left") end,
+        rightButtonUp = function() if UndoPrompt.isOpen() then return end stopDirectionHold("right") end,
         AButtonDown = function()
+            if UndoPrompt.isOpen() then UndoPrompt.handleA(); needsRedraw = true; return end
             beginStroke()
         end,
         AButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             endStroke()
-        end
+        end,
+        BButtonDown = function()
+            if UndoPrompt.isOpen() then UndoPrompt.handleB(); needsRedraw = true end
+        end,
+        BButtonUp = function()
+            -- Spec 011: B loslassen schliesst den offenen Verschiebe-Run.
+            if not UndoPrompt.isOpen() and editorRoom and editorRoom.endShiftRun then
+                editorRoom:endShiftRun()
+            end
+        end,
     }
 end

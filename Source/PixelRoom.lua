@@ -20,12 +20,14 @@
 import "CoreLibs/graphics"
 import "PixelTransparency"
 import "PencilCursor"
+import "UndoPrompt"   -- Spec 011: modaler Undo-Dialog (gemeinsames Singleton)
 local gfx = playdate.graphics
 
 PixelRoom = {}
 
 local switchRoomFunction
 local nextRoom
+local editorRoom      -- Spec 011: fuer Rotation-Snapshot + Schuettel-Weiterleitung
 local needsRedraw
 
 local GRID_COLS = 16
@@ -68,6 +70,13 @@ local ticks = 0
 -- analog zu crankAccumDegrees in EditorRoom.lua (Spec 006). Crank ohne
 -- gehaltene B-Taste war hier bislang wirkungslos - freier Eingabekanal.
 local rotationAccumDegrees = 0
+
+-- Spec 011: Pre-Rotation-Snapshot der bearbeiteten Zelle. Wird beim ERSTEN
+-- rotateGrid*() einer Bearbeitungssitzung genommen (nicht bei setCurrentTile --
+-- sonst gingen zuvor gemalte Pixel beim Undo mit verloren) und beim Commit an
+-- EditorRoom:recordRotation() weitergereicht (via ZoomRoom:setNewTile).
+local rotationSnapshotImage = nil
+local rotationSnapshotTaken = false
 
 -- Das 16×16-Malraster ist ein SDK-Gridview; Selektion = Malcursor
 -- (SDK: playdate.ui.gridview aus CoreLibs/ui)
@@ -116,6 +125,8 @@ function PixelRoom:setCurrentTile(tile, tileIndex, offStateCode)
     currentTileIndex = tileIndex
     offState = (offStateCode == TRANSPARENT) and TRANSPARENT or EMPTY
     rotationAccumDegrees = 0 -- Spec 008: kein Uebertrag zwischen Bearbeitungssitzungen
+    rotationSnapshotImage = nil   -- Spec 011: neue Sitzung -> neuer Rotation-Snapshot
+    rotationSnapshotTaken = false
     for y = 1, GRID_ROWS do
         gridState[y] = {}
         for x = 1, GRID_COLS do
@@ -282,6 +293,25 @@ local function buildTileImage()
     return newTile
 end
 
+-- Spec 011: den 16x16-Zustand VOR der ersten Rotation dieser Sitzung sichern
+-- (Undo der Rotation stellt genau dieses Bild wieder her; zuvor gemalte Pixel
+-- bleiben erhalten, weil der Snapshot erst bei der Rotation genommen wird).
+local function snapshotBeforeRotation()
+    if not rotationSnapshotTaken then
+        rotationSnapshotImage = buildTileImage()
+        rotationSnapshotTaken = true
+    end
+end
+
+-- Spec 011: liefert das Pre-Rotation-Bild dieser Sitzung (oder nil) und setzt
+-- den Snapshot zurueck. Von ZoomRoom:setNewTile beim Commit aufgerufen.
+function PixelRoom:consumeRotationSnapshot()
+    local img = rotationSnapshotImage
+    rotationSnapshotImage = nil
+    rotationSnapshotTaken = false
+    return img
+end
+
 -- Übergibt das bearbeitete Tile an den ZoomRoom (Standard: Dedup-Pfad;
 -- "All Similar": in-place, wirkt auf alle Verwendungen — FR-013-Ausnahme).
 local function commitToZoomRoom()
@@ -293,10 +323,21 @@ local function commitToZoomRoom()
     end
 end
 
+-- Spec 011: PixelRoom -> Tile View. Committet das bearbeitete Tile (ueber
+-- ZoomRoom, das dabei einen etwaigen Rotation-Snapshot in den Undo-Verlauf
+-- gibt) und die offenen Zoom-Raster-Edits, dann zurueck in den EditorRoom.
+-- Genau die etablierte PixelRoom-Exit-Kette aus main.lua:gameWillTerminate.
+local function commitAndReturnToEditor()
+    commitToZoomRoom()
+    if nextRoom and nextRoom.commitForTerminate then nextRoom:commitForTerminate() end
+    if switchRoomFunction and editorRoom then switchRoomFunction(editorRoom) end
+end
+
 -- Initialize the room with shared data and dependencies
-function PixelRoom:init(switchRoom, nextRoomReference)
+function PixelRoom:init(switchRoom, nextRoomReference, editorRoomReference)
     switchRoomFunction = switchRoom
     nextRoom = nextRoomReference
+    editorRoom = editorRoomReference   -- Spec 011
     for y = 1, GRID_ROWS do
         gridState[y] = {}
         for x = 1, GRID_COLS do
@@ -316,6 +357,16 @@ end
 function PixelRoom:update()
     processDirectionHold()
 
+    -- Spec 011: Schuettel-Sample lesen + an EditorRoom weiterreichen. Ein
+    -- erkanntes Schuetteln oeffnet den Undo-Dialog; bestaetigt der Nutzer,
+    -- committet commitAndReturnToEditor() und wechselt zurueck in den Tile View.
+    do
+        local ax, ay, az = playdate.readAccelerometer()
+        if ax and editorRoom and editorRoom.onShakeSample then
+            editorRoom:onShakeSample(ax, ay, az, commitAndReturnToEditor)
+        end
+    end
+
     -- Spec 008 (AD-036, Contract PR-01): pro update() wird GENAU EINE
     -- Crank-Lese-API verwendet - analog zu EditorRoom:handleCrank() (Spec
     -- 006 CR-01). Bei gehaltener B-Taste bleibt getCrankTicks(4) fuer die
@@ -323,8 +374,12 @@ function PixelRoom:update()
     -- den neuen Rotations-Akkumulator - beide Lesepfade duerfen nie im
     -- selben Frame gemeinsam aufgerufen werden, sonst gehen Grad-/Tick-
     -- Anteile verloren (research.md R2 Detailhinweis).
+    -- Spec 011: bei offenem Undo-Dialog keinerlei Crank-/Rotations-/Zoom-Aktion.
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
-    if bHeld then
+    if UndoPrompt.isOpen() then
+        -- Crank-Reste verwerfen, damit nach dem Dialog kein Nachholwert wirkt
+        if bHeld then playdate.getCrankTicks(4) else playdate.getCrankChange() end
+    elseif bHeld then
         local crankTicks = playdate.getCrankTicks(4) or 0
         -- Standard-Lua statt pdc-Kurzform "+=" (haelt die Datei headless testbar)
         ticks = ticks + crankTicks
@@ -344,20 +399,22 @@ function PixelRoom:update()
         rotationAccumDegrees = rotationAccumDegrees + change
         if rotationAccumDegrees >= 360 then
             rotationAccumDegrees = rotationAccumDegrees - 360
+            snapshotBeforeRotation()   -- Spec 011: Pre-Rotation-Zustand sichern
             rotateGridClockwise()
         elseif rotationAccumDegrees <= -360 then
             rotationAccumDegrees = rotationAccumDegrees + 360
+            snapshotBeforeRotation()
             rotateGridCounterClockwise()
         end
     end
 
-    if needsRedraw then
+    if needsRedraw or UndoPrompt.isOpen() then
         -- draw a background
         gfx.clear(gfx.kColorWhite)
         gfx.setPattern({ 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55 })
         gfx.fillRect(0, 0, 400, 240)
         gridView:drawInRect(PADDING_X, PADDING_Y, GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE)
-
+        UndoPrompt.draw()   -- Spec 011: modaler Dialog ueber dem Malraster
         needsRedraw = false
     end
     playdate.timer.updateTimers()
@@ -369,6 +426,7 @@ function PixelRoom:entered()
     ticks = 0
     rotationAccumDegrees = 0 -- Spec 008: defensiv, setCurrentTile() setzt es bereits zurueck
     needsRedraw = true
+    playdate.startAccelerometer()   -- Spec 011 (FR-017): Sensor in den Editier-Views aktiv
     -- System-Menü: Checkbox "All Similar" + "Invert"
     local menu = playdate.getSystemMenu()
     menu:removeAllMenuItems()
@@ -394,43 +452,57 @@ function PixelRoom:entered()
 end
 
 function PixelRoom:inputHandler()
+    -- Spec 011 FR-013: bei offenem Undo-Dialog schluckt der Raum alle Eingaben;
+    -- nur A (Ja) und B (Nein) wirken auf den Dialog.
     return {
         upButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             startDirectionHold("up")
         end,
         upButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             stopDirectionHold("up")
         end,
         downButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             startDirectionHold("down")
         end,
         downButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             stopDirectionHold("down")
         end,
         leftButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             startDirectionHold("left")
         end,
         leftButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             stopDirectionHold("left")
         end,
         rightButtonDown = function()
+            if UndoPrompt.isOpen() then return end
             startDirectionHold("right")
         end,
         rightButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             stopDirectionHold("right")
         end,
         AButtonDown = function()
+            if UndoPrompt.isOpen() then UndoPrompt.handleA(); needsRedraw = true; return end
             beginStroke()
         end,
         AButtonUp = function()
+            if UndoPrompt.isOpen() then return end
             endStroke()
         end,
         -- Spec 010 (US2, 5. Runde — Hardware-Test): B malt NICHT mehr (frueher
         -- FR-007). B ist allein der Zoom-Out-Modifier — B halten + Kurbel
         -- zurueck verlaesst den PixelRoom (siehe update(), Contract PR-01).
         -- Der einzelne B-Tipp bleibt bewusst folgenlos (kein stray Pixel beim
-        -- Loslassen der Zoom-Geste mehr).
-        BButtonDown = function() end,
+        -- Loslassen der Zoom-Geste mehr). Spec 011: bei offenem Dialog = (B) Nein.
+        BButtonDown = function()
+            if UndoPrompt.isOpen() then UndoPrompt.handleB(); needsRedraw = true end
+        end,
         BButtonUp = function() end
     }
 end

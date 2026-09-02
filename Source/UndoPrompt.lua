@@ -33,6 +33,11 @@ function UndoPrompt.isOpen()
     return isOpen
 end
 
+-- Aktuell angezeigtes Label (leer, wenn zu). Fuer Tests / Debug-Ausgaben.
+function UndoPrompt.currentLabel()
+    return isOpen and label or ""
+end
+
 -- "(A) Ja": onConfirm GENAU EINMAL ausfuehren, dann schliessen. Erst schliessen,
 -- dann callen -- ein re-entranter Pfad sieht den Dialog bereits geschlossen.
 function UndoPrompt.handleA()

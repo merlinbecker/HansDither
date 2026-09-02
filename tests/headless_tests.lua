@@ -2905,6 +2905,314 @@ do
     UndoPrompt.reset()
 end
 
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011: Schuettel-Undo — EditorRoom-Integration (Phase 3, US1)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+section("Spec 011: Clear Screen -> Undo stellt die aktive Ebene wieder her (V5, FR-002)")
+loadEditorV11("s011clr", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1, { [3] = 2, [7] = 2, [40] = 2 }), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } },
+}, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    local before = {}
+    for i = 1, 375 do before[i] = d.frameLayers[1].layers[1].positions[i] end
+    mockMenuItemCallbacks["clear screen"]()
+    check(d.frameLayers[1].layers[1].positions[3] == 1, "Vorbedingung: Clear Screen hat die aktive Ebene geleert")
+    check(EditorRoom:undoLast() == "applied", "V5: undoLast() nach Clear Screen -> 'applied'")
+    local same = true
+    for i = 1, 375 do if d.frameLayers[1].layers[1].positions[i] ~= before[i] then same = false end end
+    check(same, "V5: aktive Ebene elementweise identisch zum Stand vor Clear Screen")
+    check(EditorRoom:undoLast() == "empty", "V5: Verlauf danach leer (ein Eintrag je Clear Screen)")
+
+    -- V5b: Clear Screen auf einer OBEREN Ebene (absent-Zellen -> prevImage nil)
+    d.activeLayer = 2
+    d.frameLayers[1].layers[2].positions[10] = 2
+    d.frameLayers[1].layers[2].positions[11] = 2
+    mockMenuItemCallbacks["clear screen"]()
+    check(d.frameLayers[1].layers[2].positions[10] == 0, "Vorbedingung: obere Ebene geleert (absent)")
+    EditorRoom:undoLast()
+    check(d.frameLayers[1].layers[2].positions[10] == 2 and d.frameLayers[1].layers[2].positions[11] == 2,
+        "V5b: obere Ebene nach Undo wiederhergestellt")
+    check(d.frameLayers[1].layers[2].positions[1] == 0, "V5b: unberuehrte absent-Zelle bleibt 0")
+end
+
+section("Spec 011: Pixel-Verschiebung — ein B-Halte-Run = ein Undo-Eintrag (V7)")
+loadEditorV11("s011sh", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1, { [40] = 2 }), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } },
+}, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    local srcBefore = d.frameLayers[1].layers[1].positions[40]
+    local nbrBefore = d.frameLayers[1].layers[1].positions[41]
+    EditorRoom:shiftActiveLayer("right", 40)
+    EditorRoom:shiftActiveLayer("right", 40)
+    EditorRoom:shiftActiveLayer("right", 40)
+    EditorRoom:endShiftRun()
+    check(EditorRoom:undoLast() == "applied", "V7: undoLast() nach dem Shift-Run -> 'applied'")
+    check(d.frameLayers[1].layers[1].positions[40] == srcBefore, "V7: Quellzelle 40 auf den Stand vor dem Run")
+    check(d.frameLayers[1].layers[1].positions[41] == nbrBefore, "V7: Nachbarzelle 41 auf den Stand vor dem Run")
+    check(EditorRoom:undoLast() == "empty", "V7: nur EIN Eintrag fuer den ganzen Run")
+end
+
+section("Spec 011: Rotation -> Undo stellt das Ausgangs-Tile der Zelle wieder her (V6, FR-002)")
+loadEditorV11("s011rot", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1, { [40] = 2 }), visible = true },
+        { layerIndex = 1, name = "Character",  positions = pos375(0), visible = true },
+        { layerIndex = 2, name = "Effects",    positions = pos375(0), visible = true },
+    } },
+}, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    local before = d.frameLayers[1].layers[1].positions[40]
+    -- Rotation-Snapshot direkt einspielen (PixelRoom-Weg wird in Phase 3b getestet):
+    -- prevImage = das aktuelle Tile-Bild der Zelle, danach die Zelle "rotiert"
+    -- (hier: auf ein anderes Tile gesetzt, um die Aenderung zu simulieren).
+    local prevImg = d.imagetable:getImage(before)
+    EditorRoom:recordRotation(40, prevImg)
+    d.frameLayers[1].layers[1].positions[40] = 1   -- "rotiertes" Ergebnis
+    check(EditorRoom:undoLast() == "applied", "V6: undoLast() nach Rotation -> 'applied'")
+    check(d.frameLayers[1].layers[1].positions[40] == before, "V6: Zelle 40 zeigt wieder das Ausgangs-Tile")
+end
+
+section("Spec 011: Frame loeschen -> Undo fuegt den Frame wieder ein (V9)")
+loadEditorV11("s011del", { threeLayerFrame(11), threeLayerFrame(12), threeLayerFrame(13) }, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.frameLayers[2].layers[1].positions[1] = 99
+    d.frames[2][1] = 99
+    check(#d.frameLayers == 3, "Vorbedingung: 3 Frames")
+
+    FrameManagementView:init(function() end, EditorRoom)
+    FrameManagementView:setImageData(d, 2)
+    local fh = FrameManagementView:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    fh.AButtonDown()   -- markiert Frame 2
+    fh.AButtonDown()   -- zweiter A-Druck -> loeschen (deleteFrame-Eintrag)
+    check(#d.frameLayers == 2, "Vorbedingung: Frame 2 geloescht")
+
+    check(EditorRoom:undoLast() == "applied", "V9: undoLast() nach Frame loeschen -> 'applied'")
+    check(#d.frameLayers == 3, "V9: Frame-Anzahl wieder 3")
+    check(d.frameLayers[2].layers[1].positions[1] == 99, "V9: Frame 2 mit Inhalt an Position 2 zurueck")
+    check(d.frames[2][1] == 99, "V9: flacher Composite-Cache von Frame 2 ebenfalls zurueck")
+end
+
+section("Spec 011: Malen erzeugt keinen Verlaufseintrag (V8, FR-002)")
+loadEditorV11("s011paint", { threeLayerFrame(1) }, 3)
+do
+    local h = EditorRoom:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    heldButtons[playdate.kButtonA] = true
+    h.AButtonDown()
+    h.AButtonUp()
+    heldButtons[playdate.kButtonA] = false
+    check(EditorRoom:undoLast() == "empty", "V8: nach reinem Malen ist der Undo-Verlauf leer")
+end
+
+section("Spec 011: Schuetteln nur bei vorhandenem Undo -> Dialog, sonst Meldung (V22/V23)")
+loadEditorV11("s011empty", { threeLayerFrame(1) }, 3)
+do
+    UndoPrompt.reset()
+    EditorRoom:undoRequest()
+    check(not UndoPrompt.isOpen(), "V23: leerer Verlauf -> kein Dialog")
+    mockMenuItemCallbacks["clear screen"]()
+    EditorRoom:undoRequest()
+    check(UndoPrompt.isOpen(), "V22: nach Clear Screen -> Dialog offen")
+    UndoPrompt.handleB()
+    check(not UndoPrompt.isOpen(), "V18: (B) Nein schliesst den Dialog")
+    check(EditorRoom:hasUndo(), "nach (B) Nein ist der Undo-Eintrag noch da")
+    UndoPrompt.reset()
+end
+
+section("Spec 011: deleteFrame-Undo an der 12-Frame-Grenze -> kein Dialog (V23b, FR-007)")
+do
+    local f = {}
+    for i = 1, 3 do f[i] = threeLayerFrame(i) end
+    loadEditorV11("s011lim", f, 3)
+    local d = EditorRoom:getImageData()
+    FrameManagementView:init(function() end, EditorRoom)
+    FrameManagementView:setImageData(d, 2)
+    local fh = FrameManagementView:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    fh.AButtonDown(); fh.AButtonDown()   -- Frame 2 geloescht -> deleteFrame-Eintrag
+    check(#d.frameLayers == 2, "Vorbedingung: Frame geloescht, Eintrag im Verlauf")
+    while #d.frameLayers < 12 do
+        d.frameLayers[#d.frameLayers + 1] = LayerModel.cloneFrameLayers(d.frameLayers[1])
+        d.frames[#d.frames + 1] = LayerModel.copyArray(d.frames[1])
+    end
+    check(#d.frameLayers == 12, "Vorbedingung: 12 Frames")
+    UndoPrompt.reset()
+    EditorRoom:undoRequest()
+    check(not UndoPrompt.isOpen(), "V23b: deleteFrame-Undo wuerde einen 13. Frame erzeugen -> kein Dialog")
+    check(EditorRoom:undoLast() == "empty", "V23b: undoLast() liefert 'empty' (Eintrag ausgesiebt)")
+end
+
+section("Spec 011: PixelRoom Rotation-Snapshot-Lebenszyklus (V6/V11 Erfassungspunkt)")
+do
+    PixelRoom:init(function() end, {
+        setNewTile = function() end, updateExistingTile = function() end,
+        commitForTerminate = function() end,
+    }, { onShakeSample = function() end, recordRotation = function() end })
+    PixelRoom:setCurrentTile(newMockImage(16, 16, "white"), 5, nil)
+    check(PixelRoom:consumeRotationSnapshot() == nil, "vor der ersten Rotation: kein Snapshot")
+
+    -- V11: der Snapshot muss den Zustand UNMITTELBAR VOR der ersten Rotation
+    -- festhalten, nicht den von setCurrentTile. Beweis: nach setCurrentTile (alle
+    -- Zellen weiss) das Raster ueber "Invert" komplett auf Tinte kippen und ERST
+    -- DANN rotieren -- der Snapshot muss schwarz sein.
+    PixelRoom:setCurrentTile(newMockImage(16, 16, "white"), 5, nil)  -- frische Sitzung
+    PixelRoom:entered()                       -- registriert den "Invert"-Menuepunkt
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    mockMenuItemCallbacks["Invert"]()         -- alle Zellen weiss -> Tinte
+    crankChangeValue = 360
+    PixelRoom:update()          -- erste Rotation -> Snapshot (jetzt: Tinte)
+    crankChangeValue = 360
+    PixelRoom:update()          -- zweite Rotation -> KEIN neuer Snapshot (coalesced)
+    crankChangeValue = 0
+    local snap = PixelRoom:consumeRotationSnapshot()
+    check(snap ~= nil, "V6: Snapshot beim ERSTEN rotateGrid* genommen")
+    check(snap ~= nil and snap:sample(0, 0) == "black",
+        "V11: Snapshot zeigt den Post-Invert-Zustand -> Erfassung bei der Rotation, nicht bei setCurrentTile")
+    check(PixelRoom:consumeRotationSnapshot() == nil, "V6: consumeRotationSnapshot() setzt zurueck (ein Eintrag je Sitzung)")
+
+    PixelRoom:setCurrentTile(newMockImage(16, 16, "white"), 5, nil)
+    check(PixelRoom:consumeRotationSnapshot() == nil, "V6: neue setCurrentTile-Sitzung -> Snapshot geleert")
+end
+
+section("Spec 011: Accelerometer nur in den Editier-Views gepollt (V21, FR-010)")
+loadEditorV11("s011acc", { threeLayerFrame(1) }, 3)
+do
+    accelReadCount = 0
+    EditorRoom:update()
+    check(accelReadCount > 0, "V21: EditorRoom:update() liest den Accelerometer")
+
+    ZoomRoom:init(function() end, {}, EditorRoom)
+    ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+    accelReadCount = 0
+    ZoomRoom:update()
+    check(accelReadCount > 0, "V21: ZoomRoom:update() liest den Accelerometer")
+
+    accelReadCount = 0
+    PixelRoom:setCurrentTile(newMockImage(16, 16, "white"), 5, nil)
+    PixelRoom:update()
+    check(accelReadCount > 0, "V21: PixelRoom:update() liest den Accelerometer")
+
+    FrameManagementView:init(function() end, EditorRoom)
+    FrameManagementView:setImageData(EditorRoom:getImageData(), 1)
+    accelReadCount = 0
+    FrameManagementView:update()
+    check(accelReadCount == 0, "V21: FrameManagementView pollt den Accelerometer NICHT")
+    accelXYZ = { 0, 0, 1 }
+end
+
+section("Spec 011: Undo-Dialog aus dem Zoom View -> commit + zurueck in den Tile View (V25)")
+loadEditorV11("s011z", { threeLayerFrame(1) }, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    mockMenuItemCallbacks["clear screen"]()   -- riskante Operation -> Undo verfuegbar
+    local switchedTo = nil
+    ZoomRoom:init(function(r) switchedTo = r end, {}, EditorRoom)
+    ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+    UndoPrompt.reset()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    accelXYZ = { 1.0, 0, 0 }; mockTimeMs = 20000; ZoomRoom:update()
+    accelXYZ = { -1.0, 0, 0 }; mockTimeMs = 20200; ZoomRoom:update()
+    check(UndoPrompt.isOpen(), "Schuetteln im Zoom View oeffnet den Undo-Dialog")
+    -- Der Commit + Room-Wechsel passiert bereits beim Oeffnen des Dialogs (die
+    -- Historie muss VOR der Label-Wahl feststehen -- sonst zeigte der Dialog das
+    -- Label eines aelteren Eintrags). Der Dialog erscheint dann im Tile View.
+    check(switchedTo == EditorRoom, "V25: Schuetteln committet + wechselt sofort in den Tile View")
+    ZoomRoom:inputHandler().AButtonDown()   -- (A) Ja
+    check(not UndoPrompt.isOpen(), "V25: (A) Ja schliesst den Dialog")
+    check(not EditorRoom:hasUndo(), "V25: der Clear-Screen-Eintrag wurde angewendet und entfernt")
+    accelXYZ = { 0, 0, 1 }
+end
+
+section("Spec 011: Dialog-Label wird NACH dem Commit aufgeloest (V6/FR-012, Advisor-Review Item 2)")
+loadEditorV11("s011lbl", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Background", positions = pos375(1), visible = true },
+        { layerIndex = 1, name = "Character", positions = pos375(0), visible = true },
+    } },
+}, 8)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    UndoPrompt.reset()
+
+    -- aelterer Eintrag: Clear Screen
+    mockMenuItemCallbacks["clear screen"]()
+    check(EditorRoom:hasUndo(), "Vorbedingung: ein Clear-Screen-Eintrag liegt vor")
+
+    -- commitAndReturn-Stub: der Rotation-Eintrag entsteht ERST beim Commit
+    -- (analog PixelRoom -> ZoomRoom:setNewTile -> recordRotation). Wuerde
+    -- undoRequest das Label vor dem Commit waehlen, stuende hier "Undo Clear
+    -- Screen?" -- angewendet wuerde aber die Rotation.
+    d.frameLayers[1].layers[1].positions[40] = 2
+    local committed = false
+    local commitStub = function()
+        committed = true
+        EditorRoom:recordRotation(40, nil)               -- prevPosIndex = 2
+        d.frameLayers[1].layers[1].positions[40] = 1     -- "Rotation" mutiert die Zelle
+    end
+
+    EditorRoom:undoRequest(commitStub)
+    check(committed, "V6: undoRequest ruft commitAndReturn VOR peekValid")
+    check(UndoPrompt.currentLabel() == "Undo Rotation?",
+        "V6: Label zeigt den nach dem Commit juengsten Eintrag (Rotation), nicht den aelteren Clear")
+
+    UndoPrompt.handleA()   -- (A) Ja
+    check(d.frameLayers[1].layers[1].positions[40] == 2,
+        "V6: (A) Ja macht die Rotation rueckgaengig -- die Aktion passt zum Label")
+    check(EditorRoom:hasUndo(), "V6: der aeltere Clear-Screen-Eintrag ist noch vorhanden")
+end
+
+section("Spec 011: Undo-Dialog ist modal — schluckt D-Pad/Crank/A-Strich (V20, FR-013)")
+loadEditorV11("s011mod", { threeLayerFrame(1) }, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    mockMenuItemCallbacks["clear screen"]()
+    UndoPrompt.reset()
+    EditorRoom:undoRequest()
+    check(UndoPrompt.isOpen(), "Vorbedingung: Dialog offen")
+    local h = EditorRoom:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+
+    -- D-Pad + Crank bei offenem Dialog: wirkungslos, Dialog bleibt offen
+    h.downButtonDown(); h.downButtonUp()
+    h.rightButtonDown(); h.rightButtonUp()
+    h.upButtonDown(); h.upButtonUp()
+    check(UndoPrompt.isOpen(), "V20: D-Pad bei offenem Dialog wirkungslos (Dialog bleibt offen)")
+
+    -- B = (B) Nein: schliesst, laesst den Eintrag unberuehrt
+    h.BButtonDown()
+    check(not UndoPrompt.isOpen(), "V20: B bei offenem Dialog = (B) Nein")
+    check(EditorRoom:hasUndo(), "V20: (B) Nein laesst den Undo-Eintrag unberuehrt")
+
+    -- A = (A) Ja: fuehrt den Undo aus
+    EditorRoom:undoRequest()
+    check(UndoPrompt.isOpen(), "Vorbedingung: Dialog erneut offen")
+    heldButtons[playdate.kButtonA] = true
+    h.AButtonDown()
+    heldButtons[playdate.kButtonA] = false
+    check(not UndoPrompt.isOpen(), "V20: A bei offenem Dialog = (A) Ja")
+    check(not EditorRoom:hasUndo(), "V20: (A) Ja wendet den Eintrag an und entfernt ihn")
+end
+
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 
 print("")
