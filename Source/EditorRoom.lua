@@ -851,12 +851,16 @@ end
 -- Onion-Skin-Hintergrund (compositeBelow, Ebenen UNTER der aktiven) aendert
 -- sich durch einen Shift AUF der aktiven Ebene nicht und wird hier bewusst
 -- nicht neu gebaut.
+-- Liefert (Bild, Tile-Index) der aktiven Ebene. Der Index MUSS mitkommen: die
+-- ZoomRoom haelt ihn als `slot.originalIndex` und reicht ihn beim Zoom-In an
+-- `PixelRoom:setCurrentTile` weiter -> "All Similar" wuerde sonst den
+-- PRE-Shift-Index in-place ueberschreiben (persistenter Fehler).
 function EditorRoom:zoomSlotImageAt(frameIndexPos)
-    if not imageData then return nil end
+    if not imageData then return nil, 0 end
     local layer = activeLayerObj()
     local pos = layer and layer.positions[frameIndexPos]
-    if not pos or pos == 0 then return nil end
-    return imageData.imagetable:getImage(pos)
+    if not pos or pos == 0 then return nil, 0 end
+    return imageData.imagetable:getImage(pos), pos
 end
 
 -- Review F8: "All Similar" hat das Bild von tileIndex in-place in der Imagetable

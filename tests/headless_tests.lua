@@ -3661,7 +3661,9 @@ do
     local realCtx = EditorRoom.currentZoomContext
     EditorRoom.currentZoomContext = function(self) ctxCalls = ctxCalls + 1; return realCtx(self) end
 
-    ZoomRoom:init(function() end, { setCurrentTile = noop }, EditorRoom)
+    local pickedIdx = nil
+    local pixelMock = { setCurrentTile = function(_, img, idx) pickedIdx = idx end }
+    ZoomRoom:init(function() end, pixelMock, EditorRoom)
     ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())   -- Vorbereitung (1 Aufruf)
     ctxCalls = 0
 
@@ -3671,7 +3673,6 @@ do
     zih.rightButtonDown()
     zih.rightButtonDown()
     zih.rightButtonDown()
-    heldButtons[playdate.kButtonB] = false
 
     check(ctxCalls == 0,
         "F10: drei Shifts holen NICHT den vollen currentZoomContext (kein 9x compositeBelow / 576-Zellen-Rebuild je Tastendruck)")
@@ -3679,6 +3680,16 @@ do
         "F10: der Shift wirkt weiterhin (Cursor-Zelle der aktiven Ebene neu berechnet)")
     check(d.frameLayers[1].layers[1].positions[2] ~= 1,
         "F10: der austretende Streifen ist in den rechten Nachbarn (Zelle 2) gewandert")
+
+    -- Nach dem Shift in den PixelRoom zoomen: die ZoomRoom MUSS den frischen
+    -- Tile-Index der Cursor-Zelle durchreichen, nicht den PRE-Shift-Index --
+    -- sonst ueberschreibt "All Similar" spaeter das falsche Tile in-place.
+    crankTicksValue = 4
+    ZoomRoom:update()
+    crankTicksValue = 0
+    heldButtons[playdate.kButtonB] = false
+    check(pickedIdx == d.frameLayers[1].layers[1].positions[1],
+        "F10: Zoom-In nach dem Shift reicht den AKTUELLEN Tile-Index der Cursor-Zelle durch (slot.originalIndex frisch)")
 
     EditorRoom.currentZoomContext = realCtx
 end

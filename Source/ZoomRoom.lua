@@ -384,9 +384,11 @@ local function refreshSlotForFrameCell(frameIndexPos)
         for c = 1, SLOTS do
             local s = slots[r][c]
             if s and not s.oob and s.frameIndexPos == frameIndexPos then
-                s.originalImage = editorRoom:zoomSlotImageAt(frameIndexPos)
+                local img, idx = editorRoom:zoomSlotImageAt(frameIndexPos)
+                s.originalImage = img
+                s.originalIndex = idx or 0   -- MUSS mit: Zoom-In reicht ihn an PixelRoom -> "All Similar"
                 s.editedImage = nil
-                decodeImageIntoGrids(s.originalImage, r, c)  -- gridState + baselineGrid des Slots
+                decodeImageIntoGrids(img, r, c)  -- gridState + baselineGrid des Slots
                 local baseRow = (r - 1) * CELLS_PER_TILE
                 local baseCol = (c - 1) * CELLS_PER_TILE
                 for rr = 1, CELLS_PER_TILE do
