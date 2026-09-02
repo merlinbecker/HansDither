@@ -26,6 +26,8 @@ local GRID_COLS = CELLS_PER_TILE * SLOTS  -- 24 Zellen
 local GRID_ROWS = CELLS_PER_TILE * SLOTS  -- 24 Zellen
 local CELL_SIZE = 10       -- px pro Zelle auf dem Display (240×240 zentriert)
 local SUBPIXEL_SIZE = 5    -- CELL_SIZE / 2: Kantenlaenge je Subpixel-Quadrant (R2, FR-007/009)
+local FRAME_GRID_COLS = 25 -- Frame-Raster (Tile-Positionen 1..375), fuer die Nachbar-Zelle in Review F10
+local FRAME_GRID_ROWS = 15
 
 -- Grid zentriert: (400 - 240) / 2 = 80 px links, 0 px oben
 local OFFSET_X = 80
@@ -79,6 +81,10 @@ local needsRedraw = true
 local cachedBackground = nil
 local changedCells = {}
 local backgroundDirty = true
+-- vorwaerts deklariert: markCellChanged() steht weiter unten (bei der
+-- Strich-Logik), wird aber schon von shiftActiveLayerContent() (Review F10)
+-- gebraucht.
+local markCellChanged
 
 -- Crank-Akkumulator (analog zu EditorRoom/PixelRoom)
 local ticks = 0
@@ -366,14 +372,50 @@ local function commitAndReturnToEditor()
     switchRoomFunction(editorRoom)
 end
 
+-- Frischt genau den Slot, der `frameIndexPos` im aktuellen 3x3-Fenster zeigt,
+-- aus dem neuen Quellbild der aktiven Ebene auf (Review F10). Markiert alle 64
+-- Zellen des Slots als geaendert, damit drawGrid() sie ueber den weiterhin
+-- gueltigen Hintergrund-Cache uebermalt -- KEIN backgroundDirty, KEIN
+-- 3x3-Vollaufbau. Liegt `frameIndexPos` ausserhalb des Fensters: no-op
+-- (unsichtbar; wird beim naechsten Betreten sowieso frisch gebaut).
+local function refreshSlotForFrameCell(frameIndexPos)
+    if not (editorRoom and editorRoom.zoomSlotImageAt) then return end
+    for r = 1, SLOTS do
+        for c = 1, SLOTS do
+            local s = slots[r][c]
+            if s and not s.oob and s.frameIndexPos == frameIndexPos then
+                s.originalImage = editorRoom:zoomSlotImageAt(frameIndexPos)
+                s.editedImage = nil
+                decodeImageIntoGrids(s.originalImage, r, c)  -- gridState + baselineGrid des Slots
+                local baseRow = (r - 1) * CELLS_PER_TILE
+                local baseCol = (c - 1) * CELLS_PER_TILE
+                for rr = 1, CELLS_PER_TILE do
+                    for cc = 1, CELLS_PER_TILE do
+                        markCellChanged(baseRow + rr, baseCol + cc)
+                    end
+                end
+                return
+            end
+        end
+    end
+end
+
 -- Spec 010 US1 (revidiert 2026-09-01, Einschraenkung aus dem Hardware-Test):
 -- B + Pfeiltaste verschiebt den Inhalt der Zelle unter dem Zoom-Cursor um 1
 -- nativen Pixel (nicht den ganzen Screen). Der Inhalt wandert dabei in die
 -- Nachbarzelle in Schieberichtung und bleibt dort (2-Tile-Streifen, siehe
 -- LayerModel.shiftTileContent). Vorher werden offene Zell-Edits des
--- Zoomrasters committet. Danach den 3x3-Kontext frisch holen, aber den
--- Zoom-Cursor stehen lassen, damit wiederholtes B + Pfeil dieselbe Zelle
--- weiterschiebt. Nur der aktuelle Frame ist betroffen (FR-004).
+-- Zoomrasters committet. Der Zoom-Cursor bleibt stehen, damit wiederholtes
+-- B + Pfeil dieselbe Zelle weiterschiebt. Nur der aktuelle Frame ist
+-- betroffen (FR-004).
+--
+-- Review F10 (Perf): ein Shift AUF der aktiven Ebene aendert das Quellbild von
+-- hoechstens 2 Zellen (Zielzelle + 1 Nachbar in Schieberichtung) -> nur die
+-- zugehoerigen 1-2 Slots frisch dekodieren, statt pro Tastendruck den ganzen
+-- 3x3-Kontext neu zu bauen (9x LayerModel.compositeBelow) und den
+-- 576-Zellen-Hintergrund-Cache zu verwerfen. compositeBelow (Ebenen UNTER der
+-- aktiven) ist von einem Shift auf der aktiven Ebene nicht betroffen. Aeltere
+-- EditorRoom-Versionen ohne zoomSlotImageAt fallen auf den Vollaufbau zurueck.
 local function shiftActiveLayerContent(direction)
     if not (editorRoom and editorRoom.shiftActiveLayer) then return end
     local edits = collectEdits()
@@ -383,15 +425,32 @@ local function shiftActiveLayerContent(direction)
     local sr, sc = getSlotForCell(cursorRow, cursorCol)
     local slot = slots[sr] and slots[sr][sc]
     if not slot or slot.oob then return end
-    if editorRoom:shiftActiveLayer(direction, slot.frameIndexPos) then
-        if editorRoom.currentZoomContext then
-            -- setFromEditorContext() zentriert den Cursor und setzt `ticks`
-            -- auf 0. Cursor hier bewusst zuruecksetzen (dieselbe Zelle bleibt
-            -- Ziel); `ticks`-Reset ist gewollt (ein Shift ist kein Zoom).
-            local savedRow, savedCol = cursorRow, cursorCol
-            ZoomRoom:setFromEditorContext(editorRoom:currentZoomContext())
-            cursorRow, cursorCol = savedRow, savedCol
+    local targetPos = slot.frameIndexPos
+    if not editorRoom:shiftActiveLayer(direction, targetPos) then return end
+
+    if editorRoom.zoomSlotImageAt then
+        -- Schneller Pfad: nur die 1-2 betroffenen Slots auffrischen.
+        refreshSlotForFrameCell(targetPos)
+        local dx, dy = 0, 0
+        if direction == "left" then dx = -1 elseif direction == "right" then dx = 1
+        elseif direction == "up" then dy = -1 elseif direction == "down" then dy = 1 end
+        local cx = (targetPos - 1) % FRAME_GRID_COLS
+        local cy = (targetPos - 1) // FRAME_GRID_COLS
+        local nx, ny = cx + dx, cy + dy
+        if nx >= 0 and nx < FRAME_GRID_COLS and ny >= 0 and ny < FRAME_GRID_ROWS then
+            refreshSlotForFrameCell(ny * FRAME_GRID_COLS + nx + 1)
         end
+        ticks = 0            -- ein Shift ist kein Zoom (bisher via setFromEditorContext)
+        needsRedraw = true
+        -- KEIN backgroundDirty: der Cache bleibt gueltig, nur die 1-2 Slots
+        -- werden pro Redraw ueber changedCells uebermalt.
+    else
+        -- Fallback (Mock/aeltere EditorRoom): voller Kontext-Neuaufbau.
+        local savedRow, savedCol = cursorRow, cursorCol
+        if editorRoom.currentZoomContext then
+            ZoomRoom:setFromEditorContext(editorRoom:currentZoomContext())
+        end
+        cursorRow, cursorCol = savedRow, savedCol
         needsRedraw = true
         backgroundDirty = true
     end
@@ -404,7 +463,8 @@ local strokeValue = nil  -- true/false = Malwert des laufenden Strichs, nil = ke
 
 -- Traegt eine Zelle in changedCells ein, falls noch nicht enthalten (Spec 008,
 -- data-model.md Abschnitt 1) - Grundlage fuer den Overlay-Redraw in drawGrid().
-local function markCellChanged(row, col)
+-- (oben vorwaerts deklariert.)
+function markCellChanged(row, col)
     for _, cell in ipairs(changedCells) do
         if cell.row == row and cell.col == col then
             return
@@ -611,6 +671,12 @@ function ZoomRoom:updateExistingTile(tile, tileIndex)
                 decodeImageIntoGrids(tile, sr, sc)
             end
         end
+    end
+    -- Review F8: Zellen, deren Composite ein zusammengefuehrtes Tile ist
+    -- (mehrere sichtbare Ebenen), tragen noch die alten Pixel des ersetzten
+    -- Index -> EditorRoom den aktuellen Frame neu kompositieren lassen.
+    if editorRoom and editorRoom.onTileImageReplaced then
+        editorRoom:onTileImageReplaced(tileIndex)
     end
     needsRedraw = true
     backgroundDirty = true -- Spec 008 (AD-035): ein oder mehrere Slot-Quellbilder haben sich geaendert

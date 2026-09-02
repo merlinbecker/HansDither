@@ -428,8 +428,16 @@ local function applyDeleteFrameEntry(entry)
     local n = #imageData.frameLayers
     local i = math.min(entry.index, n + 1)
     table.insert(imageData.frameLayers, i, entry.frameLayersEntry)
-    if imageData.frames and entry.framesEntry then
-        table.insert(imageData.frames, i, entry.framesEntry)
+    if imageData.frames then
+        -- Review F7: frameLayers und frames MUESSEN im Gleichschritt bleiben.
+        -- Fehlt der gepufferte flache Cache-Eintrag (defensiver
+        -- recordDeleteFrame-Pfad ohne framesEntry), ihn aus der wieder
+        -- eingefuegten Ebenen-Struktur rekonstruieren statt den frames-Eintrag
+        -- ganz auszulassen -- sonst #frameLayers ~= #frames (falsche
+        -- "Frame x/y"-Anzeige, stale Tilemap fuer den reinsertierten Index).
+        local flat = entry.framesEntry
+            or LayerModel.compositeToTiles(entry.frameLayersEntry, getTile, registerTile)
+        table.insert(imageData.frames, i, flat)
     end
     currentFrame = i
     imageData.activeLayer = LayerModel.clampActive(imageData.frameLayers[i], imageData.activeLayer or 1)
@@ -563,15 +571,27 @@ end
 
 -- B (kurz): Pipette; auf Weiß (Index 1) -> Abwahl (FR-003, research.md R4).
 -- Spec 010: zeigt zusaetzlich kurz "Tile N picked" in der Bauchbinde.
+--
+-- Review F11: von der AKTIVEN Ebene abgreifen, NICHT aus imageData.frames (dem
+-- flachen Composite-Cache). Dessen Eintrag kann fuer eine Zelle mit mehreren
+-- sichtbaren Ebenen ein zusammengefuehrtes 16x16-Tile mit kColorClear-Pixeln
+-- sein -- das anschliessend auf die (2-wertige) Basisebene zu stempeln
+-- verletzt deren Tinte/Weiss-Modell.
 local function pipette()
     lastActivityMs = playdate.getCurrentTimeMilliseconds()
-    local idx = imageData.frames[currentFrame][cursorCellIndex()]
-    if idx == 1 then
+    local layer = activeLayerObj()
+    local idx = (layer and layer.positions[cursorCellIndex()]) or 0
+    if idx == 0 then
+        -- Auf einer oberen Ebene traegt die Zelle hier nichts bei -> Abwahl.
         activeTile = nil
+        setPickMessage("Layer empty here")
+    elseif idx == 1 then
+        activeTile = nil
+        setPickMessage("Tile 1 picked")
     else
         activeTile = idx
+        setPickMessage(string.format("Tile %d picked", idx))
     end
-    setPickMessage(string.format("Tile %d picked", idx))
     needsRedraw = true
 end
 
@@ -819,10 +839,33 @@ function EditorRoom:shiftActiveLayer(direction, cellIdx)
 end
 
 -- Frischer 3x3-Zoom-Kontext an der aktuellen Cursorposition — von der ZoomRoom
--- nach einem Shift genutzt (jetzt nur 1-2 Tiles betroffen, aber der volle
--- Kontext ist billig genug).
+-- beim Betreten genutzt.
 function EditorRoom:currentZoomContext()
     return buildZoomContext()
+end
+
+-- Review F10: nach einer Pixel-Verschiebung braucht die ZoomRoom nur die 1-2
+-- geaenderten Zellen frisch, nicht den ganzen 3x3-Kontext (9x compositeBelow +
+-- 576-Zellen-Cache-Verwurf pro Tastendruck). Liefert das aktuelle Quellbild
+-- der AKTIVEN Ebene fuer eine Frame-Position (nil bei "absent"). Der
+-- Onion-Skin-Hintergrund (compositeBelow, Ebenen UNTER der aktiven) aendert
+-- sich durch einen Shift AUF der aktiven Ebene nicht und wird hier bewusst
+-- nicht neu gebaut.
+function EditorRoom:zoomSlotImageAt(frameIndexPos)
+    if not imageData then return nil end
+    local layer = activeLayerObj()
+    local pos = layer and layer.positions[frameIndexPos]
+    if not pos or pos == 0 then return nil end
+    return imageData.imagetable:getImage(pos)
+end
+
+-- Review F8: "All Similar" hat das Bild von tileIndex in-place in der Imagetable
+-- ersetzt. Zellen des aktuellen Frames, deren Composite ein zusammengefuehrtes
+-- Tile ist (mehrere sichtbare Ebenen tragen bei), zeigen noch die alten Pixel
+-- des ersetzten Tiles. Einmalig den ganzen aktuellen Frame neu kompositieren
+-- (nicht pro Tastendruck -- laeuft nur beim Commit aus dem PixelRoom).
+function EditorRoom:onTileImageReplaced(tileIndex)
+    recompositeCurrentFrame()
 end
 
 -- ── Load / Save (Contract E-01/E-02, research.md R1/R6/R7) ────────────────────

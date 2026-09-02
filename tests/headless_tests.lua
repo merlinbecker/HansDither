@@ -3565,6 +3565,124 @@ do
         "F6: Basisebene -> radierter Zustand bleibt opak-weiss (keine Ueberkorrektur)")
 end
 
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011 Code-Review Nachbesserungen — Batch 4: Perf + Rest-Cleanup
+-- (Findings F7, F11, F8, F10)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+section("Review F7: applyDeleteFrameEntry haelt frameLayers/frames im Gleichschritt (framesEntry == nil)")
+loadEditorV11("s011f7", { threeLayerFrame(1), threeLayerFrame(2), threeLayerFrame(3) }, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.frameLayers[2].layers[1].positions[5] = 3   -- unterscheidbare Zelle auf Frame 2
+    EditorRoom:clearUndoHistory()
+
+    -- deleteFrame-Eintrag OHNE gepufferten flachen Cache (defensiver Pfad).
+    EditorRoom:recordDeleteFrame(2, LayerModel.cloneFrameLayers(d.frameLayers[2]), nil)
+    table.remove(d.frameLayers, 2)
+    table.remove(d.frames, 2)
+    check(#d.frameLayers == 2 and #d.frames == 2, "Vorbedingung: Frame 2 entfernt, Arrays gleich lang")
+
+    check(EditorRoom:undoLast() == "applied", "F7: undoLast des framesEntry-losen deleteFrame -> 'applied'")
+    check(#d.frameLayers == #d.frames, "F7: frameLayers und frames sind nach dem Undo wieder gleich lang")
+    check(#d.frameLayers == 3, "F7: Frame-Anzahl wieder 3")
+    check(type(d.frames[2]) == "table" and #d.frames[2] == 375,
+        "F7: der fehlende flache Cache-Eintrag wurde rekonstruiert (375 Positionen)")
+    check(d.frames[2][5] == 3, "F7: der rekonstruierte Cache spiegelt die Ebenen-Struktur (Zelle 5 = Tile 3)")
+    EditorRoom:clearUndoHistory()
+end
+
+section("Review F11: Pipette greift von der aktiven Ebene ab, nicht aus dem Composite-Cache")
+loadEditorV11("s011f11", { threeLayerFrame(2) }, 4)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    d.frameLayers[1].layers[1].positions[1] = 2   -- aktive (Basis-)Ebene: Tile 2 an der Cursor-Zelle
+    d.frames[1][1] = 99                            -- Composite-Cache: kuenstlicher "merged"-Index
+
+    -- evtl. stehen gebliebene status-/pick-Meldung aus frueheren Abschnitten per
+    -- Timeout raeumen (draw() zeichnet statusMessage sonst ueber die Bauchbinde)
+    mockTimeMs = mockTimeMs + 10000
+    EditorRoom:update()
+
+    local function bandText()
+        local t = nil
+        for _, c in ipairs(mockDrawTextCalls) do
+            if type(c.text) == "string" then t = c.text end
+        end
+        return t
+    end
+    local ph = EditorRoom:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+
+    mockDrawTextCalls = {}
+    ph.BButtonDown(); ph.BButtonUp()   -- kurzer B-Tipp = Pipette
+    EditorRoom:update()
+    check(bandText() == "Tile 2 picked",
+        "F11: Pipette meldet den Tile-Index der AKTIVEN Ebene (2), nicht den Composite-Cache-Wert (99)")
+
+    d.activeLayer = 2                   -- obere, hier leere Ebene
+    mockDrawTextCalls = {}
+    ph.BButtonDown(); ph.BButtonUp()
+    EditorRoom:update()
+    check(bandText() == "Layer empty here", "F11: Pipette auf leerer oberer Ebene meldet 'Layer empty here'")
+end
+
+section("Review F8: 'All Similar' (updateExistingTile) stoesst ein Recomposite des aktuellen Frames an")
+loadEditorV11("s011f8", { threeLayerFrame(2) }, 3)
+do
+    local d = EditorRoom:getImageData()
+
+    -- (a) EditorRoom-Seite: onTileImageReplaced ersetzt den flachen Cache des Frames.
+    local before = d.frames[1]
+    EditorRoom:onTileImageReplaced(2)
+    check(d.frames[1] ~= before, "F8: onTileImageReplaced kompositiert den aktuellen Frame neu (frisches frames-Array)")
+
+    -- (b) ZoomRoom-Seite: updateExistingTile ruft editorRoom:onTileImageReplaced(tileIndex).
+    local replacedIdx = nil
+    local realFn = EditorRoom.onTileImageReplaced
+    EditorRoom.onTileImageReplaced = function(self, idx) replacedIdx = idx; return realFn(self, idx) end
+    ZoomRoom:init(function() end, { setCurrentTile = noop }, EditorRoom)
+    ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+    ZoomRoom:updateExistingTile(newMockImage(16, 16, "black"), 2)
+    check(replacedIdx == 2, "F8: updateExistingTile ruft editorRoom:onTileImageReplaced(tileIndex)")
+    EditorRoom.onTileImageReplaced = realFn
+end
+
+section("Review F10: ZoomRoom-Shift frischt nur die 1-2 betroffenen Slots auf (kein 3x3-Vollaufbau)")
+loadEditorV11("s011f10", { threeLayerFrame(1) }, 3)
+do
+    UndoPrompt.reset()
+    local d = EditorRoom:getImageData()
+    d.frameLayers[1].layers[1].positions[1] = 2
+    d.imagetable:setImage(2, (function() local t = newMockImage(16, 16, "white"); t.pixels["15,6"] = true; return t end)())
+
+    local ctxCalls = 0
+    local realCtx = EditorRoom.currentZoomContext
+    EditorRoom.currentZoomContext = function(self) ctxCalls = ctxCalls + 1; return realCtx(self) end
+
+    ZoomRoom:init(function() end, { setCurrentTile = noop }, EditorRoom)
+    ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())   -- Vorbereitung (1 Aufruf)
+    ctxCalls = 0
+
+    local zih = ZoomRoom:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    heldButtons[playdate.kButtonB] = true
+    zih.rightButtonDown()
+    zih.rightButtonDown()
+    zih.rightButtonDown()
+    heldButtons[playdate.kButtonB] = false
+
+    check(ctxCalls == 0,
+        "F10: drei Shifts holen NICHT den vollen currentZoomContext (kein 9x compositeBelow / 576-Zellen-Rebuild je Tastendruck)")
+    check(d.frameLayers[1].layers[1].positions[1] ~= 2,
+        "F10: der Shift wirkt weiterhin (Cursor-Zelle der aktiven Ebene neu berechnet)")
+    check(d.frameLayers[1].layers[1].positions[2] ~= 1,
+        "F10: der austretende Streifen ist in den rechten Nachbarn (Zelle 2) gewandert")
+
+    EditorRoom.currentZoomContext = realCtx
+end
+
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
 
 print("")
