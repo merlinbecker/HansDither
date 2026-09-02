@@ -116,19 +116,25 @@ end
 -- Baut das aktuelle 16×16-Arbeitsbild eines Slots: Basisbild (editiert oder
 -- original) plus alle Zellabweichungen als 2×2-Blöcke (erhält Pixel-Details,
 -- die feiner als das 24×24-Raster sind).
+--
+-- Spec 010 / Review F6: der "aus"-Zustand einer Zelle ist ebenenabhaengig.
+-- Auf der Basisebene ist er opakes Weiss; auf einer OBEREN Ebene (2/3) muss er
+-- `kColorClear` (transparent) sein — sonst stanzt das Radieren eines Pixels ein
+-- opakes weisses Loch, das die darunterliegenden Ebenen beim Compositing/Save
+-- verdeckt (nur ein KOMPLETT weisses Tile mappt `writeActiveLayerPosition`
+-- wieder auf ABSENT). Konsistent mit PixelRoom, das ebenfalls nach `kColorClear`
+-- radiert.
 local function buildWorkingImage(slotRow, slotCol)
     local slot = slots[slotRow][slotCol]
     local base = slot.editedImage or slot.originalImage
+    local offColor = activeLayerIsBase and gfx.kColorWhite or gfx.kColorClear
     local img
     if base then
         img = base:copy()
     else
-        -- Spec 010 (US2): eine noch nicht in der Tilemap vorhandene Zelle
-        -- ("absent") faengt auf der Basisebene weiss an, auf den Ebenen 2-3
-        -- dagegen transparent - sonst wuerde ein neues Tile auf einer oberen
-        -- Ebene die darunterliegenden Ebenen faelschlich weiss verdecken.
-        local blank = activeLayerIsBase and gfx.kColorWhite or gfx.kColorClear
-        img = gfx.image.new(TILE_PX, TILE_PX, blank)
+        -- eine noch nicht in der Tilemap vorhandene Zelle ("absent") faengt auf
+        -- der Basisebene weiss an, auf den Ebenen 2-3 transparent.
+        img = gfx.image.new(TILE_PX, TILE_PX, offColor)
     end
     local baseRow = (slotRow - 1) * CELLS_PER_TILE
     local baseCol = (slotCol - 1) * CELLS_PER_TILE
@@ -137,7 +143,7 @@ local function buildWorkingImage(slotRow, slotCol)
             for c = 1, CELLS_PER_TILE do
                 local value = gridState[baseRow + r][baseCol + c]
                 if value ~= baselineGrid[baseRow + r][baseCol + c] then
-                    gfx.setColor(value and gfx.kColorBlack or gfx.kColorWhite)
+                    gfx.setColor(value and gfx.kColorBlack or offColor)
                     gfx.fillRect((c - 1) * PX_PER_CELL, (r - 1) * PX_PER_CELL, PX_PER_CELL, PX_PER_CELL)
                 end
             end

@@ -181,7 +181,21 @@ playdate = {
             end
         end,
         fillRect = function(x, y, w, h)
-            if drawContext then drawContext.fill = currentColor end
+            if drawContext then
+                drawContext.fill = currentColor
+                -- Review F6: kleine Fills (<= 4x4 px) pro Pixel festhalten. Das
+                -- trifft ausschliesslich ZoomRoom.buildWorkingImage's 2x2-
+                -- Subpixelbloecke; groessere Fills (drawCell 5x5/10x10,
+                -- Vollbild) bleiben unberuehrt. So ist unterscheidbar, ob ein
+                -- radierter Block zu weiss ODER zu transparent gefuellt wurde.
+                if drawContext.pixels and w <= 4 and h <= 4 then
+                    for px = x, x + w - 1 do
+                        for py = y, y + h - 1 do
+                            drawContext.pixels[px .. "," .. py] = (currentColor == "black") and true or currentColor
+                        end
+                    end
+                end
+            end
             -- Spec 006 R2: direkte Bildschirm-Fills (ausserhalb pushContext,
             -- z.B. ZoomRoom:drawGrid()) sind sonst nicht beobachtbar
             table.insert(mockScreenFillCalls, { x = x, y = y, w = w, h = h, color = currentColor })
@@ -3495,6 +3509,60 @@ do
         "F1: bei offenem Dialog entleert update() weiterhin beide Crank-Zaehler")
     UndoPrompt.reset()
     EditorRoom:clearUndoHistory()
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011 Code-Review Nachbesserungen — Batch 3: Zoom-Radieren-Transparenz
+-- (Finding F6)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+section("Review F6: Radieren auf einer oberen Ebene schreibt kColorClear, nicht opak-weiss")
+do
+    UndoPrompt.reset()
+    local captured = nil
+    local edMock = { applyTileEdits = function(_, e) captured = e end }
+
+    local function ctxWith(originalImage, isBase)
+        local slots3 = {}
+        for sr = 1, 3 do
+            slots3[sr] = {}
+            for sc = 1, 3 do
+                slots3[sr][sc] = (sr == 2 and sc == 2)
+                    and { oob = false, originalImage = originalImage, frameIndexPos = 200, originalIndex = 7 }
+                    or { oob = true }
+            end
+        end
+        local g = {}
+        for r = 1, 24 do g[r] = {}; for c = 1, 24 do g[r][c] = false end end
+        g[12][12] = true   -- der Ink-Pixel an der Cursor-Zelle im 24x24-Raster
+        return { slots = slots3, gridState = g, showGrid = true, imageData = {}, activeLayerIsBase = isBase }
+    end
+
+    local function eraseCursorCellAndCommit()
+        for b in pairs(heldButtons) do heldButtons[b] = nil end
+        heldButtons[playdate.kButtonA] = true
+        ZoomRoom:inputHandler().AButtonDown()   -- beginStroke: Cursor-Zelle ist "an" -> Strich radiert
+        ZoomRoom:inputHandler().AButtonUp()
+        heldButtons[playdate.kButtonA] = false
+        ZoomRoom:commitForTerminate()
+    end
+
+    -- Obere Ebene: der radierte 2x2-Block muss transparent werden.
+    ZoomRoom:init(noop, {}, edMock)
+    local upperTile = newMockImage(16, 16, "clear"); upperTile.pixels["6,6"] = true
+    ZoomRoom:setFromEditorContext(ctxWith(upperTile, false))
+    eraseCursorCellAndCommit()
+    check(captured and captured[1], "F6: der radierte Slot erzeugt einen Edit")
+    check(captured[1].newImage:sample(6, 6) == "clear",
+        "F6: obere Ebene -> radierte 2x2-Zelle ist im Arbeitsbild transparent (kColorClear)")
+
+    -- Gegenprobe Basisebene: dort bleibt der radierte Zustand opak-weiss.
+    captured = nil
+    local baseTile = newMockImage(16, 16, "white"); baseTile.pixels["6,6"] = true
+    ZoomRoom:setFromEditorContext(ctxWith(baseTile, true))
+    eraseCursorCellAndCommit()
+    check(captured and captured[1].newImage:sample(6, 6) == "white",
+        "F6: Basisebene -> radierter Zustand bleibt opak-weiss (keine Ueberkorrektur)")
 end
 
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
