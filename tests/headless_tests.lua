@@ -3094,6 +3094,13 @@ end
 section("Spec 011: Accelerometer nur in den Editier-Views gepollt (V21, FR-010)")
 loadEditorV11("s011acc", { threeLayerFrame(1) }, 3)
 do
+    -- FR-017 Lebenszyklus: entered() startet den Sensor; handleLoadSuccess
+    -- stoppt ihn NICHT (nur die Wege zurueck zum SelectionRoom tun das).
+    check(accelRunning, "V21: nach erfolgreichem Laden laeuft der Accelerometer weiter (kein stop in handleLoadSuccess)")
+    accelRunning = false; accelStartCount = 0
+    EditorRoom:entered()   -- Rueckkehr aus der Zoomkette (imageData gesetzt)
+    check(accelRunning and accelStartCount == 1, "V21: entered() mit geladenem Bild startet den Accelerometer (idempotent)")
+
     accelReadCount = 0
     EditorRoom:update()
     check(accelReadCount > 0, "V21: EditorRoom:update() liest den Accelerometer")
@@ -3211,6 +3218,52 @@ do
     heldButtons[playdate.kButtonA] = false
     check(not UndoPrompt.isOpen(), "V20: A bei offenem Dialog = (A) Ja")
     check(not EditorRoom:hasUndo(), "V20: (A) Ja wendet den Eintrag an und entfernt ihn")
+end
+
+section("Spec 011: ZoomRoom:setNewTile reicht den Rotation-Snapshot an EditorRoom:recordRotation (V6-Naht, T014)")
+loadEditorV11("s011seam", {
+    { frameIndex = 0, duration = 100, layers = {
+        { layerIndex = 0, name = "Base", positions = pos375(1), visible = true },
+    } },
+}, 3)
+do
+    local d = EditorRoom:getImageData()
+    d.activeLayer = 1
+    d.frameLayers[1].layers[1].positions[1] = 2   -- Zentrumszelle traegt ein unterscheidbares Tile
+    UndoPrompt.reset()
+    EditorRoom:clearUndoHistory()
+
+    -- Realistischer PixelRoom-Stub: genau die zwei Methoden, die ZoomRoom:setNewTile
+    -- an der Rotation-Naht aufruft. Der erste consumeRotationSnapshot liefert ein
+    -- Bild (= „es wurde rotiert"), danach nil.
+    local snapImg = newMockImage(16, 16, "black")
+    local consumed = 0
+    local pixelMock = {
+        setCurrentTile = function() end,
+        consumeRotationSnapshot = function() consumed = consumed + 1; return consumed == 1 and snapImg or nil end,
+    }
+    local zoomSwitchedTo = nil
+    ZoomRoom:init(function(r) zoomSwitchedTo = r end, pixelMock, EditorRoom)
+    ZoomRoom:setFromEditorContext(EditorRoom:currentZoomContext())
+
+    -- B + Crank vorwaerts -> zoomIntoPixelRoom() setzt lastEditedSlot* + wechselt
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    heldButtons[playdate.kButtonB] = true
+    crankTicksValue = 4
+    ZoomRoom:update()
+    check(zoomSwitchedTo == pixelMock, "Vorbedingung: Zoom-In in den (Mock-)PixelRoom, lastEditedSlot gesetzt")
+    heldButtons[playdate.kButtonB] = false
+    crankTicksValue = 0
+
+    -- Commit zurueck aus dem PixelRoom: setNewTile konsumiert den Snapshot und
+    -- meldet die Rotation an EditorRoom (die Naht, die keine andere V6-Prüfung fährt).
+    ZoomRoom:setNewTile(newMockImage(16, 16, "white"))
+    check(consumed == 1, "setNewTile konsumiert den Rotation-Snapshot des PixelRoom genau einmal")
+    check(EditorRoom:hasUndo(), "V6-Naht: der Rotation-Eintrag ist im Verlauf gelandet")
+    EditorRoom:undoRequest()
+    check(UndoPrompt.currentLabel() == "Undo Rotation?", "V6-Naht: der Eintrag ist als Rotation gelabelt")
+    UndoPrompt.handleB()
+    EditorRoom:clearUndoHistory()
 end
 
 -- ── Ergebnis ──────────────────────────────────────────────────────────────────
