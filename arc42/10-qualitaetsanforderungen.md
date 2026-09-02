@@ -10,6 +10,7 @@
 | Performance | Interaktionen und Redraw bleiben auf Zielhardware responsiv; Frame-Wechsel ohne Bildkopien im Update-Pfad. |
 | Wartbarkeit | Aenderungen in einem Room sollen andere Rooms nur minimal beeinflussen. |
 | Formattreue | Gespeicherte Bilder nutzen ausschliesslich native Formate (PDI + JSON, Constitution II) und bleiben nach Save/Load pixelidentisch. |
+| SDK-Konformitaet | SDK-Bausteine werden bevorzugt; begruendete Eigenlogik (Rotation AD-036, Pixel-Verschiebung AD-043, Schuettel-Erkennung AD-044) ist in Kap. 9 dokumentiert (Constitution I, Qualitaetsziel 1.2-6). |
 | Transparenz bei Langlaeufern | Nutzer sieht bei Save/Load stets den aktuellen Fortschritt und Zustand. |
 
 ## 10.2 Qualitaetsszenarien

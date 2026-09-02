@@ -28,15 +28,14 @@
 
 ## 4.3 Qualitaetszielbezug
 
-| Qualitaetsziel | Strategiebeitrag |
+| Qualitaetsziel (Kap. 1.2) | Strategiebeitrag |
 |---|---|
-| Zuverlaessige Persistenz | Versionierte Save-Pipeline, Kompaktierung + stabile ID-Mappings, Preview-Erzeugung. |
-| Bedienbarkeit | Konsistente Grid-Navigation in GameRoom/LoadRoom/TileRoom/ZoomRoom/PixelRoom. |
-| Pulp-Kompatibilitaet | Build/Prepare-Workflow in PulpGameIO mit Feld-Erhalt und Defaults. |
-| Wartbarkeit | Module pro Verantwortungsbereich, wenig globale Quervernetzung. |
-| Performance | needsRedraw-Ansatz, einfache 8x8-Tiles, limitierte Grid-Groessen, kooperative Save/Load-Phasen. |
-| Integritaet externer Importe | Importer validiert JSON-Struktur, erzeugt konsistente room/tile/frame-Referenzen und exportiert statt in-place zu schreiben. |
-| UI-Schaerfe bei Pulp-Kompatibilitaet | Native 400x240-Ausgabe fuer Schrift/UI bei unveraenderten 8x8-/200x120-Datenstrukturen. |
+| Verlustfreie Persistenz | Coroutine-Save-Pipeline in fachlichen Phasen; Tile-Deduplizierung (FNV-1a) + Bereinigung ungenutzter Tiles vor dem Speichern (Spec 009, AD-005); Round-Trip-Tests ueber die echte Save/Load-Coroutine. |
+| Direkte Bedienbarkeit | Konsistente Grid-Navigation in Selection-/Editor-/Zoom-/Pixel-View; „ein Druck = ein Schritt" fuer Ebene/Frame (AD-042); gleiche Mal-Semantik ueber alle drei Zoomstufen. |
+| Native Datenintegritaet | Reiner PDI-/Positions-JSON-Pfad ohne Fremdformat-Merge (AD-017); `frames.json` v1.1 mit strukturbasierter v1.0-Migration. |
+| Wartbarkeit | Ein Modul je Verantwortungsbereich, wenig globale Quervernetzung; Room-Abhaengigkeiten per Injection in `main.lua`. |
+| Performantes Redraw | needsRedraw-Ansatz, limitierte Rastergroessen, Zoom-View-Hintergrund-Cache (AD-035), kooperative Save/Load-Phasen. |
+| SDK-Konformitaet | SDK-Bausteine zuerst (tilemap/imagetable, gridview, keyboard, datastore, QR-Code); begruendete Eigenlogik nur wo noetig (AD-036 Rotation, AD-043 Pixel-Verschiebung, AD-044 Schuettel-Erkennung). |
 
 ## 4.4 Nicht-Ziele der aktuellen Version
 
