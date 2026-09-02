@@ -374,20 +374,20 @@ function PixelRoom:update()
         end
     end
 
-    -- Spec 008 (AD-036, Contract PR-01): pro update() wird GENAU EINE
-    -- Crank-Lese-API verwendet - analog zu EditorRoom:handleCrank() (Spec
-    -- 006 CR-01). Bei gehaltener B-Taste bleibt getCrankTicks(4) fuer die
-    -- Zoom-Out-Geste zustaendig (unveraendert); ohne B treibt getCrankChange()
-    -- den neuen Rotations-Akkumulator - beide Lesepfade duerfen nie im
-    -- selben Frame gemeinsam aufgerufen werden, sonst gehen Grad-/Tick-
-    -- Anteile verloren (research.md R2 Detailhinweis).
+    -- Spec 008 (AD-036, Contract PR-01) — praezisiert Review F1 / ADR-047:
+    -- pro update() STEUERT genau eine Crank-Lese-API die Logik (getCrankTicks(4)
+    -- im B-Zweig fuer die Zoom-Out-Geste, getCrankChange() sonst fuer den
+    -- Rotations-Akkumulator). BEIDE werden aber jeden Frame EINMAL gelesen und
+    -- der nicht genutzte Wert verworfen. getCrankTicks ist zustandsbehaftet:
+    -- wird es waehrend einer laengeren Rotation nie gelesen, entlaedt der erste
+    -- B-Frame ~4 aufgestaute Ticks und loest faelschlich den Zoom-Out aus.
     -- Spec 011: bei offenem Undo-Dialog keinerlei Crank-/Rotations-/Zoom-Aktion.
+    local crankTicks = playdate.getCrankTicks(4) or 0     -- immer lesen (= drainen)
+    local crankChange = playdate.getCrankChange() or 0    -- immer lesen (= drainen)
     local bHeld = playdate.buttonIsPressed(playdate.kButtonB)
     if UndoPrompt.isOpen() then
-        -- Crank-Reste verwerfen, damit nach dem Dialog kein Nachholwert wirkt
-        if bHeld then playdate.getCrankTicks(4) else playdate.getCrankChange() end
+        -- nur verwerfen (Dialog schluckt die Kurbel), Zaehler bleiben frisch
     elseif bHeld then
-        local crankTicks = playdate.getCrankTicks(4) or 0
         -- Standard-Lua statt pdc-Kurzform "+=" (haelt die Datei headless testbar)
         ticks = ticks + crankTicks
         if ticks <= -4 then
@@ -403,8 +403,7 @@ function PixelRoom:update()
         end
     else
         ticks = 0
-        local change = playdate.getCrankChange() or 0
-        rotationAccumDegrees = rotationAccumDegrees + change
+        rotationAccumDegrees = rotationAccumDegrees + crankChange
         if rotationAccumDegrees >= 360 then
             rotationAccumDegrees = rotationAccumDegrees - 360
             snapshotBeforeRotation()   -- Spec 011: Pre-Rotation-Zustand sichern

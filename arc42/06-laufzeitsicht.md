@@ -55,7 +55,7 @@ volle 360°-Umdrehung ab der aktuellen Kurbelposition statt der fruehreren
 4. Teildrehungen (< 360° netto) und Richtungswechsel vor Erreichen der Schwelle aendern den angezeigten Frame NICHT — der Akkumulator bleibt bis zur naechsten Kurbelbewegung stehen (auch beim Einklappen mitten in der Drehung).
 5. Bei 12 Frames rotiert vorwaerts zu Frame 1.
 6. Frame-Wechsel = tilemap:setTiles(frames[f], 25) + Redraw; die Bauchbinde zeigt "Frame n/m" (sofern nicht wegen Inaktivitaet ausgeblendet, siehe 6.10).
-7. Mit gehaltener B-Taste bleibt der Pfad UNVERAENDERT: getCrankTicks(4) treibt weiterhin ausschliesslich die Zoomkette (siehe 6.4); pro update() wird GENAU EINE der beiden Crank-Lese-APIs aufgerufen, nie beide (Contract CR-01, Regressionsschutz).
+7. Mit gehaltener B-Taste bleibt der Pfad UNVERAENDERT: getCrankTicks(4) treibt weiterhin ausschliesslich die Zoomkette (siehe 6.4). CR-01 praezisiert (AD-047): pro update() **steuert** genau eine der beiden Crank-Lese-APIs die Logik (B-Zweig getCrankTicks, Ohne-B-Zweig getCrankChange) — **beide werden aber jeden Frame einmal gelesen**, der nicht genutzte Wert wird verworfen (Drain des zustandsbehafteten SDK-Zaehlers, sonst Phantom-Zoom beim ersten B-Frame; Regressionsschutz fuer die Zoomkette bleibt).
 8. "clear screen" im Systemmenue (Spec 008, AD-037, ersetzt seit Spec 008 "reset frame"/AD-032 vollstaendig) setzt alle 375 Tile-Indizes des aktiven Frames auf den Voll-Weiss-Basisindex 1; andere Frames bleiben unberuehrt (siehe 6.15).
 
 Ergebnis: Bis zu 12 Frames sind per Crank erstell- und durchlaufbar, ausschliesslich durch volle Umdrehungen ausgeloest (FR-004..FR-006), und per "clear screen" vollstaendig leerbar (Spec 008, FR-011..FR-015).
@@ -507,9 +507,13 @@ nachgewiesen über `playdate.getStats()`/Sampler vor/nach dem Fix
    Schwelle verändern `gridState` NICHT — identisch zum bereits
    etablierten Verhalten der Frame-Navigation (FR-007).
 5. Mit gehaltener B-Taste bleibt der Pfad UNVERÄNDERT: `getCrankTicks(4)`
-   treibt weiterhin ausschließlich die Zoom-Out-Geste (6.4); pro
-   `update()` wird GENAU EINE der beiden Crank-Lese-APIs aufgerufen, nie
-   beide (analog Contract CR-01, hier PR-01).
+   treibt weiterhin ausschließlich die Zoom-Out-Geste (6.4). PR-01
+   praezisiert (AD-047): pro `update()` **steuert** genau eine der beiden
+   Crank-Lese-APIs die Logik (B-Zweig `getCrankTicks`, Ohne-B-Zweig
+   `getCrankChange`) — **beide werden aber jeden Frame einmal gelesen**,
+   der nicht genutzte Wert verworfen (Drain; sonst loest ein aus der
+   Rotation aufgestauter Tick-Rueckstand beim ersten B-Frame faelschlich
+   den Zoom-Out aus, Review F1).
 6. Die Rotation wirkt ausschließlich auf das offene `gridState`; erst
    beim Verlassen des Pixel Room fließt das Ergebnis über den
    bestehenden `buildTileImage()`/Dedup-Commit-Pfad zurück (FR-008,

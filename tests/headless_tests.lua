@@ -292,11 +292,13 @@ playdate = {
     -- Spec 004: Crank-Rotationsmessung — testbar über die Modulvariable
     -- crankChangeValue (siehe unten), wie im echten SDK zustandsbehaftet
     -- ("seit dem letzten Aufruf") aber hier einfach test-gesteuert
-    getCrankChange = function() return crankChangeValue end,
+    getCrankChange = function() crankChangeReadCount = crankChangeReadCount + 1; return crankChangeValue end,
     isCrankDocked = function() return crankDockedValue end,
     -- Spec 006: absolute Tick-Grenzen fuer die UNVERAENDERTE B+Crank-Zoomkette
-    -- (CR-01) — separat von crankChangeValue, testbar ueber crankTicksValue
-    getCrankTicks = function(ticksPerRevolution) return crankTicksValue end,
+    -- (CR-01) — separat von crankChangeValue, testbar ueber crankTicksValue.
+    -- Review F1/F2 (ADR-047): crank*ReadCount macht den "immer entleeren"-Drain
+    -- pruefbar (das echte SDK zaehlt Ticks/Grad SEIT dem letzten Aufruf).
+    getCrankTicks = function(ticksPerRevolution) crankTicksReadCount = crankTicksReadCount + 1; return crankTicksValue end,
     -- Spec 011: Beschleunigungssensor. Werte test-gesteuert ueber accelXYZ;
     -- accelRunning/accel*Count fuer Lebenszyklus-/Poll-Assertions.
     startAccelerometer = function() accelRunning = true; accelStartCount = accelStartCount + 1 end,
@@ -312,6 +314,9 @@ playdate = {
 crankChangeValue = 0
 crankDockedValue = false
 crankTicksValue = 0
+-- Review F1/F2: Aufrufzaehler der beiden Crank-Lese-APIs (Drain-Nachweis)
+crankChangeReadCount = 0
+crankTicksReadCount = 0
 
 -- Spec 011: von Tests gesetzt, um den Beschleunigungssensor zu simulieren
 -- (siehe playdate.readAccelerometer/startAccelerometer oben)
@@ -3417,6 +3422,78 @@ do
     crankTicksValue = 0
     heldButtons[playdate.kButtonB] = false
     accelXYZ = { 0, 0, 1 }
+    EditorRoom:clearUndoHistory()
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Spec 011 Code-Review Nachbesserungen — Batch 2: Crank-Rueckstau-Guards
+-- (Findings F1, F2 / CR-01 praezisiert, ADR-047)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+section("Review F2: EditorRoom entleert BEIDE Crank-Zaehler jeden Frame (B / ohne B / Dialog)")
+loadEditorV11("s011cr2", { threeLayerFrame(1) }, 3)
+do
+    EditorRoom:clearUndoHistory()
+    UndoPrompt.reset()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+
+    -- Ohne B (Picker-Zweig): frueher wurde getCrankTicks NIE gelesen -> Rueckstau.
+    crankChangeReadCount = 0; crankTicksReadCount = 0
+    EditorRoom:update()
+    check(crankTicksReadCount >= 1, "F2: ohne B liest update() getCrankTicks(4) trotzdem (Drain, kein Zoom-Rueckstau)")
+    check(crankChangeReadCount >= 1, "F2: ohne B liest update() getCrankChange() (Picker)")
+
+    -- Mit B (Zoom-Zweig): getCrankChange wird jetzt ebenfalls entleert.
+    heldButtons[playdate.kButtonB] = true
+    crankChangeReadCount = 0; crankTicksReadCount = 0
+    EditorRoom:update()
+    check(crankTicksReadCount >= 1, "F2: mit B liest update() getCrankTicks(4) (Zoomkette)")
+    check(crankChangeReadCount >= 1, "F2: mit B liest update() getCrankChange() trotzdem (Drain, kein Picker-Sprung)")
+    heldButtons[playdate.kButtonB] = false
+
+    -- Offener Undo-Dialog: frueher lief handleCrank() gar nicht -> beide Zaehler stauten.
+    mockMenuItemCallbacks["clear screen"]()
+    EditorRoom:undoRequest()
+    check(UndoPrompt.isOpen(), "Vorbedingung: Undo-Dialog offen")
+    crankChangeReadCount = 0; crankTicksReadCount = 0
+    EditorRoom:update()
+    check(crankTicksReadCount >= 1 and crankChangeReadCount >= 1,
+        "F2: bei offenem Dialog entleert update() weiterhin beide Crank-Zaehler")
+    UndoPrompt.handleB()
+    EditorRoom:clearUndoHistory()
+end
+
+section("Review F1: PixelRoom entleert BEIDE Crank-Zaehler jeden Frame (B / ohne B / Dialog)")
+loadEditorV11("s011cr1", { threeLayerFrame(1) }, 3)
+do
+    EditorRoom:clearUndoHistory()
+    UndoPrompt.reset()
+    local zoomMock = { setNewTile = function() end, updateExistingTile = function() end }
+    PixelRoom:init(function() end, zoomMock, EditorRoom)
+    PixelRoom:setCurrentTile(newMockImage(16, 16, "white"), 5, nil)
+    PixelRoom:entered()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+
+    -- Ohne B (Rotations-Zweig): frueher blieb getCrankTicks ungelesen -> 4 Ticks
+    -- aus einer 360-Grad-Rotation stauten sich fuer den naechsten B-Frame auf.
+    crankChangeReadCount = 0; crankTicksReadCount = 0
+    PixelRoom:update()
+    check(crankTicksReadCount >= 1, "F1: ohne B liest update() getCrankTicks(4) trotzdem (Drain)")
+    check(crankChangeReadCount >= 1, "F1: ohne B liest update() getCrankChange() (Rotation)")
+
+    heldButtons[playdate.kButtonB] = true
+    crankChangeReadCount = 0; crankTicksReadCount = 0
+    PixelRoom:update()
+    check(crankTicksReadCount >= 1, "F1: mit B liest update() getCrankTicks(4) (Zoom-Out)")
+    check(crankChangeReadCount >= 1, "F1: mit B liest update() getCrankChange() trotzdem (Drain)")
+    heldButtons[playdate.kButtonB] = false
+
+    UndoPrompt.open("Undo Rotation?", function() end)
+    crankChangeReadCount = 0; crankTicksReadCount = 0
+    PixelRoom:update()
+    check(crankTicksReadCount >= 1 and crankChangeReadCount >= 1,
+        "F1: bei offenem Dialog entleert update() weiterhin beide Crank-Zaehler")
+    UndoPrompt.reset()
     EditorRoom:clearUndoHistory()
 end
 

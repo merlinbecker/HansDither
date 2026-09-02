@@ -977,21 +977,26 @@ local function clearMoveTimers()
     end
 end
 
--- ── Crank (contracts CR-01) ─────────────────────────────────────────────────
+-- ── Crank (contracts CR-01, praezisiert Review F2 / ADR-047) ────────────────
 -- Mit gehaltenem B: Zoomkette / Frame-Verwaltung (unveraendert, Tick-basiert).
 -- Ohne B: Tile-Picker — je PICKER_DEGREES_PER_TILE Grad Netto-Kurbeldrehung
 -- schaltet die aktive Kachel-Auswahl (activeTile) eine Position weiter, mit
 -- Wrap am Listenende. Frame- und Ebenen-Wechsel liegen jetzt auf B + D-Pad
 -- (bDpadNav), NICHT mehr auf der Kurbel.
 --
--- Pro Aufruf wird GENAU EINE Crank-Lese-API verwendet (CR-01): getCrankTicks()
--- im B-Zweig, getCrankChange() im Picker-Zweig — nie beide im selben Frame,
--- sonst gehen Grad-/Tick-Anteile verloren (research.md R1 Detailhinweis).
+-- CR-01 praezisiert (ADR-047): pro update() steuert GENAU EINE Crank-Lese-API
+-- die Logik (getCrankTicks() im B-Zweig, getCrankChange() im Picker-Zweig).
+-- BEIDE werden aber jeden Frame EINMAL aufgerufen und der nicht genutzte Wert
+-- verworfen. `getCrankTicks` ist zustandsbehaftet ("Ticks seit dem letzten
+-- Aufruf"): wird es waehrend einer laengeren Picker-Drehung nie gelesen,
+-- entlaedt der erste B-Frame den kompletten Rueckstau als Phantom-Zoom bzw.
+-- als Sprung in die Frame-Verwaltung (Review F2). Der Leseaufruf ist der Drain.
 
 local function handleCrank()
+    local crankTicks = playdate.getCrankTicks(4) or 0     -- immer lesen (= drainen)
+    local crankChange = playdate.getCrankChange() or 0    -- immer lesen (= drainen)
     if playdate.buttonIsPressed(playdate.kButtonB) then
         crankAccumDegrees = 0  -- kein Rest aus einer vorherigen Picker-Drehung
-        local crankTicks = playdate.getCrankTicks(4) or 0
         if crankTicks ~= 0 then
             bUsedForZoom = true
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
@@ -1008,7 +1013,7 @@ local function handleCrank()
         end
     else
         zoomTickAccu = 0
-        local change = playdate.getCrankChange() or 0
+        local change = crankChange
         if change ~= 0 then
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
             pickerVisible = true
@@ -1301,15 +1306,27 @@ function EditorRoom:update()
         loadingOperation:resume(function(err)
             handleLoadError(err)
         end)
-        playdate.getCrankTicks(4) -- Ticks verwerfen (stateful), sonst Frame-Sprung nach der Operation
+        -- Ticks + Grad verwerfen (beide stateful), sonst Frame-/Picker-Sprung nach der Operation
+        playdate.getCrankTicks(4)
+        playdate.getCrankChange()
     elseif savingOperation then
         savingOperation:resume(function(err)
             savingOperation = nil
             showStatus("Save failed: " .. tostring(err))
         end)
         playdate.getCrankTicks(4)
-    elseif imageData and not UndoPrompt.isOpen() then
-        handleCrank()
+        playdate.getCrankChange()
+    elseif imageData then
+        if UndoPrompt.isOpen() then
+            -- Review F2: der Dialog schluckt die Kurbel (FR-013), aber die
+            -- zustandsbehafteten SDK-Zaehler muessen JEDEN Frame weiterlaufen --
+            -- sonst entlaedt sich der Rueckstau beim Schliessen als Phantom-Zoom
+            -- oder Picker-Sprung. Nur lesen, nicht auswerten.
+            playdate.getCrankTicks(4)
+            playdate.getCrankChange()
+        else
+            handleCrank()
+        end
     end
 
     -- Spec 011: Beschleunigungssensor lesen + Detektor fuettern. onShakeSample
