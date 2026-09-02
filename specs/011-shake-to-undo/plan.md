@@ -166,20 +166,31 @@ arc42/…                      # MOD: 8 Kapitel + 3 ADR-Dateien (siehe Principle
 
 ### Geplante Architektur-Arbeitsprodukte
 
-| Arbeitsprodukt | Pfad | Trigger | Owner / Reviewer |
+| Arbeitsprodukt | Pfad | Trigger | Status (2026-09-02) |
 |---|---|---|---|
-| Bausteinsicht-Update | `arc42/05-bausteinsicht.md` | neue Module + Modulschnitt | `/speckit-implement` (Task) / Merlin |
-| Laufzeitsicht-Sequenz | `arc42/06-laufzeitsicht.md` | neuer modaler Ablauf | `/speckit-implement` / Merlin |
-| Querschnitt: Eingabe/Modalität + Sensor-Lebenszyklus | `arc42/08-querschnittliche-konzepte.md` | belegte Eingaben + neue Plattformfähigkeit | `/speckit-implement` / Merlin |
-| Lösungsstrategie-Absatz | `arc42/04-loesungsstrategie.md` | SDK-First-Abweichung | `/speckit-implement` / Merlin |
-| Randbedingung | `arc42/02-randbedingungen.md` | Accelerometer = neue Eingabefähigkeit | `/speckit-implement` / Merlin |
-| **ADR-044** Schüttel-Erkennung über Accelerometer | `arc42/adr/ADR-044-*.md` + Kap. 9 | SDK-First-Abweichung, Algorithmuswahl | `/speckit-implement` / Merlin |
-| **ADR-045** Undo-Modell: 3-Schritt, nur riskante Ops, sitzungslokal | `arc42/adr/ADR-045-*.md` + Kap. 9 | Datenmodell + Snapshot-Mechanik | `/speckit-implement` / Merlin |
-| **ADR-046** Modaler Undo-Dialog in den Editier-Räumen | `arc42/adr/ADR-046-*.md` + Kap. 9 | Modalität gegen belegte Eingaben | `/speckit-implement` / Merlin |
-| Qualitätsszenarien | `arc42/10-qualitaetsanforderungen.md` | NFR Robustheit/Performance/Speicher | `/speckit-implement` / Merlin |
-| Risiken & techn. Schulden | `arc42/11-risiken-und-technische-schulden.md` | 5 Risiken aus Spec | `/speckit-implement` / Merlin |
+| Bausteinsicht-Update | `arc42/05-bausteinsicht.md` | neue Module + Modulschnitt | **Done** — Zeilen `UndoHistory`/`ShakeDetector`/`UndoPrompt` + „Seit Spec 011"-Klauseln in EditorRoom/ZoomRoom/PixelRoom/FrameManagementView |
+| Laufzeitsicht-Sequenz | `arc42/06-laufzeitsicht.md` | neuer modaler Ablauf | **Done** — §6.16 „Schütteln → Undo-Dialog → riskante Operation zurücknehmen" |
+| Querschnitt: Eingabe/Modalität + Sensor-Lebenszyklus | `arc42/08-querschnittliche-konzepte.md` | belegte Eingaben + neue Plattformfähigkeit | **Done** — §8.1: Schüttel-Geste, Voll-modale Dialoge, Accelerometer-Lebenszyklus |
+| Lösungsstrategie-Absatz | `arc42/04-loesungsstrategie.md` | SDK-First-Abweichung | **Done** — §4.7 + Nicht-Ziel „Undo/Redo-Stack" qualifiziert |
+| Randbedingung | `arc42/02-randbedingungen.md` | Accelerometer = neue Eingabefähigkeit | **Done** — §2.1 Zeile „Eingabegeraete" (Sensor + Batterie-Hinweis) |
+| **ADR-044** Schüttel-Erkennung über Accelerometer | `arc42/adr/ADR-044-Schuettel-Erkennung-Accelerometer.md` + Kap. 9 §9.32 | SDK-First-Abweichung, Algorithmuswahl | **Done** (T/W/R-Endwerte offen bis Hardware-Test) |
+| **ADR-045** Undo-Modell: 3-Schritt, nur riskante Ops, sitzungslokal | `arc42/adr/ADR-045-Undo-Modell-3-Schritt-sitzungslokal.md` + Kap. 9 §9.33 | Datenmodell + Snapshot-Mechanik | **Done** |
+| **ADR-046** Modaler Undo-Dialog in den Editier-Räumen | `arc42/adr/ADR-046-Modaler-Undo-Dialog.md` + Kap. 9 §9.34 | Modalität gegen belegte Eingaben | **Done** |
+| Qualitätsszenarien | `arc42/10-qualitaetsanforderungen.md` | NFR Robustheit/Performance/Speicher | **Done** — §10.5 QS-21/QS-22/QS-23 |
+| Risiken & techn. Schulden | `arc42/11-risiken-und-technische-schulden.md` | 5 Risiken aus Spec | **Done** — R-27..R-31 + T-03 qualifiziert + §11.4-Notiz |
 
 **`docs/architecture/`**: Vorgabe wird über `arc42/09` + `arc42/adr/` erfüllt (Projektkonvention, Constitution III schreibt `arc42/` vor) — dokumentierte, begründete Abweichung vom Preset-Default-Pfad.
+
+### Architektur-Review (T041, 2026-09-02)
+
+Modulschnitt `UndoHistory` / `ShakeDetector` / `UndoPrompt` gegen `contracts/undo-modules.md` geprüft:
+
+- **SDK-frei**: `UndoHistory` und `ShakeDetector` importieren nichts; `UndoPrompt` importiert nur `CoreLibs/graphics` für `draw()` (reine Ausgabe, kein Zustand). Alle drei laufen im Headless-Harness ohne SDK-Mock-Verletzung.
+- **Keine zyklischen Importe**: `main.lua` importiert die drei Module und injiziert `EditorRoom` in `PixelRoom:init` (3. Parameter). `ZoomRoom`/`PixelRoom`/`FrameManagementView` rufen `EditorRoom`-Methoden über die durchgereichte Referenz — kein `import "EditorRoom"` in diesen Dateien. `UndoHistory`/`ShakeDetector`-Instanzen leben ausschließlich als Modul-Locals in `EditorRoom.lua`.
+- **`EditorRoom` als einziger Anwendungs-Einstieg**: `undoLast` wird nur aus `UndoPrompt`s `onConfirm` (= `EditorRoom:undoLast()`) gerufen, nie aus `switchRoom`/`entered()`. Der Commit aus Zoom/Pixel läuft in `undoRequest` **vor** `peekValid` und damit vor dem Dialog — `undoLast` sieht eine settled History (kein Wettlauf um `currentFrame`).
+- **Abweichung von research.md R7** (dokumentiert in ADR-046): Commit passiert in `undoRequest` vor der Label-Wahl statt im `onConfirm`-Callback, damit Dialog-Label und angewendete Operation übereinstimmen (FR-016). Für den Nutzer wirkungsgleich.
+
+Ergebnis: **keine Contract-Verletzung**. Zwei Implementierungs-Fallen (stale `shiftRun` über Bildwechsel; index- vs. bild-basierter Restore) sind in ADR-045 §Konsequenzen festgehalten und headless-testabgesichert (V5–V11).
 
 ### Qualitätsszenarien (Design-relevant)
 
@@ -194,11 +205,11 @@ arc42/…                      # MOD: 8 Kapitel + 3 ADR-Dateien (siehe Principle
 
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
-| Fehlalarm der Schüttel-Geste | Schwellwert + erzwungene Links-Rechts-Sequenz + Refraktärzeit; Dialog als 2. Sicherung; Hardware-Test | Offen bis Hardware-Test |
-| Accelerometer-Polling ↓ Zoom-View-FPS | leichte O(1)-Erkennung; FPS-Messung Hardware; ggf. Polling ausdünnen | Offen bis Hardware-Test |
-| Snapshot-Speicher bei Frame-löschen-Undo | nur Positions-Arrays + Bild-*Referenzen* kopieren, keine Pixel-Kopien; grobe Budget-Notiz in data-model | Adressiert im Design |
-| Verlaufseinträge durch spätere Struktur-Änderung ungültig | `undoLast()` überspringt/verwirft Einträge mit fehlendem Ziel-Frame (FR-006); Verlauf bei Bildwechsel leeren | Adressiert im Design |
-| Modaler Dialog kollidiert mit belegten Eingaben | `UndoPrompt.isOpen()`-Gate in allen Room-Inputhandlern + `update()`-Crank-Blöcken; Direction-Holds beim Öffnen leeren | Adressiert im Design (FR-013, SC-005) |
+| Fehlalarm der Schüttel-Geste (arc42 R-27) | Schwellwert + erzwungene Links-Rechts-Sequenz + Refraktärzeit; Dialog als 2. Sicherung; Hardware-Test | Design umgesetzt (`ShakeDetector`, V12–V16); **Hardware offen** (T044) |
+| Accelerometer-Polling ↓ Zoom-View-FPS (arc42 R-28) | leichte O(1)-Erkennung; FPS-Messung Hardware; ggf. Polling ausdünnen | Design umgesetzt (1 Read + 1 Schritt/Frame); **Hardware offen** (T042) |
+| Snapshot-Speicher bei Frame-löschen-Undo (arc42 R-29) | nur Positions-Arrays + Bild-*Referenzen* kopieren, keine Pixel-Kopien; grobe Budget-Notiz in data-model | Design umgesetzt (AD-045, < ~100 KB); **RAM-Grobmessung offen** (T042) |
+| Verlaufseinträge durch spätere Struktur-Änderung ungültig (arc42 R-30) | `peekValid` siebt Einträge mit fehlendem Ziel-Frame aus (FR-006); `resolvePrevIndex` bevorzugt den index-stabilen `prevPosIndex`; Verlauf bei Bildwechsel leeren | **Erledigt** — headless verifiziert (V3, V23b) |
+| Modaler Dialog kollidiert mit belegten Eingaben (arc42 R-31) | `UndoPrompt.isOpen()`-Gate in allen Room-Inputhandlern + `update()`-Crank-Blöcken; Direction-Holds beim Öffnen leeren | **Erledigt** — headless verifiziert (V20; FR-013, SC-005) |
 
 ### Sicherheitsrelevante Architektur
 
@@ -212,13 +223,13 @@ arc42/…                      # MOD: 8 Kapitel + 3 ADR-Dateien (siehe Principle
 | Spec Open #2 — Wiederherstellungs-Mechanik / RAM-Budget | **Resolved** | → research.md **R2/R3** + data-model.md „UndoEntry". Voll-Snapshot pro betroffener Zelle (Index + Bild); Frame-löschen = tiefe Kopie. Budgetnotiz dokumentiert. Spec-Open-Zeile aktualisiert |
 | Spec Open #3 — Gesten-Verhalten in `FrameManagementView` | **Resolved** | → research.md **R6**. Geste dort NICHT aktiv; `deleteFrame`-Eintrag entsteht bei `deleteMarked()`, Dialog erst nach Rückkehr in den Tile View. Spec-Open-Zeile aktualisiert |
 | Spec Open #4 — konkreter Bewegungsschwellwert (SC-006) | **Open** | Owner: Hardware-Test. Follow-up: T-/Fenster-/Refraktär-Werte nach erstem Gerätetest in ADR-044 eintragen. Trigger: Phase „Manuelle Hardware-Integration"; erneut bei Nutzer-Feedback zu Fehlauslösung |
-| arc42 Kap. 2/4/5/6/8/9/10/11 | **Applicable** | Update-Tasks in `tasks.md` (siehe Principle III); Owner `/speckit-implement` + Merlin |
+| arc42 Kap. 2/4/5/6/8/9/10/11 | **Done (2026-09-02)** | §2.1 Eingabegeraete · §4.7 · §5 (3 neue Bausteine + Room-Klauseln) · §6.16 · §8.1 · §9.32–§9.34 · §10.5 · §11 R-27..R-31/T-03 |
 | arc42 Kap. 3 (Kontext) / Kap. 7 (Verteilung) | **N/A** | Keine neue externe Schnittstelle bzw. Build-/Deployment-Änderung. Trigger: externe Gesten-Anbindung / persistierte Sensor-Konfig |
-| ADR-044 / 045 / 046 | **Applicable** | Neu anzulegen (Kurzform in Kap. 9 + Datei in `arc42/adr/`) |
-| secure-architecture-Preset | **N/A** | Begründung siehe oben |
-| Constitution V Gate 1 (headless) | **Applicable** | Abschnitt „Spec 011" + Accelerometer-Mock; endet mit „ALLE TESTS BESTANDEN" |
-| Constitution V Gate 2 (`buildNumber` +1, `pdc`) | **Applicable** | `Source/pdxinfo` 30 → 31 vor erstem Testbuild |
-| Manuelle Simulator-/Hardware-Integration | **Applicable** | Eigener Task-Block; deckt SC-006 + Zoom-FPS + Modalität ab |
+| ADR-044 / 045 / 046 | **Done (2026-09-02)** | `arc42/adr/ADR-044-Schuettel-Erkennung-Accelerometer.md`, `ADR-045-Undo-Modell-3-Schritt-sitzungslokal.md`, `ADR-046-Modaler-Undo-Dialog.md` + Kurzform Kap. 9 §9.32–§9.34 |
+| secure-architecture-Preset | **N/A (bestätigt)** | Rein lokal, in-memory, kein Netzwerk, keine Secrets, keine Persistenz, keine neue Angriffsfläche. Re-Evaluations-Trigger: Undo-Verlauf würde auf Platte / ins Backend geschrieben |
+| Constitution V Gate 1 (headless) | **Done** | `lua tests/headless_tests.lua` → „ALLE TESTS BESTANDEN", 494 Assertions, Abschnitte „Spec 011" V1–V25; Accelerometer-Mock aktiv, keine „erfundene SDK-API" |
+| Constitution V Gate 2 (`buildNumber` +1, `pdc`) | **Done** | `Source/pdxinfo` `buildNumber` 30 → 31 (Phase 1+2) → 32 (Phase 3–5); `pdc Source "Hans Dither.pdx"` → exit 0 |
+| Manuelle Simulator-/Hardware-Integration | **Open** | T042/T043/T044 — Owner: Merlin. Deckt SC-006 (≥ 9/10 Erkennung, fehlalarmfrei), Zoom-View-FPS, RAM-Grobmessung, `T/W/R`-Endwerte in ADR-044, quickstart Szenarien A–G |
 
 ---
 

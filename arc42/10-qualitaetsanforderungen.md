@@ -136,3 +136,23 @@
 - Stimulus: volle Kurbelumdrehung (vorwaerts oder rueckwaerts, ohne B).
 - Reaktion: `gridState` wird per exaktem Index-Remap um 90 Grad rotiert (AD-036); keine Zwischen-Rotation bei Teildrehungen.
 - Metrik: Vier aufeinanderfolgende volle Vorwaertsdrehungen ergeben wieder exakt das Ausgangsbild, 0 Pixelverlust (SC-003/SC-004).
+
+## 10.5 Ergaenzende Qualitaetsszenarien (Spec 011 — Schuettel-Undo)
+
+### QS-21 Robustheit: Clear-Screen-Undo stellt vollstaendig wieder her
+- Kontext: Frame mit Inhalt auf der aktiven Ebene, danach „Clear Screen".
+- Stimulus: Schuetteln (links-rechts) → Dialog → „(A) Ja".
+- Reaktion: `applyContentEntry` schreibt alle 375 Zellindizes der aktiven Ebene zurueck und kompositiert den Frame neu (AD-045).
+- Metrik: `layer.positions` ist elementweise identisch zum Stand vor „Clear Screen"; im Editor in < 1 s sichtbar (FR-002). Headless verifiziert (V5/V5b), Sichtpruefung im Simulator (T043, quickstart Szenario A).
+
+### QS-22 Performance: Sensor-Polling ohne FPS-Einbruch im Zoom-View
+- Kontext: Zoom View mit aktiver Cursorbewegung; `ShakeDetector` laeuft mit.
+- Stimulus: kontinuierliche D-Pad-/A-Eingaben ueber mehrere Sekunden bei laufendem Accelerometer.
+- Reaktion: pro `update()` genau ein `readAccelerometer()` + ein Zustandsschritt in `ShakeDetector:feed` (keine Allokation im Normalfall, AD-044); kein zusaetzlicher Redraw ausser bei tatsaechlich geoeffnetem Dialog.
+- Metrik: Zoom-View-FPS auf echter Hardware unveraendert zur Spec-008-Basislinie (Risiko R-27). **Offen** bis T042 (Hardware).
+
+### QS-23 Speicher: Undo-Verlauf bleibt klein
+- Kontext: 3 riskante Operationen im Verlauf, worst case eine davon „Frame loeschen".
+- Stimulus: Verlauf voll (`MAX = 3`), ein `deleteFrame`-Eintrag = tiefe Kopie (3 Ebenen × 375 ints + 375er-Cache).
+- Reaktion: Voll-Snapshot je betroffener Zelle als int + Bild-**Referenz** (Bilder werden nicht kopiert); FIFO verdraengt den vierten Eintrag (AD-045).
+- Metrik: Gesamt-RAM der `UndoHistory` < ~100 KB Lua-Heap. Grobabschaetzung am Geraet dokumentieren (T042). Headless: FIFO + `isEmpty` nach 3× `undoLast` verifiziert (V1/V2).

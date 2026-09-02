@@ -6,7 +6,7 @@
 |---|---|
 | Zielplattform | Playdate-Konsole mit Lua-Runtime und Playdate SDK CoreLibs. |
 | Aufloesung/Skalierung | Runtime nutzt Display-Scale 1 auf nativen 400x240. Editor-Daten bleiben trotzdem im Pulp-Arbeitsraum (200x120 bzw. 8x8 Tiles) und werden fuer die Anzeige gezielt 2x vergroessert. |
-| Eingabegeraete | D-Pad, A/B-Buttons und Crank sind zentrale Bedienkomponenten. |
+| Eingabegeraete | D-Pad, A/B-Buttons und Crank sind zentrale Bedienkomponenten. **Seit Spec 011** zusaetzlich der Beschleunigungssensor (`playdate.startAccelerometer`/`readAccelerometer`) als **neue Eingabefaehigkeit** fuer die Schuettel-zum-Undo-Geste — davor im Projekt ungenutzt (die Spec-010-Annahme „keine neuen Plattformfaehigkeiten" gilt ab hier nicht mehr). Batterie: der Sensor laeuft nur im Tile-, Zoom- und Pixel-View (Start in `entered()`, Stopp beim Ruecksprung zur Auswahl), nicht im Title-/Selection-Screen und nicht in der FrameManagementView (AD-044). |
 | Persistenz | Speicherung erfolgt ueber playdate.datastore und Dateisystempfade unter saves/. |
 | Grafikmodell | Tile-basierte Darstellung mit imagetable und tilemap; zusaetzlich offscreen erzeugte Tiles. |
 | Datenformat-Interoperabilitaet | Save-Daten muessen als vollstaendiges, Pulp-kompatibles Dokument erzeugt werden. |

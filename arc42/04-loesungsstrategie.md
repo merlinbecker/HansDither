@@ -41,7 +41,7 @@
 ## 4.4 Nicht-Ziele der aktuellen Version
 
 - Kein Cloud-Sync oder externer Datenaustausch.
-- Kein Undo/Redo-Stack.
+- Kein allgemeiner Undo/Redo-Stack. *(Seit Spec 011 gibt es ein bewusst eng begrenztes Schuettel-Undo: nur die letzten 3 riskanten Operationen, kein Redo, keine Persistenz — siehe 4.7.)*
 - Keine Netzwerk- oder Mehrbenutzerfunktionen.
 - Keine direkte Runtime-Integration des Importers ins Playdate-UI (bewusst separates Offline-Werkzeug).
 - Keine Migration alter Pulp-Spielstaende nach v0.3.0 (bewusst ausserhalb des Umfangs).
@@ -106,3 +106,34 @@ Speicherformat `frames.json` steigt auf Version `"1.1"`
 (`frames[].layers[].{layerIndex, name, positions[375], visible}`); v1.0
 wird strukturbasiert erkannt und automatisch migriert. Spezifikation:
 `specs/010-layer-management-with-transparency/`.
+
+## 4.7 Schuettel-Undo fuer riskante Operationen (Spec 011)
+
+Der Editor erhaelt ein bewusst eng begrenztes Undo. Leitentscheidungen
+(Details in Kapitel 9, AD-044..AD-046):
+
+1. **Schuettel-Geste statt Menue/Taste.** Einmaliges Links-Rechts-Schuetteln
+   oeffnet den Undo-Dialog. Das SDK hat kein Shake-Ereignis; `ShakeDetector`
+   ist Eigenlogik auf `playdate.readAccelerometer` (X-Achsen-Zustandsautomat
+   `±T`-Peaks / `W`-Fenster / `R`-Refraktaerzeit) — begruendete SDK-Abweichung
+   nach Constitution I (AD-044). Der Sensor ist eine **neue Plattformfaehigkeit**
+   (arc42 Kap. 2) und laeuft nur in den drei Editier-Views.
+2. **Nur die letzten 3 riskanten Operationen, sitzungslokal.** `UndoHistory`
+   ist ein Ringpuffer (`MAX = 3`, FIFO) fuer genau vier Operationstypen:
+   Clear Screen, Frame loeschen, 90°-Rotation, Pixel-Verschiebung.
+   Feingranulares Malen zaehlt nicht (2 Clarifications). Kein Redo, keine
+   Persistenz — das Speicherformat bleibt unberuehrt (AD-045).
+3. **Voll-Snapshot des Pre-Zustands, keine inversen Deltas.** Jeder Eintrag
+   sichert je betroffener Zelle den vorherigen Tile-Index **und** das
+   vorherige 16×16-Bild (Frame loeschen = tiefe Kopie). Zwei `apply`-Pfade,
+   Anwendung nur in `EditorRoom`. Robust gegen Tile-Sharing/Umnummerierung
+   → FR-008 („Speichern leert den Verlauf nicht") bleibt widerspruchsfrei
+   (AD-045).
+4. **Voll-modaler Dialog, ein Modul.** `UndoPrompt` bildet das bewaehrte
+   `SelectionRoom`-Bestaetigungsmuster nach und schluckt bei offenem Dialog
+   A/B/D-Pad/Crank in allen drei Views (FR-013). `undoRequest` committet
+   offene Zoom-/Pixel-Edits **vor** der Label-Wahl, damit Dialogtext und
+   „(A) Ja"-Wirkung zusammenpassen; der Dialog erscheint dann im Tile View
+   (AD-046).
+
+Spezifikation: `specs/011-shake-to-undo/`.

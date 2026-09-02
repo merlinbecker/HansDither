@@ -217,21 +217,21 @@ Jeder anwendbare Checkpoint braucht konkrete Markdown-Evidenz; `N/A` braucht ein
 
 | Checkpoint | Status | Evidenz / Begründung / Follow-up |
 |---|---|---|
-| arc42 Kap. 2 — Randbedingungen | Applicable | `arc42/02-randbedingungen.md`: Accelerometer-Nutzung als neue Plattformfähigkeit ergänzen. Owner: `/speckit-plan` |
+| arc42 Kap. 2 — Randbedingungen | **Done (2026-09-02)** | `arc42/02-randbedingungen.md` §2.1 Zeile „Eingabegeraete": Accelerometer als neue Eingabefähigkeit + Batterie-Hinweis (nur Editier-Views) |
 | arc42 Kap. 3 — Kontextabgrenzung | N/A | Keine neue externe Schnittstelle; das Accelerometer ist Hardware innerhalb des bereits abgegrenzten Geräte-Kontexts. Re-Evaluations-Trigger: falls die Geste über eine zusätzliche externe Anbindung (z. B. Simulator-Sondertaste als eigener Kanal) realisiert wird |
-| arc42 Kap. 4 — Lösungsstrategie | Applicable | `arc42/04-loesungsstrategie.md`: Begründung der Shake-Eigenlogik auf SDK-Accelerometer + Undo-Snapshot-Strategie. Owner: `/speckit-plan` |
-| arc42 Kap. 5 — Bausteinsicht | Applicable | `arc42/05-bausteinsicht.md`: neuer Undo-Verlauf-Baustein + Schüttel-Detektor + Einbindepunkte in die vier Operationen. Owner: `/speckit-plan` |
-| arc42 Kap. 6 — Laufzeitsicht | Applicable | `arc42/06-laufzeitsicht.md`: Sequenz „Schütteln → Dialog → Bestätigen/Abbrechen → Zustandswiederherstellung / Navigation". Owner: `/speckit-plan` |
+| arc42 Kap. 4 — Lösungsstrategie | **Done (2026-09-02)** | `arc42/04-loesungsstrategie.md` §4.7 (4 Leitentscheidungen) + Nicht-Ziel „Undo/Redo-Stack" qualifiziert |
+| arc42 Kap. 5 — Bausteinsicht | **Done (2026-09-02)** | `arc42/05-bausteinsicht.md`: Zeilen `UndoHistory`/`ShakeDetector`/`UndoPrompt` + „Seit Spec 011"-Klauseln in EditorRoom/ZoomRoom/PixelRoom/FrameManagementView |
+| arc42 Kap. 6 — Laufzeitsicht | **Done (2026-09-02)** | `arc42/06-laufzeitsicht.md` §6.16 „Schütteln → Undo-Dialog → riskante Operation zurücknehmen" |
 | arc42 Kap. 7 — Verteilungssicht | N/A | Keine Änderung an Build, Paketierung oder Deployment. Re-Evaluations-Trigger: falls Accelerometer-Kalibrier-/Konfigurationsdaten persistiert werden müssten |
-| arc42 Kap. 8 — Querschnittliche Konzepte | Applicable | `arc42/08-querschnittliche-konzepte.md`: Eingabe-/Modalitätskonzept um den vollständig modalen Undo-Dialog und den Accelerometer-Lebenszyklus erweitern. Owner: `/speckit-plan` |
-| arc42 Kap. 9 — Architekturentscheidungen (+ `arc42/adr/`) | Applicable | Drei ADRs anlegen (Schüttel-Erkennung; Undo-Modell; modaler Undo-Dialog) in `arc42/09-architekturentscheidungen.md` + `arc42/adr/`. Owner: `/speckit-plan` |
-| arc42 Kap. 10 — Qualitätsanforderungen | Applicable | `arc42/10-qualitaetsanforderungen.md`: Qualitätsszenarien Robustheit / Performance / Speicher (siehe oben). Owner: `/speckit-plan` |
-| arc42 Kap. 11 — Risiken & technische Schulden | Applicable | `arc42/11-risiken-und-technische-schulden.md`: fünf Risikoeinträge aus *Technical Debt & Risk Mitigation*. Owner: `/speckit-plan` |
-| `docs/architecture/` Evidenzpfad (Preset-Vorgabe) | Applicable | Umgesetzt über `arc42/09` + `arc42/adr/` gemäß Constitution III (Pfad `arc42/` statt `docs/architecture/`); dokumentierte, begründete Abweichung |
-| Secure-Architecture-Preset (iSAQB) | N/A | Rein lokale In-Memory-Funktion: kein Netzwerk, keine Secrets, keine Persistenz, keine neue Angriffsfläche, keine Rechte-/Vertraulichkeitsaspekte. Re-Evaluations-Trigger: falls der Undo-Verlauf je auf Platte oder ins Backend geschrieben wird |
-| Constitution V — Gate 1 (`lua tests/headless_tests.lua`) | Applicable | Neue Headless-Tests für das Verlaufsmodell (FR-001…FR-009) in `tests/headless_tests.lua`; Lauf endet mit „ALLE TESTS BESTANDEN". Owner: `/speckit-tasks` + `/speckit-implement` |
-| Constitution V — Gate 2 (`buildNumber` +1, dann `pdc`) | Applicable | `Source/pdxinfo` `buildNumber` 30 → 31 vor dem ersten Testbuild; `pdc Source "Hans Dither.pdx"` fehlerfrei. Owner: `/speckit-implement` |
-| Manuelle Simulator-/Hardware-Integration | Applicable | Schüttel-Erkennung, Schwellwert, Fehlalarm-Freiheit, FPS im Zoom-View, Dialog-Modalität auf echter Hardware prüfen (separate Testphase, analog Spec 010 Phase 7). Owner: `/speckit-tasks` |
+| arc42 Kap. 8 — Querschnittliche Konzepte | **Done (2026-09-02)** | `arc42/08-querschnittliche-konzepte.md` §8.1: Schüttel-Geste, Voll-modale Dialoge, Accelerometer-Lebenszyklus |
+| arc42 Kap. 9 — Architekturentscheidungen (+ `arc42/adr/`) | **Done (2026-09-02)** | §9.32 AD-044 · §9.33 AD-045 · §9.34 AD-046 + Dateien `arc42/adr/ADR-044-Schuettel-Erkennung-Accelerometer.md`, `ADR-045-Undo-Modell-3-Schritt-sitzungslokal.md`, `ADR-046-Modaler-Undo-Dialog.md` |
+| arc42 Kap. 10 — Qualitätsanforderungen | **Done (2026-09-02)** | `arc42/10-qualitaetsanforderungen.md` §10.5: QS-21 Robustheit / QS-22 Performance / QS-23 Speicher |
+| arc42 Kap. 11 — Risiken & technische Schulden | **Done (2026-09-02)** | `arc42/11-risiken-und-technische-schulden.md`: R-27..R-31 + T-03 qualifiziert + §11.4-Nachverfolgungsnotiz |
+| `docs/architecture/` Evidenzpfad (Preset-Vorgabe) | **Done** | Erfüllt über `arc42/09` + `arc42/adr/` gemäß Constitution III (Pfad `arc42/` statt `docs/architecture/`); dokumentierte, begründete Abweichung |
+| Secure-Architecture-Preset (iSAQB) | **N/A (bestätigt)** | Rein lokale In-Memory-Funktion: kein Netzwerk, keine Secrets, keine Persistenz, keine neue Angriffsfläche, keine Rechte-/Vertraulichkeitsaspekte. Re-Evaluations-Trigger: falls der Undo-Verlauf je auf Platte oder ins Backend geschrieben wird |
+| Constitution V — Gate 1 (`lua tests/headless_tests.lua`) | **Done** | `tests/headless_tests.lua` Abschnitte „Spec 011" (V1–V25, 494 Assertions); Lauf endet mit „ALLE TESTS BESTANDEN"; Accelerometer-Mock aktiv, keine „erfundene SDK-API" |
+| Constitution V — Gate 2 (`buildNumber` +1, dann `pdc`) | **Done** | `Source/pdxinfo` `buildNumber` 30 → 31 (Phase 1+2) → 32 (Phase 3–5); `pdc Source "Hans Dither.pdx"` → exit 0 |
+| Manuelle Simulator-/Hardware-Integration | **Open** | Owner: Merlin (T042/T043/T044). Schüttel-Erkennungsrate (≥ 9/10), Fehlalarm-Freiheit über 2 min, Zoom-View-FPS, RAM-Grobmessung, `T/W/R`-Endwerte → ADR-044; quickstart Szenarien A–G |
 
 ### Open
 
@@ -240,8 +240,7 @@ Jeder anwendbare Checkpoint braucht konkrete Markdown-Evidenz; `N/A` braucht ein
 | Granularität der Pixel-Verschiebung: zählt eine Verschiebe-Geste (bis B losgelassen) als ein Verlaufseintrag, oder feiner? | **Resolved (Plan 2026-09-02)** | `/speckit-plan` | Aufgelöst in `research.md` **R4**: ein „B-Halte-Run" = ein Eintrag (Snapshot beim Run-Start, weitere Shifts erweitern denselben Eintrag). `data-model.md` §4. | — |
 | Wiederherstellungs-Mechanik je Operationstyp: Voll-Snapshot vs. inverse Delta vs. Tile-Index-Referenzen (RAM-Budget) | **Resolved (Plan 2026-09-02)** | `/speckit-plan` | Aufgelöst in `research.md` **R2/R3** + `data-model.md` §2: Voll-Snapshot je betroffener Zelle (vorheriger Index **und** vorheriges 16×16-Bild als Referenz); Frame löschen = tiefe Kopie. RAM-Budget < ~100 KB für 3 Einträge dokumentiert. Speicher-Umnummerierung geprüft: trifft die Live-`imageData` nicht. | Bei Hardware-Speichermessung |
 | Verhalten der Schüttel-Geste in der `FrameManagementView` | **Resolved (Plan 2026-09-02)** | `/speckit-plan` | Aufgelöst in `research.md` **R6**: Geste dort nicht aktiv (B durch Halte-Geste belegt); der `deleteFrame`-Eintrag entsteht bei `deleteMarked()`, der Dialog erst nach Rückkehr in den Tile View. | — |
-| Konkreter Bewegungsschwellwert der Schüttel-Erkennung, der die SC-006-Quote (9/10, fehlalarm­frei) erreicht | **Open** | Hardware-Test | Start-Parameter `T ≈ 0.85 g`, `W ≈ 500 ms`, `R ≈ 1200 ms` (`ShakeDetector`); Endwerte nach erstem Gerätetest in ADR-044 eintragen | Phase „Manuelle Hardware-Integration"; erneut bei Nutzer-Feedback zu Fehlauslösung |
-| Verhalten der Geste in der `FrameManagementView` selbst (dort wird „Frame löschen" ausgelöst, B ist aber durch Halten belegt) | `/speckit-plan`-Autor | Klären, ob die Geste erst nach Rückkehr in den Tile-View greift (aktuelle Annahme) oder auch dort | Design der Dialog-Einbindung |
+| Konkreter Bewegungsschwellwert der Schüttel-Erkennung, der die SC-006-Quote (9/10, fehlalarm­frei) erreicht | **Open** | Merlin (Hardware-Test, Tasks T042/T044) | Implementiert mit Start-Parametern `T = 0.85 g`, `W = 500 ms`, `R = 1200 ms` (`Source/ShakeDetector.lua`); am Gerät justieren, Endwerte in **ADR-044** (`arc42/adr/ADR-044-Schuettel-Erkennung-Accelerometer.md`) nachtragen. Die Justierung ändert `ShakeDetector.lua` → eigener `buildNumber`-+1-/`pdc`-Zyklus | Phase „Manuelle Hardware-Integration"; erneut bei Nutzer-Feedback zu Fehlauslösung |
 
 ---
 

@@ -43,8 +43,10 @@
 
 **Status-Hinweis (Evidenz vs. Abhaken)**: Die als `Applicable` markierten arc42-Zeilen erfassen *geplante* Evidenzpfade mit Owner `/speckit-plan` — die arc42-Dateien und ADRs selbst sind zum Zeitpunkt dieser Spec **unverändert** (dies ist `/speckit-specify`; arc42-Edits erfolgen laut Memory-Regel in der Planungsphase). Die Häkchen oben bestätigen, dass die Governance-*Analyse* vollständig ist, nicht dass die arc42-Evidenz bereits geschrieben wurde; deren Fertigstellung ist über die Owner/Follow-up-Spalten der *Audit Evidence Applicability*-Tabelle nachverfolgbar.
 
+**Implement 2026-09-02: alle Governance-Checkpoints erledigt bzw. mit Owner offen.** arc42 Kap. 2/4/5/6/8/9/10/11 aktualisiert (konkrete §-Verweise in der *Audit Evidence Applicability*-Tabelle von spec.md + plan.md); ADR-044/045/046 in `arc42/adr/` + Kurzform Kap. 9 §9.32–§9.34 angelegt; Architektur-Review (T041) als Notiz in `plan.md` → keine Contract-Verletzung. Constitution-V-Gates grün: `lua tests/headless_tests.lua` → „ALLE TESTS BESTANDEN" (494 Assertions, Abschnitte „Spec 011" V1–V25), `pdc` → exit 0, `buildNumber` 30 → 32. Einzige noch offene Zeile: **Manuelle Simulator-/Hardware-Integration** (Spec Open #4 / Tasks T042–T044, Owner Merlin) — `T/W/R`-Endwerte, Erkennungsrate, Fehlalarm-Freiheit, Zoom-View-FPS, RAM-Grobmessung; danach ADR-044 nachtragen.
+
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`.
 - Validierung am 2026-09-02: alle Punkte bestanden (1 Iteration). Keine offenen `[NEEDS CLARIFICATION]`-Marker.
-- Die vier *Open*-Punkte blockieren `/speckit-plan` nicht — sie sind dort aufzulösen (Memory-Regel „arc42 während Planung").
+- Die vier *Open*-Punkte blockieren `/speckit-plan` nicht — sie sind dort aufzulösen (Memory-Regel „arc42 während Planung"). Stand nach Implement: drei davon *Resolved* (R2/R3/R4/R6), nur der Bewegungsschwellwert bleibt bis zum Hardware-Test offen.

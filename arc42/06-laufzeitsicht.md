@@ -536,3 +536,57 @@ das Ausgangsbild (FR-005..FR-008, SC-003/SC-004).
 **Ergebnis:** Der aktive Frame ist nach einer einzigen Menü-Auswahl
 vollständig weiß; Frame-Anzahl, -Reihenfolge und alle anderen Frames
 bleiben unangetastet (FR-011..FR-015, SC-006/SC-007).
+
+## 6.16 Szenario: Schütteln → Undo-Dialog → riskante Operation zurücknehmen (Spec 011, AD-044..046)
+
+Ausgangslage: Der Nutzer hat gerade eine der vier riskanten Operationen
+ausgeführt (Clear Screen, Frame löschen, 90°-Rotation, Pixel-Verschiebung);
+der zugehörige `record*`-Aufruf hat **vor** der Mutation einen
+Pre-Zustands-Eintrag in `EditorRoom`s `UndoHistory` gelegt (bei der
+Rotation: Snapshot beim ersten `rotateGrid*()`, Eintrag erst beim Commit;
+beim Frame löschen: aus `FrameManagementView.deleteMarked()`).
+
+1. In `EditorRoom:update()` bzw. `ZoomRoom:update()` / `PixelRoom:update()`
+   wird einmal pro Frame `playdate.readAccelerometer()` gelesen und an
+   `EditorRoom:onShakeSample(x, y, z, commitAndReturn?)` gereicht (Zoom/
+   Pixel geben ihren `commitAndReturn`-Callback mit).
+2. `shakeDetector:feed(x, y, z, getCurrentTimeMilliseconds())` verfolgt die
+   `±T`-Peaks. Peak der einen und danach — innerhalb `W` ms — Peak der
+   anderen Polarität → **Kante** (`feed → true`), `R` ms Refraktärsperre.
+   Ruhiges Halten / einseitige Bewegung / zu langsame Sequenz → keine Kante
+   (FR-011).
+3. Kante erkannt und `not inputBlocked()` und `not UndoPrompt.isOpen()` →
+   `EditorRoom:undoRequest(commitAndReturn?)`:
+   a. **Zuerst** `commitAndReturn()` (nur aus Zoom/Pixel): offene Zell-Edits
+      committen, den Rotation-Snapshot des PixelRoom über
+      `ZoomRoom:setNewTile` → `EditorRoom:recordRotation` in den Verlauf
+      geben, `switchRoom(EditorRoom)` — `EditorRoom:entered()` läuft
+      vollständig durch (`returnFrame`, `currentFrame` geklemmt).
+   b. `entry, reason = undoHistory:peekValid(imageData)` — siebt einen
+      Eintrag mit fehlendem Ziel-Frame (FR-006) bzw. ein `deleteFrame` bei
+      bereits 12 Frames (`reason = "frame-limit"`, FR-007) aus.
+   c. `entry` vorhanden → `UndoPrompt.open(labelFor(entry.op), () ->
+      EditorRoom:undoLast())`; `needsRedraw = true`. Kein `entry` →
+      `showStatus("cannot undo - frame limit" | "Nothing to undo")`,
+      **kein Dialog** (FR-012).
+4. Dialog offen: `EditorRoom:draw()` (bzw. Zoom/Pixel) zeichnet zuletzt
+   `UndoPrompt.draw()` (zentrierte Box, „Undo <Operation>?" / „(A) Ja" /
+   „(B) Nein"). Jeder Input-Callback + Crank-Block der drei Views ist auf
+   `UndoPrompt.isOpen()` gegated: D-Pad/Crank wirkungslos, ein zweites
+   Schütteln ist folgenlos (`open` ist No-op, FR-013/FR-015).
+5. **(B) Nein** → `UndoPrompt.handleB()`: Dialog zu, Verlauf unberührt.
+   **(A) Ja** → `UndoPrompt.handleA()`: erst schließen, dann der
+   `onConfirm` = `EditorRoom:undoLast()`:
+   - `peekValid` liefert den (garantiert anwendbaren) Eintrag;
+   - `kind == "deleteFrame"` → `applyDeleteFrameEntry` (`table.insert` in
+     `frameLayers` + `frames` an `min(index, n+1)`, `activeLayer` klemmen);
+     sonst `applyContentEntry` (`layer.positions[cellIdx] =
+     resolvePrevIndex(cell)`; `op == "clear"` → `recompositeCurrentFrame`,
+     sonst je Zelle `recompositeCell`) + `updateTilemapFrame()`;
+   - `currentFrame` auf den betroffenen Frame; `undoHistory:pop()`;
+     `needsRedraw = true`.
+
+**Ergebnis:** Der Zustand entspricht exakt dem Stand von unmittelbar vor
+der zurückgenommenen Operation (FR-002); das Ergebnis ist im Tile View
+sichtbar (FR-016). Der Verlauf hält weiterhin bis zu 2 ältere Einträge;
+nach Bildwechsel / Editor-Verlassen ist er leer (SC-008).
