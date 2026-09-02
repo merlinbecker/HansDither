@@ -27,6 +27,7 @@ Kapitel, die den Ist-Zustand beschreiben (3, 5-8, 10), werden je Umsetzungsschni
 - README (Projektidee, Bedienung, Zielsetzung)
 - Source/pdxinfo (Metadaten)
 - support/devlogs/01-noMoreExcuses.md (Motivation und Kontext)
+- STEUERUNG.md (vollstaendige, tastengenaue Bedienreferenz je Room inkl. Systemmenue-Eintraegen und Schuettelgeste; aus dem Quellcode abgeleitet)
 
 ## 1.2 Qualitaetsziele
 Die wichtigsten Qualitaetsziele fuer die Architektur sind:

@@ -2,6 +2,11 @@
 
 ## 8.1 Input- und Navigationskonzept
 
+> Die vollstaendige, tastengenaue Bedienreferenz je Room (jede Taste, jede
+> B-/Crank-Kombination, die Systemmenue-Eintraege und die Schuettelgeste)
+> steht in `STEUERUNG.md` im Projektwurzelverzeichnis. Dieser Abschnitt
+> beschreibt das dahinterliegende Konzept, nicht jede Einzelbindung.
+
 - Jeder Room liefert einen eigenen Input-Handler.
 - Ein zentraler switchRoom-Mechanismus tauscht Handler atomar aus.
 - Bedienmuster im Editor (AD-019; Tile-View-Steuerung seit Spec 010 durch **AD-042** ueberarbeitet):
