@@ -17,6 +17,50 @@ graph LR
 
 Die Navigation ist bewusst gerichtet: Der TitleRoom ist eine Einbahnstrasse (nur Splash), der SelectionRoom ist die Basis-Ebene — B fuehrt dort nicht zurueck. Zurueck aus dem Editor geht es ausschliesslich ueber "save + exit" (Systemmenue); innerhalb der Zoomkette navigiert B+Crank in beide Richtungen.
 
+### 5.1.1 C4 Ebene 2 — Container
+
+```plantuml
+@startuml C4-2_Container
+!include <C4/C4_Container>
+LAYOUT_TOP_DOWN()
+skinparam wrapWidth 160
+skinparam maxMessageSize 160
+
+Person(user, "Spieler / Kreative:r")
+Person_Ext(viewer, "Betrachter:in im Web")
+
+System_Boundary(client, "Playdate-Geraet") {
+  Container(app, "Editor-App", "Lua / .pdx (Playdate SDK)", "Rooms, Rendering, Undo, Persistenz-Coroutinen, Sync-Client")
+  ContainerDb(store, "Lokaler Datastore", "playdate.datastore", "saves/<id>/: sheet.pdi, frames.json v1.1, preview.pdi; saves/index")
+}
+
+System_Boundary(be, "Sync-Backend (all-inkl.com Shared Hosting)") {
+  Container(web, "Web-/API-Anwendung", "PHP 8", "pair / login / upload, Session, Validierung, PNG-GIF-Rendering, Ansichtsseite")
+  ContainerDb(db, "Datenbank", "MySQL 8", "users, images, sessions")
+  ContainerDb(files, "Datei-Ablage", "Dateisystem", "uploads/<uid>/: PDI, JSON, gerenderte PNG/GIF")
+}
+
+Rel_D(user, app, "bedient", "D-Pad, A/B, Crank, Schuetteln")
+Rel_D(app, store, "liest / schreibt Bilder", "read/write, readImage/writeImage")
+Rel_D(app, web, "Pairing / Login / Upload", "HTTPS POST, multipart")
+Rel_D(web, db, "liest / schreibt", "SQL, prepared statements")
+Rel_D(web, files, "speichert Upload + Render-Artefakte", "fwrite / GD")
+Rel_D(viewer, web, "betrachtet Bilder", "HTTPS GET /?uid=")
+@enduml
+```
+
+| Container | Technik | Verantwortung | Deployment |
+|---|---|---|---|
+| Editor-App | Lua, Playdate SDK CoreLibs; Paketierung als `.pdx` (`pdc`) | Der gesamte Editier-, Animations-, Undo- und Persistenz-Flow; kontaktiert das Backend nur bei der Sync-Geste | Playdate-Geraet / Simulator |
+| Lokaler Datastore | `playdate.datastore` (`write`/`read`, `writeImage`/`readImage`) über das Playdate-Dateisystem | Persistente Bilder + Index; einzige Datenquelle des Editors zur Laufzeit | Geraet-lokal, im Datastore der App |
+| Web-/API-Anwendung | PHP 8, kein Framework; `index.php` + `includes/*.php` + `public/*.php` | Pairing/Login/Session, Upload-Validierung + Transaktion, On-demand-Rendering, Ansichtsseite je UID | `backend/` → all-inkl.com via `backend/deploy.sh` (SFTP) |
+| Datenbank | MySQL 8; Schema in `backend/sql/migrations/` bzw. `backend/storage/hansdither_schema.sql` | Metadaten: UID↔PIN-Hash, Bild-Datensätze, Sessions | all-inkl.com MySQL |
+| Datei-Ablage | Dateisystem des Hosting-Accounts, `uploads/<uid>/` (`.htaccess`-geschützt) | Hochgeladene PDI/JSON + gerenderte PNG/GIF-Artefakte | all-inkl.com Webspace |
+
+Der Editier-Kern (Editor-App + Datastore) ist vollstaendig offline
+lauffaehig; nur die explizite Kurbel-Sync-Geste im SelectionRoom kontaktiert
+die Web-/API-Anwendung.
+
 ### Enthaltene Bausteine
 
 | Baustein | Verantwortung |
@@ -65,6 +109,76 @@ Die Navigation ist bewusst gerichtet: Der TitleRoom ist eine Einbahnstrasse (nur
 - RoomOperation:start()/resume(onError): generischer Ablauf fuer Coroutine + loadingBar-Lifecycle inkl. Fehlerpfad.
 
 ## 5.2 Ebene 2
+
+### C4 Ebene 3 — Komponenten der Editor-App
+
+Wegen des Hub-Charakters von `EditorRoom` in zwei Sichten aufgeteilt:
+(1) die Room-Ebene, (2) das EditorRoom-Innenleben.
+
+**Diagramm 1 — Room-Ebene**
+
+```plantuml
+@startuml C4-3a1_Room_Ebene
+!include <C4/C4_Component>
+LAYOUT_TOP_DOWN()
+HIDE_STEREOTYPE()
+skinparam wrapWidth 155
+skinparam maxMessageSize 150
+
+Person(user, "Spieler / Kreative:r")
+System_Ext(web, "Sync-Backend (PHP)")
+
+Container_Boundary(app, "Editor-App - Room-Ebene (main.lua verdrahtet + startet alle Rooms via switchRoom)") {
+  Component(title, "TitleRoom", , "Splash; A -> SelectionRoom")
+  Component(sel, "SelectionRoom", , "3x3-Bildauswahl, Anlage/Kopie/Loeschen, Kurbel-Sync-Geste")
+  Component(edit, "EditorRoom", , "Tile-Editor 25x15 - Hub, Innenleben siehe Diagramm 2 / 5.2.3")
+  Component(zoom, "Zoom-/Pixel-/Frame-View", , "Zoomstufen 2x2 / 1x1, 90-Grad-Rotation, Frame-Umordnen/-Loeschen")
+  Component(sync, "SyncService", , "Pairing / Login / Multipart-Upload, QR+PIN-Screen")
+}
+
+Rel_D(user, title, "A")
+Rel_D(title, sel, "switchRoom")
+Rel_D(sel, edit, "setImage(id) + switchRoom")
+Rel_D(edit, zoom, "B + Crank: rein / raus")
+Rel_D(sel, sync, "Kurbel >= 720 Grad loest aus")
+Rel_D(sync, web, "HTTPS")
+@enduml
+```
+
+**Diagramm 2 — EditorRoom-Innenleben**
+
+```plantuml
+@startuml C4-3a2_EditorRoom_Innenleben
+!include <C4/C4_Component>
+LAYOUT_TOP_DOWN()
+HIDE_STEREOTYPE()
+skinparam wrapWidth 160
+skinparam maxMessageSize 150
+
+ContainerDb_Ext(store, "Lokaler Datastore", , "sheet.pdi, frames.json, preview.pdi")
+
+Container_Boundary(app, "Editor-App - EditorRoom-Innenleben") {
+  Component(edit, "EditorRoom", , "haelt imageData; einziger Anwendungs-Einstieg fuer Undo")
+  Component(layer, "LayerModel", , "3-Ebenen-Modell, Pixel-Verschiebung, Composite-Cache (SDK-frei)")
+  Component(undo, "Undo-Subsystem", , "UndoHistory (Ringpuffer 3) - ShakeDetector - UndoPrompt (modal). Code-Ebene: 5.3.3")
+  Component(persist, "ImageStore / ImageStoreCodec", , "Save/Load in Phasen (Coroutinen ueber RoomOperation + loadingBar), Tile-Dedup (FNV-1a) + Bereinigung")
+}
+
+Rel_D(edit, layer, "schreibt aktive Ebene, kompositiert je Zelle")
+Rel_D(edit, undo, "record* / undoRequest / undoLast; Schuettel-Sample")
+Rel_D(edit, persist, "save + exit / Laden")
+Rel_D(persist, store, "PDI + JSON + Preview")
+@enduml
+```
+
+Verdichtete Boxen (Whiteboxen 5.2.1–5.2.7):
+
+| Box im Diagramm | Reale Module | Detail |
+|---|---|---|
+| Zoom-/Pixel-/Frame-View | `ZoomRoom`, `PixelRoom`, `FrameManagementView` | 5.2.4 / 5.2.5 / 5.2.x; `PixelTransparency` (3-Zustands-Pixelmodell) ist Hilfsmodul von PixelRoom + LayerModel |
+| Undo-Subsystem | `UndoHistory`, `ShakeDetector`, `UndoPrompt` | SDK-frei bis auf `UndoPrompt.draw()` (CoreLibs/graphics). Instanzen leben in `EditorRoom`; Ablauf siehe 5.3.3 + Kap. 6.16 |
+| ImageStore / ImageStoreCodec | `ImageStore` (Index, CRUD, Preview), `ImageStoreCodec` (Save/Load-Coroutinen) | 5.2.6; getrieben von `RoomOperation` + `loadingBar` |
+| — nicht im Diagramm | `Bauchbinde`, `PencilCursor`, `loadingBar`, `RoomOperation` | UI-/Ablauf-Helfer ohne eigene fachliche Verantwortung (Enthaltene-Bausteine-Tabelle in 5.1) |
 
 ### 5.2.1 Whitebox main.lua
 
@@ -171,6 +285,65 @@ Interne Logik:
 - Verarbeitung: Sheet komponieren -> frames.json aufbauen -> Dateien schreiben -> Preview aus Frame 1 rendern -> Index aktualisieren (letzte Phase, C-06)
 - Output: saves/<id>/{sheet.pdi, frames.json, preview.pdi} + aktualisierter Index
 
+### 5.3.3 C4 Ebene 4 (Beispiel) — Undo-Subsystem
+
+Die Code-Ebene wird nicht flaechendeckend gezeichnet; hier ein Beispiel fuer
+das in sich geschlossene Undo-Subsystem (Spec 011, AD-044..046). Details zu
+den Feldern/Regeln stehen in den ADRs und in Kap. 6.16.
+
+```plantuml
+@startuml C4-4_Code_Undo
+skinparam wrapWidth 200
+skinparam classAttributeIconSize 0
+hide empty members
+
+class EditorRoom <<Room>> {
+  -undoHistory : UndoHistory
+  -shakeDetector : ShakeDetector
+  -shiftRun : Entry?
+  +onShakeSample(x,y,z, commitAndReturn?)
+  +undoRequest(commitAndReturn?)
+  +undoLast() : "applied" | "empty"
+  +record{Clear,Rotation,ShiftCandidates,DeleteFrame}()
+  -applyContentEntry(e) / applyDeleteFrameEntry(e)
+}
+class UndoHistory <<SDK-frei>> {
+  -entries : Entry[0..3]  // FIFO
+  +push / pop / clear / isEmpty
+  +peekValid(imageData) : Entry?, reason
+  +coalesceTarget(op, frameIdx, layerIdx) : Entry?
+}
+class ShakeDetector <<SDK-frei>> {
+  -T=0.85g  -W=500ms  -R=1200ms
+  +feed(x,y,z, nowMs) : bool
+  +reset()
+}
+class UndoPrompt <<Singleton, modal>> {
+  -isOpen / -label / -onConfirm
+  +open(label, onConfirm)  // No-op wenn offen
+  +handleA()  // schliesst, dann onConfirm() 1x
+  +handleB() / draw() / reset() / currentLabel()
+}
+class Entry <<record>> {
+  kind : content | deleteFrame
+  op : clear|rotate|shift|deleteFrame
+  frameIndex / layerArrayIndex
+  cells : idx -> (prevPosIndex, prevImage)
+  runOpen? ; (deleteFrame: index, frameLayersEntry, framesEntry?)
+}
+EditorRoom *-- UndoHistory
+EditorRoom *-- ShakeDetector
+EditorRoom ..> UndoPrompt : open / handleA / handleB
+UndoHistory o-- "0..3" Entry
+UndoPrompt ..> EditorRoom : onConfirm == undoLast()
+@enduml
+```
+
+Ablauf: `onShakeSample` → `ShakeDetector.feed` → (Kante) `undoRequest` →
+ggf. `commitAndReturn()` → `UndoHistory.peekValid` → `UndoPrompt.open(label)`
+→ (A) `undoLast` → `apply*Entry` → `UndoHistory.pop`. Ausfuehrlich in Kap. 6.16;
+Feld-/Regel-Details in ADR-045/046.
+
 ---
 
 ## 5.4 Backend-Service (Hans Dither Sync)
@@ -198,6 +371,42 @@ Interne Logik:
 | `includes/renderer.php` | PNG-Rendering aus PDI + JSON via GD-Bibliothek; seit Spec 009 `renderFrameToPng()` (beliebiger 0-basierter Frame-Index statt nur Frame 0) und `renderTilemapToPng()` (Tile-Sammlung als PNG in Playdate-SDK-Namenskonvention `<name>-table-16-16`, AD-038) | PHP GD |
 | `MySQL-Datenbank` | Speicherung von UID→PIN-Hash, Images-Metadaten, Sessions | MySQL 8.x |
 | `Dateisystem` | Speicherung von PDI/JSON/PNG-Dateien unter `/uploads/{UID}/` | all-inkl.com Hosting |
+
+**C4 Ebene 3 — Komponenten der Web-/API-Anwendung** (Verantwortungen siehe
+Tabelle oben; das Sequenz-nahe Flussbild folgt in 5.4.2):
+
+```plantuml
+@startuml C4-3b_Komponenten_Backend
+!include <C4/C4_Component>
+LAYOUT_TOP_DOWN()
+skinparam wrapWidth 155
+skinparam maxMessageSize 150
+
+System_Ext(client, "Playdate-Client / Browser")
+ContainerDb_Ext(db, "MySQL", "users, images, sessions")
+ContainerDb_Ext(files, "Datei-Ablage", "uploads/<uid>/")
+
+Container_Boundary(web, "Web-/API-Anwendung (PHP 8)") {
+  Component(front, "Front Controller", "index.php + public/*.php + .htaccess", "Routing, Session-Pruefung, einheitliches JSON-Fehlerformat")
+  Component(auth, "auth.php", "PHP", "Pairing, Login, bcrypt-PIN, Rate-Limiting (3/5min), Session-Token")
+  Component(up, "upload_handler.php", "PHP", "Transaktion + Row-Lock, 12-Bilder-Limit, Dateibenennung, Cleanup")
+  Component(val, "validation.php + pdi_parser.php", "PHP", "PDI Magic-Bytes + Parsing, frames.json Struktur-Schema, 300-KB-Limit")
+  Component(rend, "renderer.php + gif_encoder.php", "PHP GD", "Frame-PNG / Tilemap-PNG / GIF on-demand")
+  Component(dbc, "database.php", "PHP", "DB-Verbindung (Singleton), Prepared Statements, Transaktions-Wrapper")
+}
+
+Rel_D(client, front, "HTTPS", "GET / POST")
+Rel_D(front, auth, "prueft Token / paart")
+Rel_D(front, up, "leitet Upload weiter")
+Rel_D(up, val, "validiert Datei")
+Rel_D(front, rend, "fordert Render an")
+Rel_D(auth, dbc, "liest / schreibt")
+Rel_D(up, dbc, "liest / schreibt")
+Rel_D(dbc, db, "SQL")
+Rel_D(up, files, "speichert Upload")
+Rel_D(rend, files, "liest PDI / schreibt PNG-GIF")
+@enduml
+```
 
 ### 5.4.2 Ebene 2: Backend-Architektur
 

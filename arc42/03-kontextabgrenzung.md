@@ -6,6 +6,41 @@ Hans Dither ist primaer ein lokaler Pixel-Editor fuer Playdate. Externe
 Interaktionen entstehen durch Benutzerbedienung, lokale Persistenz und —
 optional — den Upload einzelner Bilder zu einem eigenen Web-Backend.
 
+Die C4-Diagramme dieses Dokuments nutzen **C4-PlantUML** aus der
+PlantUML-Standardbibliothek (`!include <C4/...>`). Ebenen-Uebersicht:
+Ebene 1 (System-Kontext) hier in 3.1, Ebene 2 (Container) in 5.1.1,
+Ebene 3 (Komponenten) in 5.2 — Client in zwei Sichten (Room-Ebene +
+EditorRoom-Innenleben) — und im Backend-Abschnitt 5.4, Ebene 4 (Code,
+Beispiel Undo-Subsystem) in 5.3.3.
+
+### C4 Ebene 1 — System-Kontext
+
+```plantuml
+@startuml C4-1_SystemKontext
+!include <C4/C4_Context>
+LAYOUT_TOP_DOWN()
+skinparam wrapWidth 170
+skinparam maxMessageSize 170
+
+Person(user, "Spieler / Kreative:r", "erstellt und animiert 1-Bit-Pixelart auf dem Playdate")
+
+System(hd, "Hans Dither", "1-Bit-Pixel- & Tile-Editor auf dem Playdate; erstellt, animiert und speichert Bilder lokal")
+
+System_Ext(pd, "Playdate OS + Datastore", "Runtime, Eingaben, Beschleunigungssensor, lokaler Datastore / Dateisystem")
+
+System(be, "Hans Dither Sync-Backend", "Projekteigener PHP/MySQL-Dienst: Pairing, Bild-Upload, Web-Ansicht")
+
+Person_Ext(viewer, "Betrachter:in im Web", "oeffnet die Ansichts-URL bzw. scannt den QR-Code")
+
+Rel_D(user, hd, "bedient", "D-Pad, A/B, Crank, Schuetteln, Tastatur")
+Rel_D(hd, pd, "rendert, liest Eingaben, speichert Bilder", "Playdate SDK, playdate.datastore")
+Rel_D(hd, be, "laedt einzelne Bilder hoch", "HTTPS: /pair, /login, /upload")
+Rel_D(viewer, be, "betrachtet hochgeladene Bilder", "HTTPS GET /?uid=")
+@enduml
+```
+
+Details je Kommunikationspartner:
+
 | Kommunikationspartner | Eingaben an das System | Ausgaben des Systems |
 |---|---|---|
 | Spieler / Kreative | D-Pad, A/B, Crank, Beschleunigungssensor (Schuettelgeste), Bildschirmtastatur | UI-Rueckmeldung, Tile-/Pixel-Rendering, Bauchbinden-Hinweise, Save/Load-Fortschritt |
