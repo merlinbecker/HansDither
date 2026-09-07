@@ -203,3 +203,7 @@ Re-validated against the updated spec. All 16 checklist items remain **passing**
 **Downstream**: `/speckit-plan` + `/speckit-tasks` must be re-run for this round (arc42 Kap. 4/5/6/8/9/10/11, 2 new ADRs, plus the still-outstanding Spec-010 Kap. 6/7 runtime-view backfill). `.specify/feature.json` repointed to `specs/010-layer-management-with-transparency`.
 
 
+
+### Implementation Note (2026-09-06) — Eighth + Ninth Round done
+
+`/speckit-implement` T060–T096: consolidated overlay bar (FR-028/SC-008) + persistent Frame Management Room (FR-018..FR-022, SC-004) built and green. `lua tests/headless_tests.lua` → "ALLE TESTS BESTANDEN" (577 OK); `Source/pdxinfo` buildNumber 37 → 40; `pdc` exit 0 per phase. arc42 Kap. 4/5/6/7/8/9/10/11 updated; **ADR-048** (Frame Room) + **ADR-049** (Overlay bar) written (ADR-047 was already Spec 011). All governance checkpoints **Done** except **Manual simulator/hardware integration** (T093/T094 — owner: Merlin, open). Spec quality checklist: 16/16 → 16/16 (no state change).

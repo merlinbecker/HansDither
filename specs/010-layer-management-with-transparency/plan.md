@@ -201,7 +201,7 @@ tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 - **Phase A — Consolidated overlay bar** (`FR-028`, `SC-008`; revises `FR-015`/`025`/`027`): one bar on the screen edge *opposite* the tile cursor (`cursor.y <= GRID_ROWS/2` → bar bottom, else top; tie → bottom), carrying the frame/layer label, the tile-picker filmstrip, the "Tile N picked" toast and status messages, laid out so none overdraws another and none covers the cursor's tile. `UndoPrompt` (Spec 011) stays a separate layer above the bar, placement coordinated. Pure `EditorRoom.draw` + `Bauchbinde` change; the anchor rule is a pure function → headless-testable.
 - **Phase B — Frame Management Room** (rewrites US4; revises `FR-018`–`FR-022`, `SC-004`/`007`): `FrameManagementView` becomes a persistent room — entered with **B + Crank backward** (unchanged gesture), left with **B + Crank forward**; the B-release exit is removed. Frames shown as a **thumbnail grid** built with `playdate.ui.gridview` (the same SDK primitive `SelectionRoom` and `PixelRoom` already use). Reorder: A marks, then the D-Pad moves the marked frame in the animation sequence.
 
-- **Phase C — Architecture evidence** (Constitution III + iSAQB): arc42 Kap. 4/5/6/8/9/10/11 + **ADR-047**, **ADR-048**; plus the **Spec-010 Kap. 6 runtime-view backfill** that `tasks.md` T052 still lists as open.
+- **Phase C — Architecture evidence** (Constitution III + iSAQB): arc42 Kap. 4/5/6/8/9/10/11 + **ADR-048**, **ADR-049**; plus the **Spec-010 Kap. 6 runtime-view backfill** that `tasks.md` T052 still lists as open.
 
 ### Technical Context (delta)
 
@@ -225,7 +225,7 @@ tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 
 #### ✅ Principle I: SDK-First — PASS
 
-- Frame grid uses **`playdate.ui.gridview`** (SDK/CoreLibs), not a hand-rolled grid — the same primitive `SelectionRoom`/`PixelRoom` use. Documented in arc42 Kap. 4 + ADR-047.
+- Frame grid uses **`playdate.ui.gridview`** (SDK/CoreLibs), not a hand-rolled grid — the same primitive `SelectionRoom`/`PixelRoom` use. Documented in arc42 Kap. 4 + ADR-048.
 - Thumbnails use `playdate.graphics.image` / `image:scaledImage()` (SDK) over the existing flat composite cache + `playdate.graphics.tilemap`.
 - Room lifecycle uses the existing `switchRoom` DI pattern (`main.lua`) — `FrameManagementView` is already a wired room; only its internals change.
 - Crank read via `playdate.getCrankTicks` (SDK), one API per frame (CR-01).
@@ -243,7 +243,7 @@ tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 | `arc42/05-bausteinsicht.md` | `FrameManagementView` → Room mit `entered()`/Exit-Lifecycle, `gridview` + Thumbnail-Cache; `Bauchbinde` vertikaler Anker; `EditorRoom.draw` Overlay-Abschnitt = eine Layout-Einheit. „Seit Spec 010 (Eighth Round)"-Klauseln |
 | `arc42/06-laufzeitsicht.md` | **(a) Backfill** der seit Spec 010 fehlenden Sequenzen (Ebenen-Cyclen, Tile-Picker, Frame-Verwaltung Eintritt/Verlassen — T052). **(b) Neu**: „Frame-Room betreten → Grid navigieren → markieren → verschieben (n× `swapFrames` + `onFramesReindexed`) → löschen (`recordDeleteFrame`) → verlassen (B losgelassen ⇒ armiert; B+Kurbel vorw.) → `EditorRoom:entered()` klemmt `currentFrame`". „Overlay-Leiste: Cursor-Zone → Inhalt komponieren → cursorabgewandt zeichnen" |
 | `arc42/08-querschnittliche-konzepte.md` | Overlay-Konzept: eine konsolidierte Leiste (cursorabgewandt, kollisionsfrei), Undo-Dialog als eigene Schicht. Room-Gesten-Konzept: symmetrische B+Kurbel-Gesten mit Arming-Bedingung |
-| `arc42/09-architekturentscheidungen.md` + `arc42/adr/` | **ADR-047** `ADR-047-Frame-Verwaltung-persistenter-Room.md`, **ADR-048** `ADR-048-Konsolidierte-Overlay-Leiste.md` + Kurzeinträge §9.35/§9.36 |
+| `arc42/09-architekturentscheidungen.md` + `arc42/adr/` | **ADR-048** `ADR-048-Frame-Verwaltung-persistenter-Room.md`, **ADR-049** `ADR-049-Konsolidierte-Overlay-Leiste.md` + Kurzeinträge §9.36/§9.37 |
 | `arc42/10-qualitaetsanforderungen.md` | QS: Usability (Overlay verdeckt nie die Cursor-Zelle — SC-008); Performance (Thumbnail-Cache < 1 Frame beim Betreten, partielles Invalidieren); Robustheit (Room-Exit deterministisch durch Arming) |
 | `arc42/11-risiken-und-technische-schulden.md` | R-32 Crank-Rückstau beim Room-Exit; R-33 Thumbnail-Render-Kosten; R-34 Overlay-Layout verdeckt Inhalt |
 | `arc42/07-verteilungssicht.md` | **N/A** — keine Build-/Paketierungsänderung (Begründung dort vermerken; korrigiert die imprecise „6/7"-Notiz aus T052) |
@@ -298,18 +298,18 @@ tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 - `Bauchbinde:draw(lines, hSide, vAnchor, screenW, screenH)` — `vAnchor` `"top"|"bottom"`; `bandY = vAnchor=="top" and margin or (screenH - bandH - margin)`. `drawBottom(text, side, screenW, screenH)` is **kept with its exact current signature** as a thin wrapper (`self:draw(text, side, "bottom", ...)`), so the other caller — `SelectionRoom.lua:456` `bauchbinde:drawBottom(label, "left", 400, 240)` — is unaffected. Only `EditorRoom` calls the new `draw`.
 - `EditorRoom.draw`: compute `vAnchor = (cursor.y <= GRID_ROWS/2) and "bottom" or "top"`; `hSide` unchanged (`cursor.x <= GRID_COLS/2 and "right" or "left"`). Compose **one** region: line = `pickMessageVisible and pickMessage or "<frame/layer label>"`; if `statusMessage` append as a second line in the same band (not a second `drawBottom` at a fixed side — fixes the pre-existing bottom-left collision). If `pickerVisible`, the tile-picker filmstrip renders **inside the same anchored region**, stacked with the label line, never at screen-centre.
 - `drawTilePickerOverlay`: `px` centred horizontally is fine; `py` becomes `vAnchor`-relative (top: `margin`; bottom: `240 - panelH - margin - labelH`).
-- `UndoPrompt.draw()` stays last (own layer). Its box is centred; when the bar is at top the box already clears it, when at bottom likewise — no change needed, but ADR-048 records the coordination rule.
+- `UndoPrompt.draw()` stays last (own layer). Its box is centred; when the bar is at top the box already clears it, when at bottom likewise — no change needed, but ADR-049 records the coordination rule.
 - Pure helpers for the headless test: `overlayAnchor(cursorY, rows)`, `overlayRegionRect(anchor, contentH, screenH)`, `cursorCellRect(cx, cy)`.
 
-**Spec 011 shake gesture in the Frame Room** — **Resolved, no change.** Spec 011 `FR-010` already names the frame-management view in its *exclusion* list ("In Title-, Selection- und Frame-Verwaltungs-View DARF die Geste NICHT ausgewertet werden"). Spec 011 `research.md` R6 gave the *rationale* ("B is held there") which the persistent room retires — but the *requirement* stands: the Frame Room does not start the accelerometer and does not evaluate shake. `deleteFrame` undo entries are still recorded (the `recordDeleteFrame` hook is preserved) and surface when the user is back in the Tile View. Activating shake inside the Frame Room would be a **Spec 011 FR-010 change**, out of scope here. *(Recorded in ADR-047 §Konsequenzen.)*
+**Spec 011 shake gesture in the Frame Room** — **Resolved, no change.** Spec 011 `FR-010` already names the frame-management view in its *exclusion* list ("In Title-, Selection- und Frame-Verwaltungs-View DARF die Geste NICHT ausgewertet werden"). Spec 011 `research.md` R6 gave the *rationale* ("B is held there") which the persistent room retires — but the *requirement* stands: the Frame Room does not start the accelerometer and does not evaluate shake. `deleteFrame` undo entries are still recorded (the `recordDeleteFrame` hook is preserved) and surface when the user is back in the Tile View. Activating shake inside the Frame Room would be a **Spec 011 FR-010 change**, out of scope here. *(Recorded in ADR-048 §Konsequenzen.)*
 
 ### Architecture Governance & Technical Debt (iSAQB preset — Eighth Round)
 
 **Applicability**: affects runtime behaviour (room joins `switchRoom` rotation with a real lifecycle; Tile View overlay layout pass), building blocks (`FrameManagementView`, `Bauchbinde`, `EditorRoom.draw`), interfaces (room `entered()`/exit; `Bauchbinde:draw` signature), quality attributes (usability, robustness of the room transition, thumbnail perf). **Not affected**: data model / storage / codec (frame order+count persist via v1.1 unchanged), context boundary (no new external interface), deployment (no build/packaging change).
 
 **ADRs**:
-- **ADR-047 — Frame-Verwaltung als persistenter Room**: enter B+Kurbel rückwärts / leave B+Kurbel vorwärts; B-release exit removed (retires the c2cbb6f dead-end fix); exit **armed** only after one B-release since `entered()`; reorder = sequential adjacent `swapFrames` (keeps Spec 011's `swapped` reindex payload valid); thumbnail grid via `playdate.ui.gridview`; controls mirror `SelectionRoom` — A is a mark/unmark toggle, **delete + duplicate are system-menu items** reusing `SelectionRoom`'s confirm-dialog pattern *(Ninth Round — overturns the earlier "no room-local system menu")*; shake stays inactive (Spec 011 FR-010).
-- **ADR-048 — Konsolidierte Tile-View-Overlay-Leiste**: one region on the cursor-opposite edge for frame/layer label + tile-picker filmstrip + "Tile N picked" toast + status; picker no longer screen-centred; `Bauchbinde` gains a vertical anchor; `UndoPrompt` (Spec 011) stays a separate layer with coordinated placement; anchor logic is a pure function gated by SC-008.
+- **ADR-048 — Frame-Verwaltung als persistenter Room**: enter B+Kurbel rückwärts / leave B+Kurbel vorwärts; B-release exit removed (retires the c2cbb6f dead-end fix); exit **armed** only after one B-release since `entered()`; reorder = sequential adjacent `swapFrames` (keeps Spec 011's `swapped` reindex payload valid); thumbnail grid via `playdate.ui.gridview`; controls mirror `SelectionRoom` — A is a mark/unmark toggle, **delete + duplicate are system-menu items** reusing `SelectionRoom`'s confirm-dialog pattern *(Ninth Round — overturns the earlier "no room-local system menu")*; shake stays inactive (Spec 011 FR-010).
+- **ADR-049 — Konsolidierte Tile-View-Overlay-Leiste**: one region on the cursor-opposite edge for frame/layer label + tile-picker filmstrip + "Tile N picked" toast + status; picker no longer screen-centred; `Bauchbinde` gains a vertical anchor; `UndoPrompt` (Spec 011) stays a separate layer with coordinated placement; anchor logic is a pure function gated by SC-008.
 
 **Risk & technical-debt review**:
 
@@ -322,25 +322,28 @@ tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 
 **Security-relevant architecture**: **N/A (confirmed).** Local UI/room restructuring only — no network, no secrets, no persistence change, no new attack surface. secure-architecture preset **not applied**. Re-evaluation trigger: if Frame Room or overlay state is ever persisted or configured externally.
 
-**Audit Evidence Applicability (Eighth Round, plan level)** — arc42 edits land in Phase C / `/speckit-tasks` + `/speckit-implement`; each checkpoint carries a status line:
+**Architektur-Review (T089, 2026-09-06 — nach der Implementierung):** Modulschnitt geprueft. `Source/FrameManagementView.lua` importiert weiterhin **nur** `CoreLibs/graphics`, `CoreLibs/ui`, `LayerModel` — **kein** `import "EditorRoom"`; alle `EditorRoom`-Vorkommen sind Kommentare, die Kopplung laeuft ausschliesslich ueber die per `init` durchgereichte `editorRoom`-Referenz (`onFramesReindexed`, `recordDeleteFrame`). Der Room liest im `update()` **genau eine** Crank-API (`playdate.getCrankTicks(4)`), nie `getCrankChange()` — CR-01/AD-047 gewahrt. `Bauchbinde:drawBottom(text, side, screenW, screenH)` hat die unveraenderte 4-Argument-Signatur (`SelectionRoom.lua:456` unberuehrt). Das Frame-Raster nutzt die SDK-Primitive `playdate.ui.gridview` (wie `SelectionRoom`/`PixelRoom`), kein Eigenbau. `ADR-048` war bereits von Spec 011 belegt → die neuen ADRs sind **ADR-049** (Frame-Room) und **ADR-049** (Overlay-Leiste), Kap. 9 §9.37/§9.37. **Keine Contract-Verletzung.**
+
+**Audit Evidence Applicability (Eighth Round, plan level)** — updated after `/speckit-implement` (2026-09-06):
 
 | Checkpoint | Status | Evidence / rationale / follow-up |
 |---|---|---|
-| arc42 Kap. 2 — Randbedingungen | **N/A** | No new platform capability or input primitive; gestures reuse the occupied B+Crank channel. Trigger: a new input primitive for room nav |
-| arc42 Kap. 3 — Kontextabgrenzung | **N/A** | No new external interface. Trigger: — |
-| arc42 Kap. 4 — Lösungsstrategie | **Open** | Owner: `/speckit-tasks`→`/speckit-implement`. 2 Leitentscheidungen (persistent room, consolidated overlay). Trigger: Phase C |
-| arc42 Kap. 5 — Bausteinsicht | **Open** | Owner: Phase C. `FrameManagementView` lifecycle + `gridview`; `Bauchbinde` anchor; `EditorRoom.draw` layout unit |
-| arc42 Kap. 6 — Laufzeitsicht | **Open** | Owner: Phase C. **Double**: (a) Spec-010 backfill (layer cycling, tile picker, frame mgmt — T052), (b) new room enter/reorder/delete/exit + overlay layout sequences |
-| arc42 Kap. 7 — Verteilungssicht | **N/A** | No build/packaging/deployment change (corrects the imprecise "6/7 open" note in `tasks.md` T052). Trigger: — |
-| arc42 Kap. 8 — Querschnittliche Konzepte | **Open** | Owner: Phase C. Consolidated-overlay concept + symmetric-B+Crank-with-arming gesture concept |
-| arc42 Kap. 9 — Architekturentscheidungen (+ `adr/`) | **Open** | Owner: Phase C. ADR-047, ADR-048 + §9.35/§9.36 short entries |
-| arc42 Kap. 10 — Qualitätsanforderungen | **Open** | Owner: Phase C. Usability (SC-008), Performance (thumbnail cache), Robustness (deterministic exit) |
-| arc42 Kap. 11 — Risiken & technische Schulden | **Open** | Owner: Phase C. R-32/R-33/R-34 |
-| Secure-Architecture-Preset (iSAQB) | **N/A (confirmed)** | Local UI/room only; no network/secrets/persistence/attack surface. Trigger: Frame Room / overlay state persisted or externally configured |
-| Constitution V — Gate 1 (headless) | **Open** | Owner: `/speckit-implement`. Rewrite the `FrameManagementView` headless section for the grid + room model; add the overlay-anchor section; keep the Spec 011 `deleteFrame`-undo section green. Trigger: first code change |
-| Constitution V — Gate 2 (`buildNumber` +1, `pdc`) | **Open** | Owner: `/speckit-implement`. Start `buildNumber` 37. Trigger: first Phase-A test build |
-| Manual Simulator / Hardware integration | **Open** | Owner: Merlin. quickstart Scenario 4 (rewritten) + 8 (overlay vs. cursor, all rows) + 9 (room enter/stay/reorder/delete/exit; crank-exit no false trigger; thumbnail-build FPS). Trigger: after Phase B |
-| `docs/architecture/` evidence path | **Done (convention)** | Satisfied via `arc42/` per Constitution III, as in earlier rounds |
+| arc42 Kap. 2 — Randbedingungen | **N/A** | No new platform capability or input primitive; gestures reuse the occupied B+Crank channel |
+| arc42 Kap. 3 — Kontextabgrenzung | **N/A** | No new external interface |
+| arc42 Kap. 4 — Lösungsstrategie | **Done (T081)** | `arc42/04` → „Spec 010 — 8./9. Runde" (2 Leitentscheidungen) |
+| arc42 Kap. 5 — Bausteinsicht | **Done (T082)** | `arc42/05` → FrameManagementView-/Bauchbinde-/EditorRoom-Zeilen aktualisiert |
+| arc42 Kap. 6 — Laufzeitsicht | **Done (T083)** | `arc42/06` §6.17 + §6.18; älterer Rückstand über §6.3/§6.14/§6.15 + T-08 (Kap. 11) abgedeckt |
+| arc42 Kap. 7 — Verteilungssicht | **Done (N/A dokumentiert, T084)** | `arc42/07` → „keine Änderung an dieser Sicht" |
+| arc42 Kap. 8 — Querschnittliche Konzepte | **Done (T085)** | `arc42/08` → Overlay-Konzept + Arming-Gesten-Konzept |
+| arc42 Kap. 9 — Architekturentscheidungen (+ `adr/`) | **Done (T086/T087)** | §9.36 AD-048 + `ADR-048-Frame-Verwaltung-persistenter-Room.md`; §9.37 AD-049 + `ADR-049-Konsolidierte-Overlay-Leiste.md` (ADR-047 war Spec 011) |
+| arc42 Kap. 10 — Qualitätsanforderungen | **Done (T088)** | `arc42/10` → QS-24/QS-25/QS-26 |
+| arc42 Kap. 11 — Risiken & technische Schulden | **Done (T089)** | `arc42/11` §11.8 → R-32/R-33/R-34 + T-08 |
+| Secure-Architecture-Preset (iSAQB) | **N/A (confirmed, T095)** | Local UI/room only; no network/secrets/persistence/attack surface |
+| Architektur-Review | **Done (T089/T090)** | Notiz oben („Architektur-Review (T089 …)"): kein `import "EditorRoom"`, eine Crank-API, `drawBottom`-Signatur, `gridview` = SDK |
+| Constitution V — Gate 1 (headless) | **Done (T091)** | „ALLE TESTS BESTANDEN", 577 OK; neue Sektionen + V9/V23b/F4/V21 umgestellt |
+| Constitution V — Gate 2 (`buildNumber` +1, `pdc`) | **Done (T092)** | `buildNumber` 37→38→39→40; `pdc` exit 0 je Phase |
+| Manual Simulator / Hardware integration | **Open** | Owner: Merlin (T093/T094). quickstart Scenario 4 + 8; Gerät: `thumbCache`-FPS (R-33), kein Fehl-Exit (R-32), SC-008 visuell. Endwerte in ADR-048/ADR-049 |
+| `docs/architecture/` evidence path | **Done (convention)** | Satisfied via `arc42/` per Constitution III |
 
 ### Spec refinements surfaced during planning — RESOLVED (Ninth Round, `/speckit-clarify` 2026-09-06)
 
@@ -363,11 +366,11 @@ arc42/05-bausteinsicht.md              # MOD: FrameManagementView lifecycle + gr
 arc42/06-laufzeitsicht.md              # MOD: Spec-010 backfill + Eighth-Round sequences
 arc42/07-verteilungssicht.md           # MOD: one line — Eighth Round = N/A (no deployment change)
 arc42/08-querschnittliche-konzepte.md  # MOD: overlay + gesture concepts
-arc42/09-architekturentscheidungen.md  # MOD: §9.35 ADR-047, §9.36 ADR-048
+arc42/09-architekturentscheidungen.md  # MOD: §9.36 ADR-048, §9.37 ADR-049
 arc42/10-qualitaetsanforderungen.md    # MOD: SC-008 + thumbnail perf + deterministic exit
 arc42/11-risiken-und-technische-schulden.md  # MOD: R-32, R-33, R-34
-arc42/adr/ADR-047-Frame-Verwaltung-persistenter-Room.md   # NEW
-arc42/adr/ADR-048-Konsolidierte-Overlay-Leiste.md         # NEW
+arc42/adr/ADR-048-Frame-Verwaltung-persistenter-Room.md   # NEW
+arc42/adr/ADR-049-Konsolidierte-Overlay-Leiste.md         # NEW
 ```
 
 ### Next Steps (Eighth Round)

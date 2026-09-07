@@ -85,3 +85,28 @@ Anmerkung: Die im Meeting offene Frage zur Zielaufloesung ist geklaert — die P
 - **Umgesetzt:** R-14, R-15, R-16, R-18
 - **Offen (kann später):** R-17, T-04, T-05, T-06, T-07
 - **Akzeptiert:** 4-stellige PIN ist für den Anwendungsfall ausreichend (10.000 Kombinationen + Rate-Limiting); R-19 (Multi-Geräte-/Sybil-Umgehung, bewusst außerhalb des Scopes von Spec 007); R-20 (Row-Lock-Dauer bei paralleler Nutzung derselben UID, unkritisch bei erwarteter Nutzungsfrequenz); R-26 (SDK-Namenskonvention-Drift, Spec 009 — Beobachtungspunkt bei künftigen SDK-Updates)
+
+## 11.8 Spec 010 8./9. Runde — Frame-Room & Overlay-Konsolidierung
+
+- **R-32 Crank-Rueckstau beim Room-Verlassen.** Eintritt (B + Kurbel
+  rueckwaerts) und Verlassen (B + Kurbel vorwaerts) liegen auf derselben
+  Achse; der Kurbel-Nachlauf der Eintrittsgeste koennte sofort als „vorwaerts"
+  gewertet werden (dieselbe Fehlerklasse wie `c2cbb6f` auf der Gegenachse).
+  *Gegenmassnahme:* Arming-Boolean `bReleasedSinceEnter` (Verlassen erst nach
+  einem B-Release scharf); `crankAccu`-Reset bei nicht gehaltenem B; nur
+  `getCrankTicks(4)` im Room (CR-01). Headless verifiziert; Geraete-Check
+  T094. **Mitigiert im Design.**
+- **R-33 Thumbnail-Render-Kosten.** `FrameManagementView:entered()` baut bis
+  zu 12 Frame-Thumbnails (Tilemap-Render je Frame). *Gegenmassnahme:*
+  einmaliger Aufbau beim Betreten, Reorder tauscht nur zwei Cache-Eintraege,
+  Delete/Duplicate ohne Voll-Rebuild; Geraete-Grobmessung (T094), bei
+  Ueberschreitung Fallback auf lazy per-Cell-Rendering. **Offen (Geraet).**
+- **R-34 Overlay-Layout-Fehler verdeckt Inhalt.** Die konsolidierte Leiste
+  muss dem Cursor ausweichen **und** in sich kollisionsfrei bleiben.
+  *Gegenmassnahme:* reine Anker-/Region-Funktionen, SC-008-Headless-Gate ueber
+  alle Cursorzeilen + Picker-sichtbar-Fall; Undo-Dialog auf eigener Schicht.
+  **Mitigiert im Design.**
+- **T-08 (aufgeloest) Spec-010-Laufzeitsicht-Rueckstand.** `arc42/06` fuehrte
+  seit Spec 010 keine Sequenzen fuer Ebenen-Cyclen / Tile-Picker /
+  Frame-Verwaltung. Mit §6.17/§6.18 nachgezogen (die aelteren Punkte sind
+  ueber §6.3/§6.14/§6.15 abgedeckt; Frame-Room + Overlay jetzt explizit).

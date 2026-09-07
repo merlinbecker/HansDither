@@ -333,12 +333,12 @@ pdc Source "Hans Dither.pdx"
 | Shift wraps around the tile grid edge | Leftover wrap logic (the removed whole-layer shift wrapped; per-tile does not) | At the grid edge `neighborIdx` is `nil` → only the source tile changes, crossing strip discarded (ADR-043) |
 | Old images don't load | Structure-based v1.0 detection failed | Check `newLoadOperation`'s `frames[1].layers` test + pad-to-3 |
 | buildNumber not incremented | Manual step forgotten | Increment once per `pdc` run |
-| Frame Room closes the instant you enter it | Exit not armed — forward crank residual from the entry gesture triggers exit | `bReleasedSinceEnter` must gate the B+Crank-forward exit; reset it false in `entered()` (R-32 / ADR-047) |
+| Frame Room closes the instant you enter it | Exit not armed — forward crank residual from the entry gesture triggers exit | `bReleasedSinceEnter` must gate the B+Crank-forward exit; reset it false in `entered()` (R-32 / ADR-048) |
 | Frame Room won't close | `getCrankTicks(4)` not read in `update()`, or `bReleasedSinceEnter` never set | Read crank once per `update()`; set `bReleasedSinceEnter=true` on any frame B is not pressed |
 | Multi-row reorder scrambles the intervening frames | Single `swapFrames(from, from±3)` instead of sequential adjacent swaps | Up/Down = up to `numColumns` adjacent `swapFrames` steps, each with its own `onFramesReindexed({swapped})` (Spec-011-safe) |
 | Undo after a reorder points at the wrong frame | `onFramesReindexed` not called per swap, or called with a non-adjacent pair | One `{swapped={i,i±1}}` call per adjacent step; never a multi-slot payload |
 | Frame Room feels laggy on entry | 12 thumbnails rebuilt every `draw()` | Build `thumbCache` once in `entered()`; swap the two touched entries alongside `swapFrames`; `table.remove` on delete (R11 / R-33) |
-| Tile picker still draws over the artwork | `drawTilePickerOverlay` still uses `py=(240-panelH)//2` | Make `py` `vAnchor`-relative; the picker renders inside the consolidated bar (FR-028 / ADR-048) |
+| Tile picker still draws over the artwork | `drawTilePickerOverlay` still uses `py=(240-panelH)//2` | Make `py` `vAnchor`-relative; the picker renders inside the consolidated bar (FR-028 / ADR-049) |
 | Label and status text overlap bottom-left | Two `bauchbinde:drawBottom` calls at fixed sides | Compose one content block; `statusMessage` is a second line in the same band |
 | "delete frame" / "duplicate frame" menu items missing in the Frame Room | `entered()` still calls only `removeAllMenuItems()` without re-adding | Register both after `removeAllMenuItems()`, like `SelectionRoom:buildSystemMenu` (Ninth Round) |
 | A-press in the Frame Room deletes instead of toggling the mark | `pressA()` still has the old "second A deletes" / `movedSinceMark` branch | `pressA()` is a plain `marked = (marked == cursor) and nil or cursor` toggle; delete lives on the menu callback |

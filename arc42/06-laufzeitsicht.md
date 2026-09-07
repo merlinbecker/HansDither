@@ -594,3 +594,57 @@ beim Frame löschen: aus `FrameManagementView.deleteMarked()`).
 der zurückgenommenen Operation (FR-002); das Ergebnis ist im Tile View
 sichtbar (FR-016). Der Verlauf hält weiterhin bis zu 2 ältere Einträge;
 nach Bildwechsel / Editor-Verlassen ist er leer (SC-008).
+
+## 6.17 Szenario: Frame-Room betreten, umsortieren, loeschen/duplizieren, verlassen (Spec 010, 8./9. Runde, AD-048)
+
+1. **Tile View**, `EditorRoom:handleCrank()` erkennt B gehalten + Kurbel
+   rueckwaerts (`zoomTickAccu <= -ZOOM_TICK_THRESHOLD`) → `openFrameManagementView()`
+   setzt `imageData` + aktiven Frame und `switchRoom(frameManagementView)`.
+2. `FrameManagementView:entered()`: `bReleasedSinceEnter = false`, `crankAccu = 0`,
+   baut `thumbCache[1..n]` (je Frame `imageData.frames[f]` durch ein
+   `playdate.graphics.tilemap` in ein Bild), baut das `gridview` (3 Spalten),
+   registriert die System-Menuepunkte „delete frame" + „duplicate frame".
+3. **Navigieren**: D-Pad bewegt den Raster-Cursor (`moveCursor`, hoch/runter
+   = ±3, an den Sequenzenden geklemmt); eine Bewegung hebt eine Markierung auf.
+4. **Markieren**: A setzt `marked = cursor` bzw. hebt sie auf (Umschalter).
+5. **Umsortieren**: D-Pad bei gesetztem `marked` → `moveMarked`: Links/Rechts
+   = ein `swapFrames` + ein `onFramesReindexed({swapped})`; Hoch/Runter =
+   bis zu NUM_COLS solche Nachbar-Swaps hintereinander. `frameLayers`,
+   `frames` und `thumbCache` bleiben im Gleichschritt; `marked` und `cursor`
+   wandern mit.
+6. **Loeschen**: System-Menue „delete frame" → `onMenuDelete()` (No-op bei
+   1 Frame) setzt `confirmingDelete`; der Dialog schluckt alle Eingaben ausser
+   A (`confirmDelete`) und B (`cancelDelete`). `confirmDelete`: tiefe Kopie
+   des Cursor-Frames, `table.remove` aus beiden Arrays + `thumbCache`,
+   `onFramesReindexed({removed})`, dann `EditorRoom:recordDeleteFrame` (Spec 011).
+7. **Duplizieren**: System-Menue „duplicate frame" (No-op bei 12 Frames) →
+   tiefe Kopie an `cursor+1` in beiden Arrays + `thumbCache`,
+   `onFramesReindexed({inserted})`, `cursor = cursor+1`.
+8. **Verlassen**: `FrameManagementView:update()` liest `getCrankTicks(4)` →
+   `crankAccu`; bei B nicht gedrueckt → `bReleasedSinceEnter = true`, `crankAccu = 0`;
+   bei B gedrueckt **und** `bReleasedSinceEnter` **und** `crankAccu >= EXIT_TICK_THRESHOLD`
+   → `returnToEditor()` (`imageData.returnFrame = cursor`, `switchRoom(editorRoom)`).
+9. `EditorRoom:entered()` liest `returnFrame`, klemmt `currentFrame`/`activeLayer`
+   in die evtl. kuerzere/umgeordnete Sequenz, baut das eigene System-Menue neu.
+
+**Ergebnis:** Frame-Reihenfolge/-Anzahl geaendert; die Spec-011-`UndoHistory`
+folgt jeder Struktur-Aenderung ueber `{swapped}` / `{removed}` / `{inserted}`.
+Persistenz unveraendert (v1.1).
+
+## 6.18 Szenario: Konsolidierte Overlay-Leiste im Tile View (Spec 010, 8. Runde, AD-049)
+
+1. `EditorRoom:draw()` bestimmt `side` aus `cursor.x` (Spec 006 FR-003) und
+   `vAnchor = overlayAnchor(cursor.y, GRID_ROWS)` (obere Cursor-Haelfte →
+   Leiste unten, sonst oben; Gleichstand → unten).
+2. Ist der Tile-Picker sichtbar, zeichnet `drawTilePickerOverlay(vAnchor)` den
+   Filmstreifen in der abgewandten Zone (nicht mehr bildschirmmittig); das
+   Frame/Ebenen-Label pausiert solange.
+3. Sonst komponiert `draw()` **eine** Zeilenliste (Label bzw. „Tile N picked",
+   plus Statustext als zweite Bandzeile) und uebergibt sie an
+   `Bauchbinde:draw(lines, side, vAnchor, 400, 240)`. Ist zugleich der Picker
+   sichtbar, weicht die Statuszeile auf den gegenueberliegenden Anker aus.
+4. `overlay:draw()` und `UndoPrompt.draw()` (Spec 011, eigene modale Schicht)
+   folgen zuletzt.
+
+**Ergebnis (SC-008):** In keiner Cursorposition verdeckt ein passives
+Overlay-Element die Cursor-Zelle; keine zwei Elemente ueberzeichnen sich.

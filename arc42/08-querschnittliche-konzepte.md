@@ -239,3 +239,39 @@ Nutzen: klare Trennung zur Device-Runtime; dokumentierter Ausgangspunkt fuer ein
 - **Logging:** Alle Fehler werden in Log-Dateien protokolliert (`/logs/`)
 
 **Nutzen:** Konsistente Fehlerbehandlung, einfache Debugging-Möglichkeit für Entwickler.
+
+## Konsolidierte Tile-View-Overlay-Leiste (Spec 010, 8. Runde, AD-049)
+
+Die Tile View haelt mehrere passive Hinweis-Overlays: Frame/Ebenen-Label
+(FR-015), Tile-Picker-Filmstreifen (FR-025), „Tile N picked"-Toast (FR-027),
+Statustexte. **Konzept:** Sie teilen sich EINE Leiste in der dem Tile-Cursor
+abgewandten Bildschirmzone.
+
+- Horizontale Haelfte weiter nach `cursor.x` (Spec 006 FR-003), vertikaler
+  Rand nach `cursor.y`: `overlayAnchor(cursorY, GRID_ROWS)` → `"bottom"` fuer
+  die obere Cursor-Haelfte, sonst `"top"` (Gleichstand → `"bottom"`).
+- `Bauchbinde:draw(lines, side, vAnchor, w, h)` zeichnet mehrzeilig; Label
+  und Statustext stehen als zwei Bandzeilen in derselben Box (kein separater
+  fixer „left"-Statusbalken mehr).
+- Der Tile-Picker-Filmstreifen liegt bei Sichtbarkeit in derselben Zone; die
+  Statuszeile weicht dann auf den gegenueberliegenden Anker aus, damit sich
+  nichts ueberzeichnet (SC-008).
+- Der modale Undo-Dialog (Spec 011, `UndoPrompt`) bleibt eine **eigene,
+  darueberliegende Schicht** — Spec 011 FR-013 verlangt volle Modalitaet; er
+  wird nicht in die passive Leiste gefaltet, nur seine Platzierung ist
+  koordiniert.
+- Die Anker-/Region-Logik sind reine Funktionen (`overlayAnchor`,
+  `overlayRegionRect`, `cursorCellRect`) und werden gegen SC-008 headless
+  geprueft (Leiste schneidet fuer jede Cursorzeile die Cursor-Zelle nie).
+
+## Symmetrische B+Kurbel-Room-Gesten mit Arming (Spec 010, 9. Runde, AD-048)
+
+Der Frame-Room wird mit **B + Kurbel rueckwaerts** betreten und mit **B +
+Kurbel vorwaerts** verlassen. Weil die Eintrittsgeste die Kurbel noch in
+Bewegung haelt, wenn der Room schon offen ist, wird die Verlassen-Geste
+**erst scharf, nachdem B seit `entered()` einmal losgelassen wurde**
+(`bReleasedSinceEnter`). Der Room liest pro `update()` **nur** `getCrankTicks(4)`
+(nie `getCrankChange()` — CR-01/AD-047) in einen `crankAccu`, der bei nicht
+gehaltenem B auf 0 zurueckgesetzt wird. Das gleiche Muster (Arming-Boolean
+statt Vorzeichen-Heuristik) ist die Vorlage fuer kuenftige symmetrische
+Kurbel-Gesten.

@@ -51,3 +51,11 @@ kontaktiert wird.
 - **Backend bewusst schlank:** kein Framework, PNG/GIF on-demand statt bei jedem Upload, Rate-Limiting und feste Groessenlimits (Spec 007) fuer den Shared-Hosting-Betrieb.
 - **Secrets-Trennung:** Deployment-Zugangsdaten liegen nur in der nicht versionierten `backend/.deploy.env`; das Repo enthaelt nur das `*.example`.
 - Hardwaregrenzen des Clients (CPU/RAM) erzwingen einfache Datenstrukturen und gezielte Redraw-Strategien.
+
+## Spec 010 8./9. Runde — keine Aenderung an dieser Sicht
+
+Die Frame-Room-/Overlay-Konsolidierung (AD-048/AD-049) ist eine reine
+Client-UI-/Room-Umstrukturierung: keine Aenderung an Build (`pdc`),
+Paketierung (`Hans Dither.pdx`), Backend oder Deployment. **N/A.**
+Re-Evaluations-Trigger: falls Frame-Room- oder Overlay-Zustand je persistiert
+oder extern konfiguriert wuerde.

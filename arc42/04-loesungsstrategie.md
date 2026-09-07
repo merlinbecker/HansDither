@@ -136,3 +136,30 @@ Der Editor erhaelt ein bewusst eng begrenztes Undo. Leitentscheidungen
    (AD-046).
 
 Spezifikation: `specs/011-shake-to-undo/`.
+
+## Spec 010 — 8./9. Runde: Frame-Room & Overlay-Konsolidierung (aus dem Hardware-Test)
+
+Zwei Leitentscheidungen (Details: AD-048, AD-049):
+
+1. **Frame-Verwaltung als dauerhafter Room.** Der „B halten"-Modal-View wird
+   ein regulaerer Room im `switchRoom`-Rotationsschema. Eintritt unveraendert
+   (B + Kurbel rueckwaerts aus dem Tile View), **Verlassen mit B + Kurbel
+   vorwaerts** — ausgewertet erst, nachdem B seit `entered()` einmal
+   losgelassen wurde (`bReleasedSinceEnter`). Das ersetzt die fragile
+   B-Loslassen-Erkennung (Commit `c2cbb6f`) durch eine symmetrische Geste mit
+   Arming-Bedingung. Frames als `playdate.ui.gridview`-Thumbnail-Raster wie im
+   `SelectionRoom`; A ist ein Markieren/Aufheben-Umschalter, Loeschen +
+   Duplizieren liegen im System-Menue (A/B-Bestaetigungsdialog fuer „delete
+   frame", wiederverwendet aus `SelectionRoom.confirmingDelete`).
+
+2. **Eine konsolidierte Overlay-Leiste im Tile View.** Frame/Ebenen-Label
+   (FR-015), Tile-Picker-Filmstreifen (FR-025), „Tile N picked"-Toast (FR-027)
+   und Statusmeldungen teilen sich EINE `Bauchbinde:draw`-Leiste auf der dem
+   Tile-Cursor abgewandten Bildschirmzone (`overlayAnchor(cursor.y,
+   GRID_ROWS)` → oben/unten). Die Anker-Logik sind reine Funktionen
+   (`overlayAnchor`/`overlayRegionRect`/`cursorCellRect`), gegen SC-008
+   headless geprueft. Der Undo-Dialog (Spec 011) bleibt eine eigene,
+   koordinierte Schicht (Spec 011 FR-013 verlangt volle Modalitaet).
+
+Spezifikation: `specs/010-layer-management-with-transparency/` (Clarifications
+8./9. Runde; `spec.md` FR-018..FR-022, FR-028, SC-004, SC-008).

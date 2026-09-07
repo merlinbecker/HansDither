@@ -157,3 +157,33 @@
 - Stimulus: Verlauf voll (`MAX = 3`), ein `deleteFrame`-Eintrag = tiefe Kopie (3 Ebenen × 375 ints + 375er-Cache).
 - Reaktion: Voll-Snapshot je betroffener Zelle als int + Bild-**Referenz** (Bilder werden nicht kopiert); FIFO verdraengt den vierten Eintrag (AD-045).
 - Metrik: Gesamt-RAM der `UndoHistory` < ~100 KB Lua-Heap. Grobabschaetzung am Geraet dokumentieren (T042). Headless: FIFO + `isEmpty` nach 3× `undoLast` verifiziert (V1/V2).
+
+### QS-24 Usability: Overlay-Leiste verdeckt nie die Cursor-Zelle (Spec 010, 8. Runde, FR-028)
+- Kontext: Tile View, mehrere passive Overlays (Label, Tile-Picker, Toast, Status).
+- Stimulus: Cursor an beliebiger Rasterposition (25×15); Picker sichtbar oder nicht.
+- Reaktion: EINE konsolidierte Leiste auf der cursorabgewandten Zone
+  (`overlayAnchor` nach `cursor.y`); Picker-Filmstreifen in derselben Zone,
+  Status weicht bei sichtbarem Picker auf den Gegen-Anker aus (AD-049).
+- Metrik (SC-008): fuer jede Cursorzeile 1..15 schneidet
+  `overlayRegionRect(overlayAnchor(y,15), h, 240)` die `cursorCellRect(cx,y)`
+  **nie**; Label/Filmstreifen/Status ueberzeichnen sich **nie**. Headless
+  verifiziert (reine Anker-Funktionen). Sicht-Check im Simulator: quickstart
+  Szenario 8.
+
+### QS-25 Performance: Frame-Room-Thumbnails beim Betreten (Spec 010, 8. Runde, R-33)
+- Kontext: Frame-Room mit bis zu 12 Frames.
+- Stimulus: `FrameManagementView:entered()` baut `thumbCache[1..n]` (je Frame
+  ein Tilemap-Render in ein Bild).
+- Reaktion: einmaliger Aufbau beim Betreten; Reorder tauscht nur zwei
+  `thumbCache`-Eintraege (0 Re-Render), Delete/Duplicate `table.remove`/`insert`.
+- Metrik: `entered()`-Aufbau < 1 Frame auf dem Geraet. **Offen** — Grobmessung
+  am Geraet (T094); bei Ueberschreitung Fallback auf lazy per-Cell-Rendering.
+
+### QS-26 Robustheit: deterministisches Verlassen des Frame-Rooms (Spec 010, 9. Runde, R-32)
+- Kontext: Frame-Room, Eintritt per B + Kurbel rueckwaerts (Kurbel laeuft nach).
+- Stimulus: Kurbel-Nachlauf/-Zittern nach vorne, waehrend B noch gehalten ist.
+- Reaktion: die Verlassen-Geste (B + Kurbel vorwaerts) ist erst scharf, nachdem
+  B seit `entered()` einmal losgelassen wurde (`bReleasedSinceEnter`); eine
+  Kurbel-API im Room (`getCrankTicks(4)`, CR-01).
+- Metrik: kein Fehl-Ruecksprung beim Betreten. Headless: Tick+B-Sequenzen.
+  Geraet: T094.
