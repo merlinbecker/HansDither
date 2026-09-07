@@ -83,8 +83,12 @@ end
 
 -- Spec 011 (Review F4): Frame-Umnummerierung durch die FrameManagementView
 -- nachziehen, damit ein spaeteres Undo nicht in den falschen Frame schreibt.
---   op.swapped = {a, b} : Frame a und b haben die Plaetze getauscht
---   op.removed = idx    : Frame idx wurde entfernt, hoehere ruecken auf
+--   op.swapped  = {a, b} : Frame a und b haben die Plaetze getauscht
+--   op.removed  = idx    : Frame idx wurde entfernt, hoehere ruecken auf
+--   op.inserted = idx    : ein Frame wurde an Position idx eingefuegt (Spec 010
+--                          Ninth Round, "duplicate frame") — Frames >= idx
+--                          ruecken um eins nach oben. Spiegel von `removed`;
+--                          nichts wird verworfen.
 -- content-Eintraege folgen ihrem frameIndex bzw. werden verworfen, wenn ihr
 -- Ziel-Frame geloescht wurde. deleteFrame-Eintraege tragen den Wiederher-
 -- stellungs-Slot (index); der rutscht mit, wird aber nie verworfen (FR-007).
@@ -114,6 +118,13 @@ function UndoHistory:remapFrames(op)
                 end
                 -- e.index == r bleibt: nach dem Entfernen ist genau dieser Slot
                 -- die richtige Einfuegestelle fuer das Undo.
+            end
+        elseif op.inserted then
+            local s = op.inserted
+            local key = (e.kind == "content" and "frameIndex")
+                or (e.kind == "deleteFrame" and "index") or nil
+            if key and e[key] and e[key] >= s then
+                e[key] = e[key] + 1
             end
         end
     end

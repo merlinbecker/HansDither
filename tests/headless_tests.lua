@@ -2750,7 +2750,7 @@ local function makeMultiFrameImageData(n)
              frameLayers = fl, frames = fr, activeLayer = 1, hashIndex = {} }
 end
 
-section("FrameManagementView: Navigation, Markieren, Verschieben, Loeschen (Spec 010, US4)")
+section("FrameManagementView (Room): Navigation, A-Toggle, Verschieben, Menue-Loeschen/-Duplizieren (Spec 010, US4, 8./9. Runde)")
 local fmvSwitchedTo = nil
 local edStub = {}
 FrameManagementView:init(function(r) fmvSwitchedTo = r end, edStub)
@@ -2759,6 +2759,11 @@ local fdata = makeMultiFrameImageData(4)
 FrameManagementView:setImageData(fdata, 3)
 local fh = FrameManagementView:inputHandler()
 for b in pairs(heldButtons) do heldButtons[b] = nil end
+crankTicksValue = 0
+FrameManagementView:entered()                      -- baut Grid + Thumbnails, registriert das Menue
+
+check(mockMenuItemLabels[1] == "delete frame" and mockMenuItemLabels[2] == "duplicate frame",
+    "entered() registriert 'delete frame' + 'duplicate frame' im System-Menue")
 
 -- Frame 3 markieren, nach links schieben -> Reihenfolge 1,3,2,4
 fh.AButtonDown()                                   -- markiert Cursor (Frame 3)
@@ -2771,43 +2776,121 @@ check(fdata.frameLayers[1].layers[1].positions[1] == 13, "Links nochmal: jetzt a
 fh.leftButtonDown()
 check(fdata.frameLayers[1].layers[1].positions[1] == 13, "Links am Anfang: No-op (geklemmt)")
 
--- Cursor bewegen hebt die Markierung auf
-fh.downButtonDown()
-fh.AButtonDown()                                   -- markiert erneut (jetzt Position 2)
--- Loeschen per zweitem A auf dem markierten Frame
-fh.AButtonDown()
-check(#fdata.frameLayers == 3 and #fdata.frames == 3, "zweiter A-Druck loescht den markierten Frame (4 -> 3)")
+-- A ist ein reiner Umschalter: A auf dem markierten Frame hebt die Markierung
+-- auf und LOESCHT NICHT (Ninth Round).
+fh.AButtonDown()                                   -- Markierung weg (Frame steht auf Position 1)
+check(#fdata.frameLayers == 4, "A auf markiertem Frame loescht NICHT (Toggle)")
+fh.leftButtonDown()                               -- ohne Markierung: nur Cursor -> No-op am Anfang
+check(#fdata.frameLayers == 4 and fdata.frameLayers[1].layers[1].positions[1] == 13,
+    "ohne Markierung bewegt das D-Pad nur den Cursor, verschiebt keinen Frame")
 
--- Bis auf 1 Frame loeschen -> letzter Loeschversuch abgelehnt
-fh.AButtonDown(); fh.AButtonDown()                 -- markieren + loeschen (3 -> 2)
-fh.AButtonDown(); fh.AButtonDown()                 -- markieren + loeschen (2 -> 1)
+-- Loeschen laeuft ueber das System-Menue + A/B-Bestaetigungsdialog.
+-- Cursor auf Position 1; "delete frame" -> Dialog -> A bestaetigt.
+mockMenuItemCallbacks["delete frame"]()
+fh.AButtonDown()                                   -- (A) delete im Dialog
+check(#fdata.frameLayers == 3 and #fdata.frames == 3, "'delete frame' + (A) loescht den Cursor-Frame (4 -> 3)")
+
+-- (B) cancel bricht den Dialog folgenlos ab
+mockMenuItemCallbacks["delete frame"]()
+fh.BButtonDown()                                   -- (B) cancel
+check(#fdata.frameLayers == 3, "(B) im Loeschdialog aendert nichts")
+
+-- Bis auf 1 Frame loeschen; danach ist 'delete frame' folgenlos (kein Dialog)
+mockMenuItemCallbacks["delete frame"](); fh.AButtonDown()   -- 3 -> 2
+mockMenuItemCallbacks["delete frame"](); fh.AButtonDown()   -- 2 -> 1
 check(#fdata.frameLayers == 1, "auf 1 Frame heruntergeloescht")
-fh.AButtonDown(); fh.AButtonDown()                 -- markieren + Loeschversuch
-check(#fdata.frameLayers == 1, "letzter Frame kann NICHT geloescht werden (FR-020)")
+mockMenuItemCallbacks["delete frame"]()
+check(#fdata.frameLayers == 1, "'delete frame' bei 1 Frame ist ein No-op (FR-020)")
+fh.AButtonDown()                                   -- kein offener Dialog -> nur A-Toggle
+check(#fdata.frameLayers == 1, "...und kein Dialog wurde geoeffnet")
 
--- B loslassen -> zurueck zum EditorRoom, returnFrame gesetzt
-FrameManagementView:setImageData(makeMultiFrameImageData(3), 2)
-heldButtons[playdate.kButtonB] = true
-FrameManagementView:entered()                      -- bWasHeld = true (Eintritts-Geste)
-heldButtons[playdate.kButtonB] = false
-fmvSwitchedTo = nil
-FrameManagementView:update()                       -- erkennt B-Release
-check(fmvSwitchedTo == edStub, "B loslassen -> switchRoom(editorRoom)")
+-- 'duplicate frame' fuegt eine tiefe Kopie direkt hinter dem Cursor ein
+mockMenuItemCallbacks["duplicate frame"]()
+check(#fdata.frameLayers == 2 and #fdata.frames == 2, "'duplicate frame' fuegt einen Frame ein (1 -> 2)")
 
--- KEINE Sackgasse: kommt die letzte Kurbel-Tick der Eintrittsgeste erst NACH
--- dem B-Release an, ist bWasHeld beim entered() bereits false. Ein erneuter
--- B-Tipp muss trotzdem sauber herausfuehren.
+-- Verlassen: B + Kurbel VORWAERTS, scharf erst nach einem B-Release
 FrameManagementView:setImageData(makeMultiFrameImageData(3), 2)
-heldButtons[playdate.kButtonB] = false
-FrameManagementView:entered()                      -- bWasHeld = false (B schon los)
-fmvSwitchedTo = nil
-FrameManagementView:update()                       -- kein Release-Wechsel -> bleibt
-check(fmvSwitchedTo == nil, "B war beim Eintritt schon los -> kein sofortiger Ruecksprung")
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+crankTicksValue = 0
 heldButtons[playdate.kButtonB] = true
-FrameManagementView:update()                       -- B erneut gedrueckt -> Ausgang scharf
+FrameManagementView:entered()                      -- bReleasedSinceEnter = false
+fmvSwitchedTo = nil
+crankTicksValue = 4                                -- Kurbel-Nachlauf der Eintrittsgeste, B noch gehalten
+FrameManagementView:update()
+check(fmvSwitchedTo == nil, "B noch nie losgelassen -> Kurbel-Nachlauf fuehrt NICHT heraus (FR-022 Arming)")
+crankTicksValue = 0
 heldButtons[playdate.kButtonB] = false
-FrameManagementView:update()                       -- jetzt losgelassen -> zurueck
-check(fmvSwitchedTo == edStub, "erneuter B-Tipp fuehrt trotzdem heraus (keine Sackgasse)")
+FrameManagementView:update()                       -- B einmal losgelassen -> armiert
+check(fmvSwitchedTo == nil, "B loslassen allein fuehrt nicht heraus")
+heldButtons[playdate.kButtonB] = true
+crankTicksValue = 4
+FrameManagementView:update()                       -- jetzt: B gehalten + Kurbel vorwaerts, armiert
+check(fmvSwitchedTo == edStub, "B + Kurbel vorwaerts nach einem B-Release -> switchRoom(editorRoom)")
+crankTicksValue = 0
+for b in pairs(heldButtons) do heldButtons[b] = nil end
+
+section("FrameManagementView (Room): Raster-Navigation, Hoch/Runter-Umordnung, thumbCache-Invariante (Spec 010, US4)")
+do
+    local g = makeMultiFrameImageData(7)   -- 3 Spalten -> Zeilen [1,2,3][4,5,6][7]
+    FrameManagementView:init(function() end, edStub)
+    FrameManagementView:setImageData(g, 1)
+    local gh = FrameManagementView:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    crankTicksValue = 0
+    FrameManagementView:entered()
+    check(#g.frames == 7, "Vorbedingung: 7 Frames")
+
+    -- Reine Cursor-Navigation (keine Markierung): links/rechts +-1 in der Zeile,
+    -- hoch/runter +- 3. Kein Frame bewegt sich.
+    local order0 = {}
+    for i = 1, 7 do order0[i] = g.frameLayers[i].layers[1].positions[1] end
+    gh.rightButtonDown()                  -- Cursor 1 -> 2
+    gh.downButtonDown()                   -- Cursor 2 -> 5
+    gh.rightButtonDown()                  -- Cursor 5 -> 6
+    gh.downButtonDown()                   -- Cursor 6 -> 9 ausserhalb -> No-op (bleibt 6)
+    local unchanged = true
+    for i = 1, 7 do
+        if g.frameLayers[i].layers[1].positions[1] ~= order0[i] then unchanged = false end
+    end
+    check(unchanged, "reine D-Pad-Navigation bewegt keinen Frame; hoch/runter = +-3, an den Rasterenden geklemmt")
+
+    -- Markieren + Runter: der markierte Frame wandert eine Rasterzeile = 3
+    -- Positionen als DREI sequenzielle Nachbar-Swaps.
+    FrameManagementView:setImageData(g, 1)
+    FrameManagementView:entered()
+    local reindexOps = {}
+    edStub.onFramesReindexed = function(_, op) reindexOps[#reindexOps + 1] = op end
+    gh.AButtonDown()                      -- markiert Frame an Position 1 (Inhalt 11)
+    gh.downButtonDown()                   -- Position 1 -> 4
+    check(g.frameLayers[4].layers[1].positions[1] == 11, "Runter: markierter Frame wandert von Position 1 auf 4")
+    check(#reindexOps == 3, "eine Rasterzeile runter = 3 onFramesReindexed({swapped})-Aufrufe")
+    check(reindexOps[1].swapped ~= nil and reindexOps[3].swapped ~= nil, "jeder Schritt meldet ein {swapped}-Paar (Spec-011-sicher)")
+    edStub.onFramesReindexed = nil
+
+    -- Nach mehreren Struktur-Aenderungen laeuft ein erneuter entered() (baut die
+    -- Thumbnails komplett neu) ohne "erfundene SDK-API" durch — Invariante
+    -- #thumbCache == frameCount haelt (sonst kaeme spaeter ein nil-Zugriff).
+    FrameManagementView:setImageData(makeMultiFrameImageData(3), 2)
+    FrameManagementView:entered()
+    mockMenuItemCallbacks["duplicate frame"]()   -- 3 -> 4
+    mockMenuItemCallbacks["delete frame"](); FrameManagementView:inputHandler().AButtonDown()  -- 4 -> 3
+    FrameManagementView:entered()
+    FrameManagementView:update()
+    check(true, "duplicate + delete + erneuter entered()/update() laufen ohne erfundene SDK-API durch")
+end
+
+section("FrameManagementView (Room): 'duplicate frame' respektiert die 12-Frame-Grenze (Spec 010, US4)")
+do
+    local big = makeMultiFrameImageData(12)
+    FrameManagementView:init(function() end, edStub)
+    FrameManagementView:setImageData(big, 6)
+    local bh = FrameManagementView:inputHandler()
+    for b in pairs(heldButtons) do heldButtons[b] = nil end
+    crankTicksValue = 0
+    FrameManagementView:entered()
+    mockMenuItemCallbacks["duplicate frame"]()
+    check(#big.frameLayers == 12 and #big.frames == 12, "'duplicate frame' bei 12 Frames ist ein No-op (harte Obergrenze)")
+end
 
 section("EditorRoom: B + Kurbel rueckwaerts oeffnet die Frame Management View (Spec 010, US4, FR-018)")
 local fmvMock = { _opened = false,
@@ -3073,8 +3156,10 @@ do
     FrameManagementView:setImageData(d, 2)
     local fh = FrameManagementView:inputHandler()
     for b in pairs(heldButtons) do heldButtons[b] = nil end
-    fh.AButtonDown()   -- markiert Frame 2
-    fh.AButtonDown()   -- zweiter A-Druck -> loeschen (deleteFrame-Eintrag)
+    crankTicksValue = 0
+    FrameManagementView:entered()               -- registriert das Room-Menue
+    mockMenuItemCallbacks["delete frame"]()     -- Cursor steht auf Frame 2
+    fh.AButtonDown()                            -- (A) delete -> deleteFrame-Eintrag
     check(#d.frameLayers == 2, "Vorbedingung: Frame 2 geloescht")
 
     check(EditorRoom:undoLast() == "applied", "V9: undoLast() nach Frame loeschen -> 'applied'")
@@ -3120,7 +3205,9 @@ do
     FrameManagementView:setImageData(d, 2)
     local fh = FrameManagementView:inputHandler()
     for b in pairs(heldButtons) do heldButtons[b] = nil end
-    fh.AButtonDown(); fh.AButtonDown()   -- Frame 2 geloescht -> deleteFrame-Eintrag
+    crankTicksValue = 0
+    FrameManagementView:entered()
+    mockMenuItemCallbacks["delete frame"](); fh.AButtonDown()   -- Frame 2 geloescht -> deleteFrame-Eintrag
     check(#d.frameLayers == 2, "Vorbedingung: Frame geloescht, Eintrag im Verlauf")
     while #d.frameLayers < 12 do
         d.frameLayers[#d.frameLayers + 1] = LayerModel.cloneFrameLayers(d.frameLayers[1])
@@ -3375,6 +3462,18 @@ do
     h3:remapFrames({ swapped = { 4, 1 } })
     check(h3.entries[1].index == 1, "F4: swap {4,1} -> deleteFrame-Slot 4 wird 1")
     check(#h3.entries == 1, "F4: deleteFrame-Eintrag bleibt trotz Umordnung erhalten (FR-007)")
+
+    -- (D) inserted (Spec 010 Ninth Round, "duplicate frame"): Spiegel von
+    -- removed — Frames >= idx ruecken um eins nach oben, nichts wird verworfen.
+    local h4 = UndoHistory.new()
+    h4:push({ kind = "content",     op = "clear", frameIndex = 1, layerArrayIndex = 1, cells = {} })
+    h4:push({ kind = "content",     op = "shift", frameIndex = 3, layerArrayIndex = 1, cells = {} })
+    h4:push({ kind = "deleteFrame", op = "deleteFrame", index = 4, frameLayersEntry = {}, framesEntry = {} })
+    h4:remapFrames({ inserted = 3 })
+    check(#h4.entries == 3, "F4: inserted verwirft keinen Eintrag")
+    check(h4.entries[1].frameIndex == 1, "F4: inserted 3 -> frameIndex 1 (< 3) unveraendert")
+    check(h4.entries[2].frameIndex == 4, "F4: inserted 3 -> frameIndex 3 (>= 3) rueckt auf 4")
+    check(h4.entries[3].index == 5,      "F4: inserted 3 -> deleteFrame-Slot 4 (>= 3) rueckt auf 5")
 end
 
 section("Review F4: FrameManagementView-Umordnung zieht den Undo-Verlauf mit (Integration)")

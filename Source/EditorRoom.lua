@@ -1299,7 +1299,8 @@ end
 -- umgeordnet oder geloescht. Der Undo-Verlauf referenziert Frames per Index --
 -- ohne dieses Nachziehen stellte ein spaeteres Undo Inhalt in den FALSCHEN
 -- Frame (stille Datenkorruption). Wird von FrameManagementView nach JEDER
--- Strukturaenderung gerufen; op = { swapped = {a, b} } ODER { removed = idx }.
+-- Strukturaenderung gerufen; op = { swapped = {a, b} } | { removed = idx }
+-- | { inserted = idx } (Spec 010 Ninth Round: "duplicate frame").
 function EditorRoom:onFramesReindexed(op)
     undoHistory:remapFrames(op)
 end
