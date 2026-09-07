@@ -189,4 +189,17 @@ Re-validated against the updated spec. All 16 checklist items remain passing
 - **Pixel View painting is A only.** B no longer places a pixel (a lone B-tap is inert); B stays the zoom-out modifier (B held + Crank backward). The A-press eraser already reaches the layer's non-ink state — white on Layer 1, transparent on Layers 2–3 — so nothing became unreachable. This also removes the stray transparent pixel the old B-paint dropped into the tile on every B-held zoom-out.
 - Affects: **FR-007** (rewritten from "B sets the non-ink state" to "B does not paint in Pixel View"), FR-008 wording, US2 narrative + acceptance scenarios + Independent Test, Edge Cases ("Layer 1 Transparency" + new "Pixel View B-press"), Status Summary. ADR-040 gains a Fifth-Round addendum. research.md R2/R8 updated.
 
+### Integration Note (Session 8, 2026-09-06) — Eighth Round: Overlay consolidation & Frame Room (from hardware testing)
+
+Re-validated against the updated spec. All 16 checklist items remain **passing** (16/16 → 16/16, no state changes). Two clarifications integrated (user-decided gestures via `/speckit-specify`):
+
+- **Consolidated overlay bar** — the Tile View's passive chrome (frame/layer label FR-015, tile-picker filmstrip FR-025, "Tile N picked" toast FR-027, status messages) shares **one** bar anchored on the edge opposite the tile cursor; it never covers the cursor's tile and its elements never overdraw each other. The Spec 011 modal undo dialog stays a separate, coordinated layer (it must stay fully modal per Spec 011 FR-013). New **FR-028**, new **SC-008**; FR-015/025/027 revised.
+- **Frame Management Room** — the hold-B modal "Frame Management View" becomes a **persistent room**: enter with **B + Crank backward**, leave with **B + Crank forward**; frames shown as a **rectangular thumbnail grid** mirroring the project-selection room; reorder = mark with A, then D-Pad moves the marked frame in the animation sequence (Left/Right ±1, Up/Down ±one grid row); a second A-press on an unmoved marked frame deletes it (min. 1 frame); a further A-press on a moved marked frame just clears the mark. Add-frame is unchanged (Tile View B + Right on the last frame, FR-016).
+- Affects: US4 (retitled "Frame Management Room", narrative + Independent Test + acceptance scenarios rewritten), **FR-015/018/019/020/021/022/025/027 revised**, **new FR-028**, **SC-004/SC-007 revised**, **new SC-008**, Key Entities ("Frame Management Room" + "Consolidated overlay bar"), Edge Cases (+3), Assumptions (+4), Architecture Governance (new "Eighth-Round Update" subsection with audit-evidence table + 2 new ADRs + 1 risk record), Status Summary.
+- **Tracked open item** (not a blocking [NEEDS CLARIFICATION]): Spec 011 `research.md` R6 disabled the shake/undo gesture in this view because B was held; the persistent room frees B → owner `/speckit-plan`, re-evaluation trigger = room-lifecycle implementation.
+
+**Content-quality note**: like the rest of Spec 010, this round names commit hashes / module identifiers (`c2cbb6f`, `FrameManagementView`, `deleteMarked()`) in the Clarifications and Architecture Governance sections. Consistent with the spec's established style; the user-facing sections (User Scenarios, Requirements, Success Criteria) stay implementation-agnostic.
+
+**Downstream**: `/speckit-plan` + `/speckit-tasks` must be re-run for this round (arc42 Kap. 4/5/6/8/9/10/11, 2 new ADRs, plus the still-outstanding Spec-010 Kap. 6/7 runtime-view backfill). `.specify/feature.json` repointed to `specs/010-layer-management-with-transparency`.
+
 

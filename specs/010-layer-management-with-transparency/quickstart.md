@@ -117,35 +117,45 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 
 ---
 
-## Test Scenario 4: Frame Management View (US4)
+## Test Scenario 4: Frame Management Room (US4, Ninth Round — controls mirror the project-selection room)
 
-**Goal**: Verify that the Frame Management View lets the user reorder and delete frames.
+**Goal**: Verify the persistent Frame Management Room — enter/stay/reorder/delete/duplicate/exit — with a thumbnail grid and `SelectionRoom`-style controls.
 
 **Setup**:
-1. Create a new image with 4 frames; draw something distinct in each so they are tellable apart
+1. Create a new image with 6 frames; draw something distinct in each so the thumbnails are tellable apart
 2. Save the image
 
 **Test Steps**:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | In Tile View, hold B and rotate Crank counterclockwise | Frame Management View opens, listing Frame 1–4 in order |
-| 2 | D-Pad down to the Frame 3 entry, press A | Frame 3 is marked (visual indicator) |
-| 3 | Press Left | The marked frame moves one slot earlier — the list now reads 1, 3, 2, 4 |
-| 4 | Press Left again | List reads 3, 1, 2, 4 |
-| 5 | Press Left again | No-op — the marked frame is already first |
-| 6 | Move the cursor (D-Pad) to the last entry, press A to mark it, press A again | The mark is confirmed on the first A, the second A deletes it; the list shrinks to 3 |
-| 7 | Delete two more frames (A to mark, A again to delete) | The 3rd deletion (down to 1 frame) is **rejected** — at least one frame remains |
-| 8 | Release B | Back in Tile View; the animation now plays in the reordered/shortened sequence; `currentFrame` is clamped into range |
-| 9 | Save and reload | The new frame order and count persist |
+| 1 | In Tile View, hold B and rotate Crank **backward** (counterclockwise) | Frame Management Room opens: Frame 1–6 as rectangular thumbnails in a 3-column grid |
+| 2 | Release B and the Crank; wait | The room **stays open** (no hold needed) |
+| 3 | D-Pad around the grid (up/down = ±3, left/right = ±1) | The selection ring moves between thumbnails; no frame moves |
+| 4 | Cursor on Frame 3, press A | Frame 3 gets a marked border |
+| 5 | Press A again | The mark clears (A is a plain toggle — it never deletes) |
+| 6 | Press A on Frame 3, then press Right | Frame 3 moves one position later → order 1,2,4,3,5,6; the mark follows and stays |
+| 7 | Press Down | Frame 3 moves ~one grid row later (up to 3 positions, clamped) → order 1,2,4,5,6,3; the mark follows |
+| 8 | Press A | The mark clears; the new order stays |
+| 9 | Put the cursor on a frame, open the system menu → **"delete frame"** | A confirm dialog appears: "Delete Frame N?  (A) Yes  (B) No" |
+| 10 | Press A in the dialog | The frame is removed; the grid shrinks to 5 |
+| 11 | Cursor on a frame, system menu → **"duplicate frame"** | A deep copy is inserted directly after; the grid grows to 6; cursor is on the new copy |
+| 12 | Delete frames via the menu until 1 remains | The "delete frame" item is **rejected** with no dialog when only 1 frame is left |
+| 13 | Release B, then hold B and rotate the Crank **forward** | Returns to Tile View; `currentFrame` clamped into the reordered/shortened sequence |
+| 14 | Save and reload | The new frame order and count persist |
+| 15 | Re-enter the room, immediately (still holding B from entry) crank **forward** without releasing B | **Nothing happens** — the exit is armed only after B has been released once (R-32 guard) |
 
 **Acceptance Criteria**:
-- ✅ Frame Management View accessible via one B + Crank-backward gesture in Tile View
-- ✅ A marks a frame; a second A on the marked frame deletes it (two-step); Left/Right move it (clamped)
-- ✅ Deletion rejected when only 1 frame remains
-- ✅ Releasing B returns to Tile View with `currentFrame` clamped
+- ✅ Enter with B + Crank backward; the room persists after B/Crank release
+- ✅ Frames shown as a rectangular thumbnail grid; controls mirror the project-selection room (D-Pad navigates, A marks/unmarks, B is back/cancel)
+- ✅ A is a plain mark/unmark toggle — it never deletes
+- ✅ D-Pad moves the marked frame (Left/Right ±1, Up/Down ±one grid row as sequential adjacent steps, clamped); the mark follows and is not cleared by moving
+- ✅ "delete frame" (system menu) acts on the cursor frame, shows an A/B confirm dialog, and is rejected with no dialog at 1 frame
+- ✅ "duplicate frame" (system menu) deep-copies the cursor frame directly after it; rejected at 12 frames
+- ✅ Leave with B + Crank forward, armed only after one B-release; `currentFrame` clamped
 - ✅ Reorder / delete persist through save/reload
-- ✅ There is no Layer View — layers are fixed at 3 and not managed here
+- ✅ No accidental exit from entry-gesture crank residual (step 12)
+- ✅ No Layer View; the room's system menu has exactly "delete frame" + "duplicate frame"
 
 ---
 
@@ -234,6 +244,34 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 
 ---
 
+## Test Scenario 8: Consolidated Overlay Bar Never Covers the Cursor (FR-028 / SC-008, Eighth Round)
+
+**Goal**: Verify all passive Tile View overlay chrome sits in one bar on the edge opposite the cursor and never hides the cursor's tile or overlaps itself.
+
+**Setup**:
+1. Open any image with several distinct referenced tiles and more than one layer (so the "L#/# name" segment shows)
+
+**Test Steps**:
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Move the tile cursor into the **top half** of the grid (row ≤ 7) | The frame/layer label bar sits along the **bottom** edge |
+| 2 | Move the cursor into the **bottom half** (row ≥ 8) | The bar moves to the **top** edge; it never covers the cursor's tile |
+| 3 | With the cursor in the bottom half, turn the Crank to open the tile picker | The picker filmstrip appears **inside the same top bar** — not centred over the artwork — stacked with the label line, nothing overlapping |
+| 4 | Trigger a status message (e.g. attempt an invalid action) with the cursor on the **right** half | The status text shares the same bar as the frame/layer label without overdrawing it (previously both landed bottom-left) |
+| 5 | Move the cursor to the exact vertical middle | The bar defaults to the bottom edge |
+| 6 | Trigger the Spec 011 shake→undo dialog while the bar is visible | The `UndoPrompt` box draws as its own modal layer, clear of the bar; A/B still only affect the dialog |
+
+**Acceptance Criteria**:
+- ✅ One bar carries frame/layer label + tile picker + "Tile N picked" toast + status
+- ✅ Bar anchors to the edge opposite the cursor (top-half cursor → bottom bar, and vice versa; tie → bottom)
+- ✅ The bar never covers the cursor's tile, for any cursor row
+- ✅ No two bar elements overdraw each other
+- ✅ The tile picker is never drawn screen-centred over the artwork
+- ✅ The Spec 011 `UndoPrompt` stays a separate modal layer, coordinated so it never overlaps the bar
+
+---
+
 ## Constitution V Gates (Mandatory)
 
 **Gate 1: Headless Tests**
@@ -265,8 +303,9 @@ pdc Source "Hans Dither.pdx"
 - [ ] **US1 (Per-tile Pixel Shifting)**: Test Scenario 3 passes — B + arrow shifts only the cursor's tile + one neighbour, content migrates into the neighbour, no wrap at the grid edge, persists
 - [ ] **US2 (Transparency)**: Test Scenario 2 passes — an A-press on ink erases to the layer's non-ink state (transparent on Layers 2–3); B does not paint; transparent pixels stored/rendered/persisted
 - [ ] **US3 (Layer/Frame Switching)**: Test Scenario 1 passes — B + Up/Down = layer, B + Left/Right = frame, Crank switches neither
-- [ ] **US4 (Frame Management View)**: Test Scenario 4 passes — reorder + delete frames (min. 1), persists
+- [ ] **US4 (Frame Management Room, Eighth + Ninth Round)**: Test Scenario 4 passes — persistent room (B+Crank in/out, armed exit), thumbnail grid, `SelectionRoom`-style controls, A mark/unmark toggle, D-Pad reorder, system-menu "delete frame" (A/B confirm, min. 1) + "duplicate frame" (max 12), persists
 - [ ] **US5 (Tile Picker + Toast)**: Test Scenario 7 passes — Crank cycles referenced tiles with wrap; eyedropper shows "Tile N picked"
+- [ ] **FR-028 / SC-008 (Consolidated overlay, Eighth Round)**: Test Scenario 8 passes — one cursor-opposite bar, never covers the cursor, no self-overlap, picker not screen-centred, `UndoPrompt` separate layer
 - [ ] **Backward Compat**: Test Scenario 5 passes — v1.0 images load as Layer 1 + two empty upper layers
 - [ ] **Compositing**: Test Scenario 6 passes — 3 layers render correctly, editing isolated to the active layer
 - [ ] **Gate 1 (Tests)**: `lua tests/headless_tests.lua` passes with "ALLE TESTS BESTANDEN"
@@ -294,7 +333,17 @@ pdc Source "Hans Dither.pdx"
 | Shift wraps around the tile grid edge | Leftover wrap logic (the removed whole-layer shift wrapped; per-tile does not) | At the grid edge `neighborIdx` is `nil` → only the source tile changes, crossing strip discarded (ADR-043) |
 | Old images don't load | Structure-based v1.0 detection failed | Check `newLoadOperation`'s `frames[1].layers` test + pad-to-3 |
 | buildNumber not incremented | Manual step forgotten | Increment once per `pdc` run |
+| Frame Room closes the instant you enter it | Exit not armed — forward crank residual from the entry gesture triggers exit | `bReleasedSinceEnter` must gate the B+Crank-forward exit; reset it false in `entered()` (R-32 / ADR-047) |
+| Frame Room won't close | `getCrankTicks(4)` not read in `update()`, or `bReleasedSinceEnter` never set | Read crank once per `update()`; set `bReleasedSinceEnter=true` on any frame B is not pressed |
+| Multi-row reorder scrambles the intervening frames | Single `swapFrames(from, from±3)` instead of sequential adjacent swaps | Up/Down = up to `numColumns` adjacent `swapFrames` steps, each with its own `onFramesReindexed({swapped})` (Spec-011-safe) |
+| Undo after a reorder points at the wrong frame | `onFramesReindexed` not called per swap, or called with a non-adjacent pair | One `{swapped={i,i±1}}` call per adjacent step; never a multi-slot payload |
+| Frame Room feels laggy on entry | 12 thumbnails rebuilt every `draw()` | Build `thumbCache` once in `entered()`; swap the two touched entries alongside `swapFrames`; `table.remove` on delete (R11 / R-33) |
+| Tile picker still draws over the artwork | `drawTilePickerOverlay` still uses `py=(240-panelH)//2` | Make `py` `vAnchor`-relative; the picker renders inside the consolidated bar (FR-028 / ADR-048) |
+| Label and status text overlap bottom-left | Two `bauchbinde:drawBottom` calls at fixed sides | Compose one content block; `statusMessage` is a second line in the same band |
+| "delete frame" / "duplicate frame" menu items missing in the Frame Room | `entered()` still calls only `removeAllMenuItems()` without re-adding | Register both after `removeAllMenuItems()`, like `SelectionRoom:buildSystemMenu` (Ninth Round) |
+| A-press in the Frame Room deletes instead of toggling the mark | `pressA()` still has the old "second A deletes" / `movedSinceMark` branch | `pressA()` is a plain `marked = (marked == cursor) and nil or cursor` toggle; delete lives on the menu callback |
+| "delete frame" removes without asking | Menu callback deletes directly instead of setting `confirmingDelete` | Set `confirmingDelete=true`; do the removal in the dialog's A handler (mirror `SelectionRoom.confirmDelete`) |
 
 ---
 
-**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast, Scenario 7). Fifth Round (Pixel View: B stops painting) folded into Scenario 2. Scenario 3 rewritten for the per-tile pixel shift (ADR-043 — B + arrow shifts one tile + one neighbour, content migrates, no wrap), plus three Troubleshooting rows.
+**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast, Scenario 7). Fifth Round (Pixel View: B stops painting) folded into Scenario 2. Scenario 3 rewritten for the per-tile pixel shift (ADR-043). **Eighth Round (2026-09-06)**: Scenario 4 for the persistent Frame Management Room, new Scenario 8 (consolidated overlay bar / SC-008), plus eight Troubleshooting rows. **Ninth Round (2026-09-06, `/speckit-clarify`)**: Scenario 4 re-cut — controls mirror the project-selection room, A is a mark/unmark toggle, delete + duplicate are system-menu actions with an A/B confirm dialog.

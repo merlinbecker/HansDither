@@ -413,5 +413,162 @@ Each task completes when:
 
 ---
 
-**Status**: ✅ Tasks complete — Ready for implementation via agents or manual code
+# Eighth + Ninth Round (2026-09-06) — Frame Room & Overlay Consolidation
+
+**Source**: `spec.md` Clarifications (Eighth Round, from hardware testing; Ninth Round, from `/speckit-clarify`) · `plan.md` "Eighth-Round Update" section + Ninth-Round callout · `research.md` R11–R13 · `data-model.md` "Eighth-Round Additions" · `contracts/frame-room-and-overlay.md`.
+
+**Scope**: (A) one consolidated cursor-opposite overlay bar in the Tile View — the tile picker no longer draws screen-centred (`FR-028`, `SC-008`; `FR-015`/`025`/`027` revised); (B) the Frame Management View becomes a **persistent room** with a `playdate.ui.gridview` thumbnail grid, controls mirroring `SelectionRoom`, A as a plain mark/unmark toggle, **delete + duplicate on the system menu** with an A/B confirm dialog, and a **B-release-armed** "B + Crank forward" exit (`FR-018`–`FR-022` revised, `SC-004` revised); (C) arc42 Kap. 4/5/6/8/9/10/11 + **ADR-047**, **ADR-048**, plus the Spec-010 Kap. 6 runtime-view backfill (`tasks.md` T052).
+
+**Not in scope**: storage/codec (frame order + count persist via v1.1 unchanged), the entry gesture (`EditorRoom.handleCrank` B + Crank-backward → `openFrameManagementView` is unchanged), `main.lua` room wiring (the room is already wired).
+
+**Numbering**: continues from T059. **Start `buildNumber` = 37.**
+
+**Gate per phase with a code change** (Constitution V, blocking): `lua tests/headless_tests.lua` → "ALLE TESTS BESTANDEN" **+** `Source/pdxinfo` `buildNumber` +1 **+** `pdc Source "Hans Dither.pdx"` clean **+** commit.
+
+**Headless mock**: no new mock work — `tests/headless_tests.lua` already mocks `playdate.ui.gridview` (`newGridview`), `playdate.getSystemMenu()` (observable `mockMenuItemLabels` / `mockMenuItemCallbacks`), `playdate.getCrankTicks`, `buttonIsPressed`. T090 verifies.
+
+---
+
+## Phase 8: Setup (Eighth + Ninth Round)
+
+- [X] T060 `Source/pdxinfo` — bump `buildNumber` 37 → 38 (first test build of this round; +1 per subsequent phase with a code change).
+
+**Checkpoint**: `pdc` still builds; baseline headless green.
+
+---
+
+## Phase 9: Consolidated Overlay Bar (US5 — plan Phase A) 🎯 lowest-risk increment
+
+**Goal**: one bar on the screen edge opposite the tile cursor carries the frame/layer label (`FR-015`), the tile-picker filmstrip (`FR-025`), the "Tile N picked" toast (`FR-027`) and status messages; it never covers the cursor's tile and its elements never overdraw each other (`FR-028`/`SC-008`). The `UndoPrompt` (Spec 011) stays a separate coordinated layer.
+
+**Independent Test**: `quickstart.md` Test Scenario 8 — move the cursor into the top half → bar at the bottom; bottom half → bar at the top; open the picker with the cursor in the bottom half → filmstrip in the top bar, not screen-centre; status text shares the bar without overdraw.
+
+- [X] T061 [P] [US5] `Source/Bauchbinde.lua` — add `Bauchbinde:draw(lines, hSide, vAnchor, screenW, screenH)`: `vAnchor` `"top"|"bottom"` → `bandY = margin` or `screenH - bandH - margin`; `lines` a string or array (multi-line grows `bandH`); `hSide` unchanged. Keep `Bauchbinde:drawBottom(text, side, screenW, screenH)` **with its exact current signature** as a wrapper `self:draw(text, side, "bottom", screenW, screenH)` so `SelectionRoom.lua:456` is unaffected. Per `contracts/frame-room-and-overlay.md` → Bauchbinde table.
+- [X] T062 [US5] `Source/EditorRoom.lua` — add module-local pure helpers `overlayAnchor(cursorY, rows)` (`"bottom"` if `cursorY <= rows/2` else `"top"`), `overlayRegionRect(anchor, contentH, screenH)`, `cursorCellRect(cx, cy)` (`{(cx-1)*16, (cy-1)*16, 16, 16}`). No behaviour change yet — helpers only.
+- [X] T063 [US5] `Source/EditorRoom.lua` — `draw()`: compute `vAnchor = overlayAnchor(cursor.y, GRID_ROWS)`; compose **one** content block — line 1 = `pickMessageVisible and pickMessage` or the `"Frame x/y  L#/# name"` label, line 2 = `statusMessage` (if set) **in the same band**; draw via `bauchbinde:draw(lines, hSide, vAnchor, 400, 240)`. **Remove** the separate `bauchbinde:drawBottom(statusMessage, "left", 400, 240)` call (fixes the pre-existing bottom-left collision). `UndoPrompt.draw()` stays last.
+- [X] T064 [US5] `Source/EditorRoom.lua` — `drawTilePickerOverlay()`: keep horizontal centring; make `py` `vAnchor`-relative (`"top"` → `margin`; `"bottom"` → `240 - panelH - margin - labelH`) so the filmstrip renders inside the anchored region, never screen-centre (`FR-025` revised).
+- [X] T065 [P] [US5] `tests/headless_tests.lua` — new section "Spec 010 Eighth Round: overlay anchor (SC-008)": `overlayAnchor(y, 15)` = `"bottom"` for `y ≤ 7`, `"top"` for `y ≥ 8`; for every `y ∈ [1,15]`, `overlayRegionRect(overlayAnchor(y,15), h, 240)` ∩ `cursorCellRect(cx, y)` = ∅; with the picker visible, label / filmstrip / status sub-rects are pairwise disjoint; `Bauchbinde:drawBottom` is still callable with the old 4-arg signature.
+
+**Checkpoint**: overlay bar dodges the cursor for every row; picker no longer screen-centred; status folded into the band. `lua tests/headless_tests.lua` green, `buildNumber` 38 → 39, `pdc` clean, commit.
+
+---
+
+## Phase 10: Frame Management Room (US4 — plan Phase B)
+
+**Goal**: `FrameManagementView` is a persistent room. Enter with B + Crank backward (unchanged), leave with **B + Crank forward, armed only after one B-release**. Frames shown as a `playdate.ui.gridview` thumbnail grid; controls mirror `SelectionRoom` — D-Pad navigates, **A marks/unmarks (plain toggle, never deletes)**, B is back/cancel. D-Pad while a frame is marked moves it in the sequence. **"delete frame"** (system menu → A/B confirm dialog, acts on the cursor frame, rejected at 1 frame) and **"duplicate frame"** (system menu → deep-copy after cursor, rejected at 12) are the destructive/creational actions.
+
+**Independent Test**: `quickstart.md` Test Scenario 4 — enter, stay after release, navigate, A-toggle mark, D-Pad reorder (mark follows, not cleared), system-menu "delete frame" → confirm → shrink, "duplicate frame" → grow, delete rejected at 1 frame, armed exit (crank residual on entry does nothing), save/reload persists.
+
+### Spec 011 undo-history integration
+
+- [ ] T066 [US4] `Source/UndoHistory.lua` — `remapFrames(op)`: add the `{ inserted = i }` case — every entry with `frameIndex >= i` shifts **up** by one (the mirror of the existing `{ removed = i }` down-shift). `{ swapped }` / `{ removed }` unchanged. Per `contracts/frame-room-and-overlay.md` → Spec 011 compatibility table.
+- [ ] T067 [US4] `Source/EditorRoom.lua` — `onFramesReindexed(op)`: accept `{ inserted = i }` and forward to `undoHistory:remapFrames(op)` (already a pass-through; just widen the doc comment `op = { swapped } | { removed } | { inserted }`).
+
+### FrameManagementView rewrite (`Source/FrameManagementView.lua`)
+
+- [ ] T068 [US4] `Source/FrameManagementView.lua` — replace the session state: `cursor` (1-based grid index), `marked` (number | nil), `bReleasedSinceEnter` (bool), `confirmingDelete` (bool | nil), `crankAccu` (int), `thumbCache` (`{ [pos] = image }`), `gridview`. **Remove** `bWasHeld`, `movedSinceMark`, and the list renderer (`ROW_H` / `LIST_X` / `LIST_Y` / the `draw()` row loop). Keep `switchRoomFunction` / `editorRoom` / `imageData` / `setImageData` / `returnToEditor`.
+- [ ] T069 [US4] `Source/FrameManagementView.lua` — `entered()`: reset `marked=nil`, `confirmingDelete=nil`, `bReleasedSinceEnter=false`, `crankAccu=0`; build `thumbCache[1..n]` — for each frame render `imageData.frames[f]` through a `playdate.graphics.tilemap` (`setTiles(imageData.frames[f], 25)`) into a 400×240 image, then `image:scaledImage(cellW/400)`; build `gridview = playdate.ui.gridview.new(CELL_W, CELL_H)` with `setNumberOfColumns(3)`, `setNumberOfRows(ceil(n/3))`, `changeRowOnColumnWrap = false`, `drawCell` → `FrameManagementView:drawCell(...)`.
+- [ ] T070 [US4] `Source/FrameManagementView.lua` — `entered()` (cont.): `getSystemMenu():removeAllMenuItems()` then register **"delete frame"** → `onMenuDelete()` and **"duplicate frame"** → `onMenuDuplicate()` (mirrors `SelectionRoom:buildSystemMenu`; `EditorRoom:entered()` already rebuilds its own menu on return).
+- [ ] T071 [US4] `Source/FrameManagementView.lua` — `update()`: read `playdate.getCrankTicks(4)` **once** → add to `crankAccu`; `if not playdate.buttonIsPressed(playdate.kButtonB) then bReleasedSinceEnter = true end`; `if playdate.buttonIsPressed(playdate.kButtonB) and bReleasedSinceEnter and crankAccu >= ZOOM_TICK_THRESHOLD then returnToEditor() end`. **Delete the B-held→released exit and `bWasHeld`.** Never call `getCrankChange()` here (CR-01). Redraw on `needsRedraw`.
+- [ ] T072 [US4] `Source/FrameManagementView.lua` — `inputHandler()`: while `confirmingDelete` → `AButtonDown` = `confirmDelete()`, `BButtonDown` = `cancelDelete()`, all else inert. Otherwise `up/down/left/rightButtonDown` → `marked` set ? `moveMarked(dx,dy)` : `moveCursor(dx,dy)`; `AButtonDown` → `pressA()`.
+- [ ] T073 [US4] `Source/FrameManagementView.lua` — `pressA()` = plain toggle: `marked = (marked == cursor) and nil or cursor`. `moveCursor(dx,dy)`: 3-column grid math (left/right = `cursor ± 1` within the row, up/down = `cursor ± 3`), clamp `[1, frameCount()]`, on change `marked = nil`.
+- [ ] T074 [US4] `Source/FrameManagementView.lua` — `moveMarked(dx,dy)`: `steps = (dx ~= 0) and 1 or 3`; `sign = ((dx ~= 0) and dx or dy) > 0 and 1 or -1`; loop up to `steps` times: `t = marked + sign`; **stop** if `t < 1` or `t > frameCount()`; `swapFrames(marked, t)`; swap `thumbCache[marked]` / `thumbCache[t]`; `editorRoom:onFramesReindexed({ swapped = { marked, t } })`; `marked = t`; `cursor = t`. Does **not** clear `marked`. (`swapFrames` unchanged.)
+- [ ] T075 [US4] `Source/FrameManagementView.lua` — `onMenuDelete()`: no-op if `frameCount() <= 1`, else `confirmingDelete = true`. `confirmDelete()`: `i = cursor`; `layersCopy = LayerModel.cloneFrameLayers(imageData.frameLayers[i])`, `flatCopy = LayerModel.copyArray(imageData.frames[i])`; `table.remove` from `frameLayers` / `frames` / `thumbCache`; `editorRoom:onFramesReindexed({ removed = i })`; `editorRoom:recordDeleteFrame(i, layersCopy, flatCopy)`; `marked = nil`; `cursor = clamp(cursor, 1, frameCount())`; `confirmingDelete = nil`. `cancelDelete()`: `confirmingDelete = nil`.
+- [ ] T076 [US4] `Source/FrameManagementView.lua` — `onMenuDuplicate()`: no-op if `frameCount() >= 12`, else `i = cursor`; `layersCopy = LayerModel.cloneFrameLayers(imageData.frameLayers[i])`, `flatCopy = LayerModel.copyArray(imageData.frames[i])`; `table.insert(imageData.frameLayers, i+1, layersCopy)`, `table.insert(imageData.frames, i+1, flatCopy)`, insert a fresh thumbnail at `thumbCache[i+1]`; `editorRoom:onFramesReindexed({ inserted = i+1 })`; `cursor = i+1`.
+- [ ] T077 [US4] `Source/FrameManagementView.lua` — `draw()`: `gridview:drawInRect(0, 0, 400, 240)`; `drawCell(section, row, col, selected, x, y, w, h)` → `index = (row-1)*3 + col`; skip if `> frameCount()`; draw `thumbCache[index]` centred in the cell, marked border if `index == marked`, cursor ring if `index == cursor`, "Frame i/n" caption. If `confirmingDelete` → draw the confirm dialog last in the `SelectionRoom:drawConfirmDeleteDialog` style ("Delete Frame N?  (A) Yes  (B) No"). `returnToEditor()` unchanged (`imageData.returnFrame = cursor`; `switchRoomFunction(editorRoom)`).
+
+### Tests for User Story 4
+
+- [ ] T078 [P] [US4] `tests/headless_tests.lua` — rewrite the "FrameManagementView" section for the grid + room model: `moveCursor` grid math (up/down ±3 clamped, left/right ±1 in row, clears `marked`); `pressA` is a mark/unmark toggle and **never** calls `recordDeleteFrame`; `moveMarked` Left/Right = 1 `swapFrames` + 1 `onFramesReindexed({swapped})`, Up/Down = ≤ 3 sequential adjacent `swapFrames` each firing `onFramesReindexed({swapped})`, `marked` follows and is not cleared; `#thumbCache == frameCount()` after every op.
+- [ ] T079 [P] [US4] `tests/headless_tests.lua` — "FrameManagementView: system menu + armed exit": `mockMenuItemLabels` after `entered()` = `{"delete frame", "duplicate frame"}`; invoking "delete frame" with `frameCount() > 1` sets `confirmingDelete`, then the dialog's A path calls `recordDeleteFrame` + `onFramesReindexed({removed})` + `table.remove`; "delete frame" with 1 frame is a no-op (no dialog); dialog B cancels; "duplicate frame" inserts at `cursor+1` + `onFramesReindexed({inserted})`, no-op at 12 frames; B + Crank-forward does nothing until a frame with B not pressed has been seen, then fires `returnToEditor`.
+- [ ] T080 [P] [US4] `tests/headless_tests.lua` — "Spec 011 regression through the room rewrite": `UndoHistory:remapFrames({ inserted = i })` shifts entries with `frameIndex >= i` up by one (mirror of `{ removed }`); the existing `deleteFrame`-undo section stays green through `confirmDelete`; an undo entry's `frameIndex` after a "duplicate frame" still resolves to the intended frame.
+
+**Checkpoint**: US4 complete — persistent room, thumbnail grid, `SelectionRoom`-style controls, A toggle, D-Pad reorder, menu delete (with confirm) + duplicate, armed exit; Spec 011 undo history follows every structure change. `lua tests/headless_tests.lua` green, `buildNumber` 39 → 40, `pdc` clean, commit.
+
+---
+
+## Phase 11: Polish — arc42 / ADR / Gates / Manual Integration (plan Phase C)
+
+### arc42 evidence (Constitution III + iSAQB)
+
+- [ ] T081 [P] `arc42/04-loesungsstrategie.md` — two Eighth/Ninth-Round Leitentscheidungen: persistent Frame Room (symmetric B + Crank gestures with a B-release arming condition; B-release exit removed); consolidated cursor-opposite overlay bar (picker no longer screen-centred).
+- [ ] T082 [P] `arc42/05-bausteinsicht.md` — `FrameManagementView` → room with `entered()`/exit lifecycle + `playdate.ui.gridview` + a per-position `thumbCache`; `Bauchbinde` gains a vertical anchor; `EditorRoom.draw` overlay section becomes one layout unit. Add "Seit Spec 010 (Eighth/Ninth Round)" clauses.
+- [ ] T083 `arc42/06-laufzeitsicht.md` — **(a) backfill** the Spec-010 sequences still missing since T052: layer cycling (B + Up/Down), tile picker (Crank, no B), Frame-Verwaltung enter/exit. **(b) new**: "Frame Room enter (B + Crank backward) → grid nav → A mark → D-Pad move (n× `swapFrames` + `onFramesReindexed`) → system menu delete (`confirmingDelete` → `confirmDelete` → `recordDeleteFrame`) / duplicate (`{inserted}`) → exit (armed; B + Crank forward) → `EditorRoom:entered()` clamps `currentFrame`"; "overlay bar: cursor zone → compose content → draw cursor-opposite".
+- [ ] T084 [P] `arc42/07-verteilungssicht.md` — one line: Eighth/Ninth Round = **N/A** (no build / packaging / deployment change) — corrects the imprecise "Kapitel 6/7 offen" note from T052 (only Kap. 6 was open).
+- [ ] T085 [P] `arc42/08-querschnittliche-konzepte.md` — overlay concept (one consolidated cursor-opposite bar; `UndoPrompt` a separate coordinated layer); gesture concept (symmetric B + Crank with an arming boolean); the Frame Room system menu mirrors `SelectionRoom`.
+- [ ] T086 `arc42/adr/ADR-047-Frame-Verwaltung-persistenter-Room.md` (NEW) + `arc42/09-architekturentscheidungen.md` §9.35 short entry — persistent room; B + Crank in/out; B-release exit removed (retires the c2cbb6f dead-end fix); exit armed by `bReleasedSinceEnter`; reorder = sequential adjacent `swapFrames` (keeps Spec 011's `{swapped}` payload valid); thumbnail grid via `playdate.ui.gridview`; **system menu "delete frame" + "duplicate frame"**, delete reuses the `SelectionRoom` confirm-dialog pattern (Ninth Round — overturns the earlier "no room-local system menu"); A is a mark/unmark toggle; shake stays inactive (Spec 011 FR-010); consequence: new `{ inserted }` `remapFrames` payload. Include the device-tuned notes from T093.
+- [ ] T087 `arc42/adr/ADR-048-Konsolidierte-Overlay-Leiste.md` (NEW) + `arc42/09-architekturentscheidungen.md` §9.36 short entry — one region on the cursor-opposite edge for label + picker filmstrip + "Tile N picked" toast + status; picker no longer screen-centred; `Bauchbinde` vertical anchor; `UndoPrompt` (Spec 011) a separate coordinated layer; anchor logic is a pure function gated by `SC-008`.
+- [ ] T088 [P] `arc42/10-qualitaetsanforderungen.md` — QS: Usability (the overlay never covers the cursor's tile — `SC-008`); Performance (`thumbCache` build < 1 frame on entry, partial invalidation — R-33); Robustness (deterministic room exit via arming — R-32).
+- [ ] T089 [P] `arc42/11-risiken-und-technische-schulden.md` — R-32 (crank residual on entry vs. the forward-only exit → arming boolean + single crank API + headless test), R-33 (thumbnail render cost → cache + partial invalidation + device measurement), R-34 (overlay layout bug hides content → pure anchor/region functions + `SC-008` gate).
+
+### Architecture review & gates
+
+- [ ] T090 Architecture review: confirm `FrameManagementView` still does not `import "EditorRoom"` (uses only the injected `editorRoom` ref for `onFramesReindexed` / `recordDeleteFrame`); `Bauchbinde:drawBottom` signature unchanged (`SelectionRoom.lua:456` caller); `playdate.ui.gridview` is the SDK primitive (no hand-rolled grid); `FrameManagementView` uses **one** crank API (`getCrankTicks(4)`, CR-01). Append a short result note to `plan.md` → "Architektur-Arbeitsprodukte".
+- [ ] T091 Constitution V — Gate 1: `lua tests/headless_tests.lua` → "ALLE TESTS BESTANDEN" with the new sections (T065, T078, T079, T080). Verify no "erfundene SDK-API" failure — `playdate.ui.gridview` / `getSystemMenu` / `getCrankTicks` are already in the mock (`tests/headless_tests.lua` lines ~243 / ~283 / ~315); extend only if a new call surfaces.
+- [ ] T092 Constitution V — Gate 2: record the final `Source/pdxinfo` `buildNumber`; `pdc Source "Hans Dither.pdx"` clean; note (`buildNumber`, "pdc clean") in the progress log.
+
+### Manual simulator / hardware integration
+
+- [ ] T093 Simulator: run `quickstart.md` Test Scenario 4 (rewritten) and Test Scenario 8 (overlay / `SC-008`) end to end; log any deviation as a bug/task.
+- [ ] T094 Hardware (Playdate device): time the `thumbCache` build on `FrameManagementView:entered()` for a 12-frame image (R-33 — if > ~1 frame, fall back to lazy per-cell rendering); confirm the "B + Crank forward" exit has **no** false trigger from the entry gesture's crank follow-through (R-32); confirm the overlay bar covers the cursor's tile in **no** cursor position (`SC-008`, visual). Record the outcomes in ADR-047 / ADR-048.
+
+### Audit evidence
+
+- [ ] T095 Update `specs/010-layer-management-with-transparency/spec.md` (the Eighth-Round "Audit Evidence Applicability" table + the Ninth-Round refinement note) and `plan.md` (the "Audit Evidence Applicability (Eighth Round, plan level)" table): flip each arc42 row from **Open** to **Done** with the concrete file path after T081–T089; confirm arc42 Kap. 2 / 3 / 7 and the secure-architecture preset as **N/A** with the rationale from `plan.md`; add one line to `checklists/requirements.md`: "Tasks 2026-09-06 (Eighth + Ninth Round): all governance checkpoints done or owner-tracked".
+- [ ] T096 Verify `.github/copilot-instructions.md` points at `specs/010-layer-management-with-transparency/plan.md` (set in `/speckit-plan` — verify only).
+
+**Checkpoint**: all gates green; arc42 Kap. 4/5/6/7/8/9/10/11 updated; ADR-047 + ADR-048 written; audit tables consistent; manual integration done or owner-tracked.
+
+---
+
+## Eighth + Ninth Round — Dependencies & Parallel Execution
+
+### Phase order
+
+- **Phase 8 (T060)**: no prerequisite.
+- **Phase 9 (T061–T065)**: after T060. **Independent of Phase 10.** Ship first — lowest risk (pure `EditorRoom.draw` + `Bauchbinde`, headless-testable anchor).
+- **Phase 10 (T066–T080)**: after T060. Independent of Phase 9. Touches `switchRoom` lifecycle + Spec 011 hooks + the crank.
+- **Phase 11 (T081–T096)**: after Phases 9 and 10.
+
+### Within phases
+
+- **Phase 9**: T061 [P] ∥ T062; then T063 → T064 (same file, sequential); T065 [P] after T062.
+- **Phase 10**: T066 → T067; then T068 (state skeleton) → T069 → T070 → T071 → T072 → T073 → T074 → T075 → T076 → T077 (all one file, sequential); T078 / T079 / T080 [P] after T077.
+- **Phase 11**: T081, T082, T084, T085, T088, T089 [P] (distinct arc42 files); T086 then T087 (both touch `arc42/09` — sequential); T083 after T082; T090 after Phase 10; T091 → T092 gates; T093 / T094 manual; T095 after T081–T089; T096 [P].
+
+### Parallel example — Phase 11 arc42
+
+```text
+Task: "arc42/04-loesungsstrategie.md — 2 Leitentscheidungen (T081)"
+Task: "arc42/05-bausteinsicht.md — FrameManagementView lifecycle + gridview; Bauchbinde anchor (T082)"
+Task: "arc42/07-verteilungssicht.md — Eighth/Ninth Round = N/A (T084)"
+Task: "arc42/08-querschnittliche-konzepte.md — overlay + gesture concepts (T085)"
+Task: "arc42/10-qualitaetsanforderungen.md — SC-008 / thumbnail perf / deterministic exit (T088)"
+Task: "arc42/11-risiken-und-technische-schulden.md — R-32/R-33/R-34 (T089)"
+```
+
+## Eighth + Ninth Round — Audit Evidence Applicability
+
+| Checkpoint | Status | Evidence-producing task / rationale |
+|---|---|---|
+| arc42 Kap. 2 — Randbedingungen | **N/A** | No new platform capability or input primitive; gestures reuse the occupied B + Crank channel |
+| arc42 Kap. 3 — Kontextabgrenzung | **N/A** | No new external interface |
+| arc42 Kap. 4 — Lösungsstrategie | **T081** | 2 Leitentscheidungen |
+| arc42 Kap. 5 — Bausteinsicht | **T082** | `FrameManagementView` lifecycle + `gridview`; `Bauchbinde` anchor; `EditorRoom.draw` layout unit |
+| arc42 Kap. 6 — Laufzeitsicht | **T083** | Spec-010 backfill (layer cycling / tile picker / frame mgmt) + Eighth/Ninth-Round room + overlay sequences |
+| arc42 Kap. 7 — Verteilungssicht | **T084 (records N/A)** | No build/packaging/deployment change |
+| arc42 Kap. 8 — Querschnittliche Konzepte | **T085** | Overlay concept + arming-gesture concept + Frame Room menu |
+| arc42 Kap. 9 — Architekturentscheidungen (+ `adr/`) | **T086, T087** | ADR-047, ADR-048 + §9.35 / §9.36 |
+| arc42 Kap. 10 — Qualitätsanforderungen | **T088** | SC-008 / thumbnail perf / deterministic exit |
+| arc42 Kap. 11 — Risiken & technische Schulden | **T089** | R-32, R-33, R-34 |
+| Architecture review (module cut, no cyclic import, one crank API) | **T090** | Result note appended to `plan.md` |
+| Secure-Architecture-Preset (iSAQB) | **N/A (confirmed in T095)** | Local UI/room restructuring only — no network, no secrets, no persistence change, no new attack surface. Re-eval trigger: Frame Room / overlay state persisted or externally configured |
+| Constitution V — Gate 1 (headless) | **T091** | New sections T065 / T078 / T079 / T080 green; "ALLE TESTS BESTANDEN" |
+| Constitution V — Gate 2 (`buildNumber` +1, `pdc`) | **T060, T066/T079-checkpoints, T092** | `buildNumber` 37 → 38 → 39 → 40; `pdc` clean |
+| Manual simulator / hardware integration | **T093, T094** — **Open** until run | Owner: Merlin. quickstart Scenario 4 + 8; device thumbnail-build FPS (R-33), no false exit from crank residual (R-32), overlay never covers the cursor (SC-008). Re-eval trigger: implementation complete |
+| `docs/architecture/` evidence path | **Done (convention)** | Satisfied via `arc42/` per Constitution III, as in earlier rounds |
+
+---
+
+**Status**: ✅ Tasks complete (T001–T059 = rounds 1–7; **T060–T096 = Eighth + Ninth Round**) — ready for `/speckit-implement`. Suggested order: Phase 8 → Phase 9 (overlay bar, lowest risk) → Phase 10 (Frame Room) → Phase 11 (arc42 / gates / manual).
 

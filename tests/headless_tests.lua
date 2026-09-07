@@ -1554,6 +1554,61 @@ EditorRoom:update()
 check(bandFillEntry() ~= nil, "B-Druck ALLEIN (kein Release, keine Kurbel) zaehlt bereits als Aktivitaet (CR-02)")
 editorHandler.BButtonUp()
 
+-- ── Spec 010 Eighth Round: konsolidierte Overlay-Leiste (FR-028 / SC-008) ──
+
+section("EditorRoom: Overlay-Leiste liegt dem Cursor abgewandt und verdeckt die Cursor-Zelle nie (Spec 010, FR-028/SC-008)")
+
+local GRID_ROWS_T = 15
+local function rectsIntersect(a, b)
+    return a.x < b.x + b.w and b.x < a.x + a.w
+       and a.y < b.y + b.h and b.y < a.y + a.h
+end
+
+check(EditorRoom.overlayAnchor(1, GRID_ROWS_T) == "bottom", "Cursor obere Haelfte (y=1) -> Leiste unten")
+check(EditorRoom.overlayAnchor(7, GRID_ROWS_T) == "bottom", "Cursor y=7 (noch obere Haelfte) -> Leiste unten")
+check(EditorRoom.overlayAnchor(8, GRID_ROWS_T) == "top", "Cursor untere Haelfte (y=8) -> Leiste oben")
+check(EditorRoom.overlayAnchor(15, GRID_ROWS_T) == "top", "Cursor y=15 -> Leiste oben")
+
+local overlayClearForAllRows = true
+local overlayPairwiseDisjoint = true
+for cy = 1, GRID_ROWS_T do
+    local anchor = EditorRoom.overlayAnchor(cy, GRID_ROWS_T)
+    local cell = EditorRoom.cursorCellRect(1, cy)
+    for _, contentH in ipairs({ 22, 40, 52 }) do
+        local region = EditorRoom.overlayRegionRect(anchor, contentH, 240)
+        if rectsIntersect(region, cell) then overlayClearForAllRows = false end
+    end
+    -- Bei sichtbarem Picker: Filmstreifen (abgewandte Zone) + Statuszeile
+    -- (Cursor-Zone) stehen auf GEGENUEBERLIEGENDEN Ankern -> nie ueberlappend.
+    local pickerRegion = EditorRoom.overlayRegionRect(anchor, 52, 240)
+    local statusAnchor = (anchor == "bottom") and "top" or "bottom"
+    local statusRegion = EditorRoom.overlayRegionRect(statusAnchor, 22, 240)
+    if rectsIntersect(pickerRegion, statusRegion) then overlayPairwiseDisjoint = false end
+end
+check(overlayClearForAllRows, "Fuer jede Cursorzeile 1..15 verdeckt die Overlay-Region die Cursor-Zelle nicht (SC-008)")
+check(overlayPairwiseDisjoint, "Bei sichtbarem Picker ueberzeichnen sich Filmstreifen und Statuszeile nicht (SC-008)")
+
+-- Rueckwaertskompatibilitaet: Bauchbinde:drawBottom(text, side, w, h) weiter aufrufbar
+do
+    local calls = {}
+    local fakeGfx = setmetatable({
+        getTextSize = function() return 40, 16 end,
+        setColor = function() end,
+        fillRect = function(x, y, w, h) calls[#calls + 1] = { x = x, y = y, w = w, h = h } end,
+        drawRect = function() end,
+        drawText = function() end,
+        kColorWhite = 0, kColorBlack = 1,
+    }, { __index = function() return function() end end })
+    local bb = Bauchbinde.new(fakeGfx)
+    bb:drawBottom("Frame 1/3", "left", 400, 240)
+    check(#calls == 1 and calls[1].h == 22 and calls[1].x == 4,
+        "Bauchbinde:drawBottom(4 Args) zeichnet weiter einen 22px-Einzeiler unten links")
+    calls = {}
+    bb:draw({ "Frame 1/3", "cannot undo - frame limit" }, "left", "top", 400, 240)
+    check(#calls == 1 and calls[1].y == 4 and calls[1].h > 22,
+        "Bauchbinde:draw() mit 2 Zeilen + vAnchor=top: eine gewachsene Leiste am oberen Rand")
+end
+
 -- ── US3 (Spec 008): "Clear Screen" ersetzt "Reset Frame" (T014, AD-037, EM-01..03) ──
 
 section("EditorRoom: 'Clear Screen' leert den aktiven Frame vollstaendig; Menue zeigt 'clear screen' statt 'reset frame'")

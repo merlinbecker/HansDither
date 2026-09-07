@@ -410,6 +410,105 @@ short B-tap       -> eyedropper; Bauchbinde shows "Tile N picked" ~1.5 s
 
 ---
 
+## R11: Frame Thumbnails in the Frame Management Room (Eighth Round — from hardware testing)
+
+**Question**: How does the Frame Management Room render every frame as a rectangular thumbnail (FR-019) without blowing one frame on `entered()`?
+
+**Research Summary**:
+
+`SelectionRoom` (the "Bild-Auswahl-Room" the user referenced) renders its grid with `playdate.ui.gridview` and per-cell thumbnails from `ImageStore.getPreviewImage(id)` — a *saved* preview. Frames have no saved preview. The candidate render is: for each frame `f`, feed `imageData.frames[f]` (the flat 375-entry composite cache) into a `playdate.graphics.tilemap` (`setTiles(imageData.frames[f], 25)`), draw it into a 400×240 image, then `image:scaledImage(cellW/400)` into the grid cell.
+
+Spec 010's own history is the warning here: the R6 Nachtrag measured the whole-layer pixel shift at **~192,000 `image:sample()` calls per keypress**. A naïve "rebuild all 12 thumbnails every draw" would be the same mistake.
+
+**Decision**: **Build once, cache, invalidate narrowly — and measure on device before committing to full-frame renders.**
+
+- On `FrameManagementView:entered()`: build `thumbCache[f]` for every frame (≤ 12). One tilemap render + one `scaledImage` per frame.
+- **`thumbCache` is keyed by sequence position** and is **not** touched by `swapFrames` (which only swaps `frameLayers` and `frames`). `moveMarked` gets one *added* line: `thumbCache[marked], thumbCache[t] = thumbCache[t], thumbCache[marked]` right next to each `swapFrames` step. With that line, **reorder costs zero re-render**; without it the grid shows stale thumbnails.
+- **Delete**: `table.remove(thumbCache, i)` alongside the two `table.remove` calls — zero re-render.
+- No thumbnail changes while merely navigating (the room cannot edit pixels).
+- **Device measurement (R-33, owner Merlin)**: time the `entered()` build for a 12-frame image on hardware. If it exceeds ~1 frame, fall back to lazy per-cell rendering in `drawCell` with a small LRU, or a coarser scale. Decision recorded in ADR-047 after the measurement.
+
+**Rationale**: the room is entered rarely and deliberately; a one-time build on entry is the natural budget. Keying the cache by position + swapping alongside `swapFrames` means reorder — the common in-room action — costs nothing. Building inside `FrameManagementView` from `imageData.frames` + `imageData.imagetable` keeps the no-`import "EditorRoom"` rule (`main.lua` wires the room graph by DI).
+
+**Alternatives Rejected**:
+- *Rebuild all thumbnails per `draw()`*: the R6 mistake; 12 tilemap renders per frame.
+- *Ask `EditorRoom` for each frame image*: would need `FrameManagementView` to import or deeply couple to `EditorRoom`; the room already only holds a passed `editorRoom` reference for the Spec 011 hooks.
+- *Render at full 400×240 and let `gridview` scale on draw*: `gridview:drawInRect` does not scale cell content; scaling must be baked into the cached image.
+
+**Evidence**: `playdate.graphics.tilemap` + `image:scaledImage()` are SDK primitives already used elsewhere in the codebase; `SelectionRoom` proves the `gridview` + per-cell-image pattern.
+
+---
+
+## R12: Frame Management Room Lifecycle & Exit Gesture (Eighth Round — from hardware testing)
+
+**Question**: The room becomes persistent (enter B + Crank backward, leave B + Crank forward). How is the exit made deterministic, given the entry gesture is *also* a B + Crank motion on the same axis?
+
+**Research Summary**:
+
+Today `FrameManagementView` is a hold-B modal: `entered()` records `bWasHeld`, `update()` exits when B goes held→released. `c2cbb6f fix(spec 010): FrameManagementView-Sackgasse beim B-Timing verhindern` exists because that timing already had a dead-end (the last entry-gesture crank tick could arrive after the B release, leaving `bWasHeld` false and no way out).
+
+The Eighth-Round design removes the B-release exit entirely and makes exit **B + Crank forward**. But: `EditorRoom.handleCrank` fires `openFrameManagementView()` at `zoomTickAccu <= -ZOOM_TICK_THRESHOLD` (4 backward ticks) and does **not** reset the accumulator on room switch (`EditorRoom:entered()` does, on the *return* trip). On entry the user has just cranked backward with B held; the crank is still decelerating and can jitter forward. Those forward ticks would feed straight into a room whose only exit is forward ticks — the c2cbb6f bug class, mirrored onto the forward axis. `research.md` R10 also warns that this codebase's `getCrankTicks` is stateful/shared and that mixing it with `getCrankChange()` in one frame violates CR-01.
+
+**Decision**: **Arm the exit with a one-shot boolean; one crank API in the room.**
+
+- `FrameManagementView` session state adds `bReleasedSinceEnter` (false on `entered()`) and `crankAccu` (0 on `entered()`).
+- `update()`: read `playdate.getCrankTicks(4)` **once** (same `tpr` as `EditorRoom`; never `getCrankChange()` in this room — CR-01), add to `crankAccu`.
+  - If B **not** pressed → `bReleasedSinceEnter = true`.
+  - If B pressed **and** `bReleasedSinceEnter` **and** `crankAccu >= ZOOM_TICK_THRESHOLD` → `returnToEditor()`.
+- The B-release exit path and `bWasHeld` are deleted.
+
+**Rationale**: the arming boolean makes entry and exit symmetric ("release B, then do the forward gesture") without any reasoning about crank deceleration or tick signs. It is a single pure state bit → headless-testable by feeding a `(ticks, bPressed)` sequence and asserting the exit fires only after a B-release. Reusing `ZOOM_TICK_THRESHOLD` and `getCrankTicks(4)` keeps the room consistent with the editor's crank accounting.
+
+**Spec gap**: `FR-022` does not mention arming. Recorded in the plan's *Spec refinements surfaced during planning*; `FR-022` should gain the clause + an Edge Case.
+
+**Alternatives Rejected**:
+- *Fresh accumulator, rely on residual ticks being backward*: assumes the user's hand stops instantly; false on a physical crank (advisor).
+- *Exit on a button instead of the crank*: the user explicitly asked for "B + Kurbel vorwärts raus".
+- *Keep the B-release exit as a second way out*: reintroduces the c2cbb6f fragility this round is meant to remove.
+
+**System menu** *(revised — Ninth Round, `/speckit-clarify` 2026-09-06)*: the earlier draft had the room register **no** menu items. The clarification aligns the room's controls to `SelectionRoom`, whose destructive/creational actions live on the Playdate system menu ("new / copy / delete image"). So the room now, in `entered()`, calls `getSystemMenu():removeAllMenuItems()` then registers **"delete frame"** and **"duplicate frame"** (mirroring `SelectionRoom:buildSystemMenu`). "delete frame" acts on the **cursor** frame and opens the reused `SelectionRoom` confirm dialog (`confirmingDelete` state + `drawConfirmDeleteDialog`, A = yes / B = no); rejected with no dialog at 1 frame. "duplicate frame" deep-copies the cursor frame (`LayerModel.cloneFrameLayers` + flat-composite copy), inserts at `cursor+1` in both `frameLayers` and `frames`, notifies `onFramesReindexed({ inserted = cursor+1 })`; rejected at 12 frames. `EditorRoom:entered()` already rebuilds its own menu on return, so there is no leakage. **`A` becomes a plain mark/unmark toggle** (it no longer deletes) → the `movedSinceMark` bit is dropped. Recorded in ADR-047.
+
+**Reorder decomposition**: `FR-021` "Up/Down by one grid row" = a 3-position move (`numColumns = 3`). A single `swapFrames(from, from±3)` misorders the two intervening frames and produces a `{swapped}` reindex payload Spec 011's `onFramesReindexed` would mis-apply. **Decision**: Up/Down runs *sequential adjacent* `swapFrames` (up to `numColumns` steps, fewer at the ends), each firing `onFramesReindexed({swapped})`. Net effect is observably remove-and-insert; mechanically it is only the adjacent swaps the code and Spec 011 already handle. No new reindex payload for reorder. *(The Ninth-Round "duplicate frame" does need a new `{ inserted }` payload for `undoHistory:remapFrames` — the mirror of the `{ removed }` shift; its exact shape is a task-level detail.)*
+
+**Evidence**: `EditorRoom.handleCrank` (lines 1042–1065) for the entry gesture and the shared crank drain; `FrameManagementView.moveMarked`/`swapFrames`/`deleteMarked` for the reorder + Spec 011 hooks; `c2cbb6f` commit message for the B-timing precedent.
+
+---
+
+## R13: Consolidated Tile View Overlay Bar (Eighth Round — from hardware testing)
+
+**Question**: How do the frame/layer label (FR-015), the tile-picker filmstrip (FR-025), the "Tile N picked" toast (FR-027), status messages, and the Spec 011 `UndoPrompt` share the Tile View without covering the cursor or each other (FR-028 / SC-008)?
+
+**Research Summary**:
+
+Current `EditorRoom.draw`:
+- `bauchbinde:drawBottom(label, side, 400, 240)` — label always at the **bottom**, horizontal `side` chosen from `cursor.x` (Spec 006 FR-003 convention).
+- `drawTilePickerOverlay()` — a panel at **screen centre** (`px=(400-panelW)//2`, `py=(240-panelH)//2`), over the artwork and often the cursor. This is the reported defect.
+- `statusMessage` → a **second** `bauchbinde:drawBottom(statusMessage, "left", ...)` — collides with the label when the cursor is on the right half (both bottom-left).
+- `UndoPrompt.draw()` — centred modal box (Spec 011), drawn last.
+
+The Bauchbinde already follows a "opposite the cursor" convention *horizontally*. The fix generalises it *vertically* and folds the picker + status into the same region.
+
+**Decision**: **One anchored region, pure placement functions, `UndoPrompt` stays its own layer.**
+
+- `overlayAnchor(cursorY, rows)` → `"bottom"` if `cursorY <= rows/2` else `"top"` (tie → `"bottom"`). Horizontal `hSide` unchanged.
+- `overlayRegionRect(anchor, contentHeight, screenH)` → the band rect; `contentHeight` grows when the picker filmstrip is visible (label line + filmstrip stacked).
+- `EditorRoom.draw` composes **one** content block for the region: `pickMessageVisible and pickMessage or "<frame/layer label>"`, plus `statusMessage` as a second line **in the same band** (no separate fixed-side `drawBottom` — this removes the pre-existing collision), plus the picker filmstrip when `pickerVisible`.
+- `Bauchbinde` gains `vAnchor` (`"top"|"bottom"`); `drawBottom` becomes a `vAnchor="bottom"` wrapper.
+- `drawTilePickerOverlay`: horizontal centring kept; vertical position becomes `vAnchor`-relative instead of screen-centre.
+- `UndoPrompt.draw()` still drawn last as a separate modal layer (Spec 011 FR-013 requires it stay fully modal — it cannot fold into a passive band). Its centred box already clears a top- or bottom-anchored bar; ADR-048 records the coordination rule so future changes keep it.
+- Headless test (SC-008): for every `cursorY` in `1..GRID_ROWS`, `overlayRegionRect(overlayAnchor(cursorY, GRID_ROWS), h, 240)` does not intersect `cursorCellRect(cx, cursorY)`; with the picker visible, the label / filmstrip / status sub-rects are pairwise disjoint.
+
+**Rationale**: the placement is a handful of pure integer functions — no rendering needed to test the contract that satisfies SC-008. Keeping `UndoPrompt` separate respects the Spec 011 modality requirement and avoids re-opening Spec 011. Folding status into the band fixes a latent collision for free.
+
+**Alternatives Rejected**:
+- *Merge `UndoPrompt` into the bar*: breaks Spec 011 FR-013 (full modality) / SC-005 (verified headless V20) — a Spec 011 renegotiation, out of scope.
+- *Keep the picker centred but shrink it*: still over the artwork; does not satisfy "never covers the cursor".
+- *Anchor purely by `cursor.x` (horizontal only, as today)*: a horizontally-offset centre panel still overlaps a cursor near the vertical middle.
+
+**Evidence**: `EditorRoom.draw` (lines ~1134–1174), `Bauchbinde.lua` (`drawBottom` only), `drawTilePickerOverlay` (lines ~1100–1132); Spec 011 `UndoPrompt` + FR-013 / SC-005.
+
+---
+
 ## Summary Table (Updated)
 
 | Research Item | Decision (current) |
@@ -424,7 +523,10 @@ short B-tap       -> eyedropper; Bauchbinde shows "Tile N picked" ~1.5 s
 | R8: Tests | Headless section per user story + Constitution V gates |
 | R10: Tile View Controls | B + Up/Down = layer, B + Left/Right = frame, Crank = tile picker (scans layer positions, not the composite cache); B + Crank unchanged |
 | **R9: Layer Count** | **Exactly 3 layers per frame, always — no add/delete (Third Round)** |
+| **R11: Frame Thumbnails (8th)** | Build `thumbCache` once on `entered()`; key by position + swap alongside `swapFrames` (reorder = 0 re-render); `table.remove` on delete; device-measure the `entered()` build (R-33) |
+| **R12: Frame Room Lifecycle (8th + 9th)** | Persistent room; enter B+Crank back / exit B+Crank forward; exit **armed** by `bReleasedSinceEnter`; one crank API (`getCrankTicks(4)`); B-release exit + `bWasHeld` deleted; reorder = sequential adjacent `swapFrames` (Spec-011-safe). **9th round**: controls mirror `SelectionRoom` — A is a mark/unmark toggle; delete + duplicate are system-menu items with the reused confirm dialog; `movedSinceMark` dropped |
+| **R13: Consolidated Overlay (8th)** | One region on the cursor-opposite edge (`overlayAnchor(cursorY, rows)`); label + picker filmstrip + toast + status folded in; `UndoPrompt` stays a separate modal layer; SC-008 = pure placement functions |
 
 ---
 
-**Status**: ✅ Research complete — updated for the Third-Round fixed-3-layer clarification.
+**Status**: ✅ Research complete — Third-Round fixed-3-layer clarification + **Eighth-Round (2026-09-06) Frame Room & overlay consolidation (R11–R13)**.

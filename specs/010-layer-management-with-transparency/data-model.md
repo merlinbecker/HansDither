@@ -222,6 +222,56 @@ Frame 0 {
 
 ---
 
+## Eighth-Round Additions (2026-09-06) — Frame Room & Overlay Bar
+<!-- Ninth Round (2026-09-06, /speckit-clarify): Frame Room controls aligned to SelectionRoom — A is a mark/unmark toggle, delete + duplicate on the system menu with an A/B confirm dialog; `movedSinceMark` replaced by `confirmingDelete`. Reflected in the tables below. -->
+
+
+These are **session-only runtime models** — nothing new is persisted. Frame order and count still round-trip through JSON v1.1 exactly as before (the Frame Room mutates the same `imageData.frameLayers` / `imageData.frames` arrays the list view already mutated).
+
+### Runtime state: Frame Management Room
+
+Held inside `FrameManagementView` (module locals), rebuilt on every `entered()`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `cursor` | number (1-based) | focused grid cell = frame index (`1 .. frameCount()`) |
+| `marked` | number \| nil | index of the marked frame, or nil |
+| `confirmingDelete` | boolean \| nil | true while the "delete frame" A/B confirm dialog is open (target = the `cursor` frame); mirrors `SelectionRoom.confirmingDelete`. *(Ninth Round — replaced `movedSinceMark`, which is gone: A is now a plain mark/unmark toggle)* |
+| `bReleasedSinceEnter` | boolean | false on `entered()`; set true the first frame B is not pressed. **Arms** the B+Crank-forward exit (FR-022 — see plan R12) |
+| `crankAccu` | number | signed `getCrankTicks(4)` accumulator; reset to 0 on `entered()`; exit fires at `>= ZOOM_TICK_THRESHOLD` while armed + B held |
+| `thumbCache` | `{ [pos] = image }` | one `scaledImage` per frame, **keyed by sequence position**; built on `entered()`; on reorder the two touched entries swap alongside `swapFrames` (0 re-render); on delete `table.remove(thumbCache, i)` |
+| `gridview` | `playdate.ui.gridview` | `numColumns = 3`, `numRows = ceil(frameCount()/3)`, `changeRowOnColumnWrap = false` — layout/scroll only; navigation is manual index math (as `SelectionRoom`) |
+
+**Transitions**:
+- **enter** (`EditorRoom` B + Crank backward → `openFrameManagementView`): `setImageData(imageData, currentFrame)` sets `cursor` clamped to `currentFrame`; `entered()` resets `marked=nil`, `confirmingDelete=nil`, `bReleasedSinceEnter=false`, `crankAccu=0`, builds `thumbCache`, builds `gridview`, and registers the system-menu items **"delete frame"** + **"duplicate frame"** *(Ninth Round)*.
+- **navigate** (D-Pad, no mark): `cursor` moves in the 3-column grid (up/down = ±3 clamped to `[1,n]`, left/right = ±1 within the row); clears `marked`.
+- **mark / unmark** (A) *(Ninth Round — plain toggle)*: `marked ≠ cursor` → `marked = cursor`; `marked == cursor` → `marked = nil`. A never deletes.
+- **reorder** (D-Pad, `marked` set): move the marked frame in the sequence — Left/Right = 1 adjacent `swapFrames` step; Up/Down = up to `numColumns` sequential adjacent `swapFrames` steps (fewer at the ends). Each step fires `editorRoom:onFramesReindexed({ swapped = { from, to } })` (Spec 011). `marked` and `cursor` follow; the mark is **not** cleared.
+- **delete** (system menu "delete frame") *(Ninth Round)*: inert if `frameCount() <= 1`. Sets `confirmingDelete = true`; the A/B dialog's A → `LayerModel.cloneFrameLayers` + flat-copy the `cursor` frame, `table.remove` from `frameLayers`/`frames`/`thumbCache`, `editorRoom:onFramesReindexed({ removed = i })`, `editorRoom:recordDeleteFrame(i, layersCopy, flatCopy)`, `marked = nil`, `confirmingDelete = nil`; the dialog's B → `confirmingDelete = nil`.
+- **duplicate** (system menu "duplicate frame") *(Ninth Round)*: inert if `frameCount() >= 12`. Deep-copy the `cursor` frame, `table.insert` at `cursor+1` in `frameLayers`/`frames`/`thumbCache`, `editorRoom:onFramesReindexed({ inserted = cursor+1 })`, `cursor = cursor+1`.
+- **exit** (B held + Crank forward, `bReleasedSinceEnter`): `imageData.returnFrame = cursor`; `switchRoom(editorRoom)`. `EditorRoom:entered()` clamps `currentFrame` into the (possibly shorter/reordered) sequence — unchanged.
+
+**Invariants**:
+- `1 <= cursor <= frameCount()`; `marked` is nil or in the same range.
+- `#thumbCache == frameCount()` at all times.
+- Every reorder / delete / duplicate leaves `imageData.frameLayers` and `imageData.frames` the same length and in lockstep (existing `swapFrames` guarantee).
+- The Spec 011 undo history is only ever handed `{swapped}` (adjacent), `{removed}`, or `{inserted}` (Ninth Round, duplicate) payloads — never a multi-position move.
+
+### Runtime model: consolidated overlay bar (Tile View)
+
+Pure placement, no stored state — computed each `EditorRoom.draw`:
+
+| Function | Contract |
+|---|---|
+| `overlayAnchor(cursorY, rows)` | `"bottom"` if `cursorY <= rows/2`, else `"top"` (tie → `"bottom"`) |
+| `overlayRegionRect(anchor, contentH, screenH)` | `{x=0, y = anchor=="top" and margin or screenH-contentH-margin, w=400, h=contentH}` |
+| `cursorCellRect(cx, cy)` | `{x=(cx-1)*16, y=(cy-1)*16, w=16, h=16}` |
+| bar content | one block: line 1 = `pickMessage` (if toast active) else the frame/layer label; line 2 = `statusMessage` (if any) **in the same band**; the tile-picker filmstrip stacked in the same region when `pickerVisible` |
+
+**Invariant (SC-008)**: for every `cursorY ∈ [1, GRID_ROWS]`, `overlayRegionRect(overlayAnchor(cursorY, GRID_ROWS), h, 240)` ∩ `cursorCellRect(cx, cursorY)` = ∅; with the picker visible, the label / filmstrip / status sub-rects are pairwise disjoint. The Spec 011 `UndoPrompt` is a separate modal layer drawn last (not part of the bar; must stay fully modal per Spec 011 FR-013).
+
+---
+
 ## Testing Validation (headless)
 
 - `LayerModel` always yields exactly 3 layers; `validate` rejects ≠ 3.
@@ -230,6 +280,17 @@ Frame 0 {
 - 3-class `hashTile`: white-bg vs. transparent-bg tiles hash differently; legacy black/white tiles unchanged.
 - Frame reorder / delete round-trips; delete rejected at 1 frame.
 
+**Eighth Round (2026-09-06)**:
+- `overlayAnchor(y, 15)` = `"bottom"` for `y ≤ 7`, `"top"` for `y ≥ 8`; `overlayRegionRect(...)` never intersects `cursorCellRect(cx, y)` for any `y ∈ [1,15]`; picker-visible → label/filmstrip/status sub-rects pairwise disjoint (SC-008).
+- Frame Room grid nav: up/down = ±3 clamped, left/right = ±1 within row; cursor move clears `marked`.
+- Reorder: Left/Right = 1 `swapFrames` + 1 `onFramesReindexed({swapped})`; Up/Down = ≤ `numColumns` sequential adjacent `swapFrames`, each with its own `onFramesReindexed({swapped})`; the mark is not cleared by moving.
+- A toggle: A on the cursor frame marks it; A again unmarks; A never deletes.
+- Delete (Ninth Round): system-menu "delete frame" → `confirmingDelete` dialog; A confirms → `recordDeleteFrame` + `table.remove` (both arrays + `thumbCache`) + `onFramesReindexed({removed})`; rejected (no dialog) at 1 frame; B cancels.
+- Duplicate (Ninth Round): system-menu "duplicate frame" → deep-copy the cursor frame, `table.insert` at `cursor+1` (both arrays + `thumbCache`) + `onFramesReindexed({inserted})`; rejected at 12 frames.
+- Delete dialog is modal: while `confirmingDelete`, only A/B act.
+- Exit arming: B+Crank-forward is inert until `bReleasedSinceEnter`; then it sets `imageData.returnFrame` and `switchRoom(editorRoom)`.
+- Spec 011 regression: the existing `deleteFrame`-undo section stays green through the rewritten room.
+
 ---
 
-**Status**: ✅ Data model updated for the Third-Round fixed-3-layer clarification.
+**Status**: ✅ Data model — Third-Round fixed-3-layer clarification + Eighth-Round Frame Room & overlay bar runtime models + **Ninth-Round (2026-09-06, `/speckit-clarify`) control alignment** (A = mark/unmark toggle; `confirmingDelete` state; delete + duplicate on the system menu).

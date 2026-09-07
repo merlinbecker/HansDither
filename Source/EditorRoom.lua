@@ -1091,13 +1091,38 @@ local function drawGridOverlay()
     end
 end
 
+-- Spec 010 (Eighth Round, FR-028 / SC-008): eine konsolidierte Overlay-Leiste
+-- auf der dem Tile-Cursor ABGEWANDTEN Bildschirmzone. Reine Geometrie-Helfer,
+-- headless-testbar (ueber die EditorRoom.*-Funktionen unten).
+local OVERLAY_MARGIN = 4
+
+local function overlayAnchor(cursorY, rows)
+    return (cursorY <= rows / 2) and "bottom" or "top"
+end
+
+local function overlayRegionRect(anchor, contentH, screenH)
+    local y = (anchor == "top") and OVERLAY_MARGIN or (screenH - contentH - OVERLAY_MARGIN)
+    return { x = 0, y = y, w = 400, h = contentH }
+end
+
+local function cursorCellRect(cx, cy)
+    return { x = (cx - 1) * TILE_PX, y = (cy - 1) * TILE_PX, w = TILE_PX, h = TILE_PX }
+end
+
+-- Test-Zugriff (Spec 010, SC-008) — ohne self, direkt als EditorRoom.fn(...).
+function EditorRoom.overlayAnchor(cursorY, rows) return overlayAnchor(cursorY, rows) end
+function EditorRoom.overlayRegionRect(anchor, contentH, screenH) return overlayRegionRect(anchor, contentH, screenH) end
+function EditorRoom.cursorCellRect(cx, cy) return cursorCellRect(cx, cy) end
+
 -- Spec 010: Kachel-Auswahl-Overlay (Crank ohne B). Filmstreifen aus
 -- PICKER_STRIP Kacheln, die aktuelle mittig umrahmt, darunter "Tile N".
 -- Wird nur gezeichnet, solange pickerVisible (Auto-Ausblendung in update()).
+-- Eighth Round: liegt in der cursorabgewandten Zone (vAnchor), NICHT mehr
+-- bildschirmmittig.
 local PICKER_STRIP = 7
 local PICKER_CELL = 22
 
-local function drawTilePickerOverlay()
+local function drawTilePickerOverlay(vAnchor)
     local list = pickerList()
     if #list == 0 then return end
     local current = activeTile or 1
@@ -1110,7 +1135,7 @@ local function drawTilePickerOverlay()
     local panelW = PICKER_STRIP * PICKER_CELL + 16
     local panelH = PICKER_CELL + 30
     local px = (400 - panelW) // 2
-    local py = (240 - panelH) // 2
+    local py = (vAnchor == "top") and OVERLAY_MARGIN or (240 - panelH - OVERLAY_MARGIN)
 
     gfx.setColor(gfx.kColorWhite)
     gfx.fillRect(px, py, panelW, panelH)
@@ -1141,34 +1166,53 @@ local function draw()
     end
     if imageData then
         PencilCursor.draw((cursor.x - 1) * TILE_PX, (cursor.y - 1) * TILE_PX, TILE_PX, TILE_PX)
-        -- Spec 006 R3/CR-02/CR-03: blendet nach 5s Inaktivitaet aus (FR-001) und
-        -- zeigt auf der dem Cursor gegenueberliegenden Bildschirmhaelfte (FR-003)
-        if bauchbindeVisible then
-            local side = (cursor.x <= GRID_COLS / 2) and "right" or "left"
-            local label
+    end
+
+    -- Spec 010 Eighth Round (FR-028 / SC-008): EINE konsolidierte Overlay-Leiste
+    -- auf der dem Cursor abgewandten Bildschirmzone. Horizontale Haelfte weiter
+    -- nach cursor.x (Spec 006 FR-003), vertikaler Rand nach cursor.y.
+    do
+        local side = (cursor.x <= GRID_COLS / 2) and "right" or "left"
+        local vAnchor = overlayAnchor(cursor.y, GRID_ROWS)
+
+        local drewPicker = false
+        if imageData and pickerVisible then
+            -- Der Filmstreifen belegt die abgewandte Zone; das Frame/Ebenen-Label
+            -- pausiert solange (seine "Tile N"-Zeile ist waehrend des Waehlens
+            -- die relevante Info; Auto-Ausblendung nach PICKER_VISIBLE_MS).
+            drawTilePickerOverlay(vAnchor)
+            drewPicker = true
+        end
+
+        -- Frame/Ebenen-Label + "Tile N picked"-Toast: nur wenn sichtbar (Spec 006
+        -- R3: 5s-Inaktivitaets-Ausblendung) und kein Picker die Zone belegt.
+        local lines = {}
+        if imageData and bauchbindeVisible and not drewPicker then
             if pickMessageVisible and pickMessage then
-                -- Spec 010: die Pipette meldet kurz "Tile N picked" — ersetzt
-                -- fuer PICK_MESSAGE_MS das normale Frame/Ebenen-Label im selben
-                -- Bauchbinden-Balken (keine zweite Bandzeile).
-                label = pickMessage
+                lines[#lines + 1] = pickMessage
             else
-                -- Spec 010 FR-015: Ebenen-Indikator (Index/Anzahl + Name) neben
-                -- der Frame-Anzeige. Bei nur einer Ebene bleibt es bei "Frame x/y".
-                label = string.format("Frame %d/%d", currentFrame, #imageData.frames)
+                local label = string.format("Frame %d/%d", currentFrame, #imageData.frames)
                 local li = EditorRoom:getActiveLayerInfo()
                 if li and li.count > 1 then
                     label = string.format("%s  L%d/%d %s", label, li.index, li.count, li.name or "")
                 end
+                lines[#lines + 1] = label
             end
-            bauchbinde:drawBottom(label, side, 400, 240)
+        end
+        -- Statuszeile teilt sich die Leiste mit dem Label (zweite Bandzeile,
+        -- kein separater fixer "left"-Balken mehr). Wenn der Picker die
+        -- abgewandte Zone belegt, weicht der Status auf die Cursor-Zone aus,
+        -- damit sich nichts ueberzeichnet (SC-008).
+        if statusMessage then lines[#lines + 1] = statusMessage end
+        if #lines > 0 then
+            local statusAnchor = vAnchor
+            if drewPicker then
+                statusAnchor = (vAnchor == "bottom") and "top" or "bottom"
+            end
+            bauchbinde:draw(lines, side, statusAnchor, 400, 240)
         end
     end
-    if imageData and pickerVisible then
-        drawTilePickerOverlay()
-    end
-    if statusMessage then
-        bauchbinde:drawBottom(statusMessage, "left", 400, 240)
-    end
+
     overlay:draw()
     UndoPrompt.draw()   -- Spec 011: modaler Undo-Dialog ueber allem
 end

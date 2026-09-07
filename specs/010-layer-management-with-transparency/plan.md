@@ -186,3 +186,190 @@ tests/headless_tests.lua         # MODIFY: Spec 010 sections per user story
 
 **Phase 2** (pending):
 - Generate `tasks.md` (implementation tasks, test gates, arc42 updates)
+
+---
+
+## Eighth-Round Update (2026-09-06) — Frame Room & Overlay Consolidation
+
+**Trigger**: hardware testing of the shipped Spec 010 / Spec 011 build (see `spec.md` → Clarifications, Eighth Round). Two defects:
+
+1. The tile-picker overlay (`EditorRoom.drawTilePickerOverlay`, `px=(400-panelW)//2`, `py=(240-panelH)//2`) draws dead-centre over the artwork and the cursor. The frame/layer label, "Tile N picked" toast, status line and (Spec 011) `UndoPrompt` are four separately-placed pieces of chrome with no layout contract.
+2. The Frame Management View is a hold-B modal list — B must stay held the whole time, and it is left by *releasing* B. That B-timing is fragile (`c2cbb6f fix(spec 010): FrameManagementView-Sackgasse beim B-Timing verhindern`) and awkward for real reordering work.
+
+**Two work streams**, sequenced low-risk-first:
+
+- **Phase A — Consolidated overlay bar** (`FR-028`, `SC-008`; revises `FR-015`/`025`/`027`): one bar on the screen edge *opposite* the tile cursor (`cursor.y <= GRID_ROWS/2` → bar bottom, else top; tie → bottom), carrying the frame/layer label, the tile-picker filmstrip, the "Tile N picked" toast and status messages, laid out so none overdraws another and none covers the cursor's tile. `UndoPrompt` (Spec 011) stays a separate layer above the bar, placement coordinated. Pure `EditorRoom.draw` + `Bauchbinde` change; the anchor rule is a pure function → headless-testable.
+- **Phase B — Frame Management Room** (rewrites US4; revises `FR-018`–`FR-022`, `SC-004`/`007`): `FrameManagementView` becomes a persistent room — entered with **B + Crank backward** (unchanged gesture), left with **B + Crank forward**; the B-release exit is removed. Frames shown as a **thumbnail grid** built with `playdate.ui.gridview` (the same SDK primitive `SelectionRoom` and `PixelRoom` already use). Reorder: A marks, then the D-Pad moves the marked frame in the animation sequence.
+
+- **Phase C — Architecture evidence** (Constitution III + iSAQB): arc42 Kap. 4/5/6/8/9/10/11 + **ADR-047**, **ADR-048**; plus the **Spec-010 Kap. 6 runtime-view backfill** that `tasks.md` T052 still lists as open.
+
+### Technical Context (delta)
+
+**Primary Dependencies (new use)**:
+- `playdate.ui.gridview` (`CoreLibs/ui`, already imported in `main.lua`) — layout + scroll for the frame thumbnail grid, exactly as `SelectionRoom:buildGridview()` uses it (`gridview.new(w,h)`, `setNumberOfColumns/Rows`, `changeRowOnColumnWrap=false`, `drawCell` callback, `drawInRect`). Grid **navigation** stays manual index math (as `SelectionRoom` does) so it is headless-testable.
+- `playdate.graphics.image` + `image:scaledImage()` for frame thumbnails, built from `imageData.frames[f]` (the flat 375-entry composite cache) + `imageData.imagetable` **inside `FrameManagementView`** — it does not `import "EditorRoom"` (keeps the no-cyclic-import rule from `main.lua`).
+
+**Performance Goals (delta)**:
+- Frame Room `entered()`: build ≤ 12 thumbnails once. Reorder: rebuild **only the two thumbnails a swap touches**; delete: drop one, no full rebuild. Must stay within one frame on device — **measured** (R11), not assumed (Spec 010's own R6 Nachtrag is the cautionary tale: ~192k `image:sample()` calls per keypress).
+- Overlay bar: one extra layout pass per `EditorRoom.draw`, O(1).
+
+**Constraints (delta)**:
+- Crank: `FrameManagementView` reads **only** `playdate.getCrankTicks(4)` (same `tpr` as `EditorRoom`), never `getCrankChange()` in the same frame — CR-01 (research R10) forbids mixing. Its tick accumulator resets in `entered()`.
+- The exit gesture is **armed only after B has been released at least once since `entered()`** (`bReleasedSinceEnter`). Without this, residual crank motion from the backward *entry* gesture feeds forward ticks straight into the only forward *exit* path — the c2cbb6f bug class on the opposite axis. See *Spec refinements surfaced during planning*.
+
+**Scale/Scope (delta)**: 2 files rewritten (`FrameManagementView.lua`, `Bauchbinde.lua`), 1 modified (`EditorRoom.lua` — overlay draw + no code change to the entry gesture), 1 test file extended; arc42 7 chapters + 2 ADRs; `buildNumber` 37 → 38+.
+
+### Constitution Check (Eighth Round)
+
+*GATE: re-checked after design below. Result: PASS, no Complexity Tracking entries.*
+
+#### ✅ Principle I: SDK-First — PASS
+
+- Frame grid uses **`playdate.ui.gridview`** (SDK/CoreLibs), not a hand-rolled grid — the same primitive `SelectionRoom`/`PixelRoom` use. Documented in arc42 Kap. 4 + ADR-047.
+- Thumbnails use `playdate.graphics.image` / `image:scaledImage()` (SDK) over the existing flat composite cache + `playdate.graphics.tilemap`.
+- Room lifecycle uses the existing `switchRoom` DI pattern (`main.lua`) — `FrameManagementView` is already a wired room; only its internals change.
+- Crank read via `playdate.getCrankTicks` (SDK), one API per frame (CR-01).
+- Overlay bar is plain `playdate.graphics` drawing in `Bauchbinde` (already a headless-testable gfx helper with injected `gfx`). No new UI framework.
+
+#### ✅ Principle II: Native Formats & PDI — PASS (unchanged)
+
+- **No storage-format change.** Frame order and count already persist via JSON v1.1 (`frames[].layers[]`); the room only reorders/deletes the same `imageData.frameLayers` / `imageData.frames` arrays the list view already mutates (`swapFrames`, `table.remove`). No new field, no PDI change, no codec change.
+
+#### ✅ Principle III: Architekturdokumentation in arc42 — PASS (planned, Phase C)
+
+| Kapitel | Inhalt |
+|---|---|
+| `arc42/04-loesungsstrategie.md` | 2 Leitentscheidungen: persistenter Frame-Room (symmetrische B+Kurbel-Gesten, Arming), konsolidierte cursorabgewandte Overlay-Leiste |
+| `arc42/05-bausteinsicht.md` | `FrameManagementView` → Room mit `entered()`/Exit-Lifecycle, `gridview` + Thumbnail-Cache; `Bauchbinde` vertikaler Anker; `EditorRoom.draw` Overlay-Abschnitt = eine Layout-Einheit. „Seit Spec 010 (Eighth Round)"-Klauseln |
+| `arc42/06-laufzeitsicht.md` | **(a) Backfill** der seit Spec 010 fehlenden Sequenzen (Ebenen-Cyclen, Tile-Picker, Frame-Verwaltung Eintritt/Verlassen — T052). **(b) Neu**: „Frame-Room betreten → Grid navigieren → markieren → verschieben (n× `swapFrames` + `onFramesReindexed`) → löschen (`recordDeleteFrame`) → verlassen (B losgelassen ⇒ armiert; B+Kurbel vorw.) → `EditorRoom:entered()` klemmt `currentFrame`". „Overlay-Leiste: Cursor-Zone → Inhalt komponieren → cursorabgewandt zeichnen" |
+| `arc42/08-querschnittliche-konzepte.md` | Overlay-Konzept: eine konsolidierte Leiste (cursorabgewandt, kollisionsfrei), Undo-Dialog als eigene Schicht. Room-Gesten-Konzept: symmetrische B+Kurbel-Gesten mit Arming-Bedingung |
+| `arc42/09-architekturentscheidungen.md` + `arc42/adr/` | **ADR-047** `ADR-047-Frame-Verwaltung-persistenter-Room.md`, **ADR-048** `ADR-048-Konsolidierte-Overlay-Leiste.md` + Kurzeinträge §9.35/§9.36 |
+| `arc42/10-qualitaetsanforderungen.md` | QS: Usability (Overlay verdeckt nie die Cursor-Zelle — SC-008); Performance (Thumbnail-Cache < 1 Frame beim Betreten, partielles Invalidieren); Robustheit (Room-Exit deterministisch durch Arming) |
+| `arc42/11-risiken-und-technische-schulden.md` | R-32 Crank-Rückstau beim Room-Exit; R-33 Thumbnail-Render-Kosten; R-34 Overlay-Layout verdeckt Inhalt |
+| `arc42/07-verteilungssicht.md` | **N/A** — keine Build-/Paketierungsänderung (Begründung dort vermerken; korrigiert die imprecise „6/7"-Notiz aus T052) |
+
+#### ✅ Principle IV: Einfachheit vor Ausbau — PASS (net simplification)
+
+- The persistent room **removes** the fragile B-hold + B-release lifecycle (`bWasHeld` state machine, the c2cbb6f dead-end fix). Net: less state.
+- Grid **reuses** `SelectionRoom`'s `gridview` pattern verbatim — no new UI paradigm.
+- Overlay consolidation **replaces** three ad-hoc placements (`drawBottom` label, centred picker panel, `drawBottom` status) + implicit `UndoPrompt` overlap with **one** anchored layout pass.
+- Reorder decomposes into the adjacent `swapFrames` the code + Spec 011's `onFramesReindexed({swapped=...})` hook already handle — **no new reindex payload**.
+- No thumbnail zoom/scrub. *(Ninth Round: "duplicate frame" + "delete frame" system-menu items added, mirroring `SelectionRoom`'s menu — reuse of an existing pattern, not a new paradigm.)*
+
+#### ✅ Principle V: Testpflicht — PASS (gates enforced)
+
+1. `lua tests/headless_tests.lua` → "ALLE TESTS BESTANDEN". New/rewritten Spec 010 "Eighth Round" coverage:
+   - **Overlay anchor** (pure fn): `overlayAnchor(cursorY, GRID_ROWS)` → `"bottom"` for `y≤7`, `"top"` for `y≥8`; `overlayRegionRect(anchor, contentH)` never intersects the cursor-cell rect for any `y`; with the picker visible, label + filmstrip + status sub-rects are pairwise non-overlapping (SC-008).
+   - **Frame Room grid nav**: index math for a `numColumns=3` grid (up/down = ±3 clamped, left/right = ±1 within row), mark/unmark on A, cursor move clears mark.
+   - **Reorder**: A-mark + D-pad → marked frame moves; Left/Right = 1 adjacent `swapFrames` + 1 `onFramesReindexed({swapped})`; Up/Down = up to `numColumns` adjacent swaps (fewer at the ends), each firing `onFramesReindexed`.
+   - **A toggle** *(Ninth Round)*: A marks / unmarks the cursor frame; never deletes.
+   - **Delete semantics** *(Ninth Round)*: system-menu "delete frame" → `confirmingDelete` dialog (A = yes / B = no); on yes → `recordDeleteFrame` + `table.remove` + `onFramesReindexed({removed})`; rejected (no dialog) at 1 frame.
+   - **Duplicate** *(Ninth Round)*: system-menu "duplicate frame" → deep-copy cursor frame, insert at `cursor+1`, `onFramesReindexed({inserted})`; rejected at 12 frames.
+   - **Exit arming**: B+Crank-forward does nothing until B has been released once since `entered()`; then it fires `switchRoom(editorRoom)` with `imageData.returnFrame` set; `EditorRoom:entered()` clamps `currentFrame`.
+   - **Spec 011 regression**: the existing `deleteFrame`-undo headless section still green through the rewritten path.
+2. `Source/pdxinfo` `buildNumber` 37 → 38 before the first Phase-A `pdc`; +1 per subsequent phase with a code change; `pdc Source "Hans Dither.pdx"` clean.
+- **Manual** (simulator + device): quickstart Scenario 4 (rewritten) + new Scenario 8 (overlay never covers the cursor, all cursor rows) + Scenario 9 (Frame Room enter/stay/reorder/delete/exit). Device: thumbnail-build FPS on `entered()` (R11), crank-exit has no false trigger from entry residual (R-32).
+
+**Result**: PASS — no violations, Complexity Tracking stays empty.
+
+### Design detail
+
+> **Ninth-Round update (2026-09-06, from `/speckit-clarify`) — supersedes parts of this section.** The Frame Room's controls are aligned to `SelectionRoom`:
+> - **A is a plain mark/unmark toggle** — it never deletes. `movedSinceMark` is **removed** (no "moved vs. not moved" branch).
+> - **Delete + duplicate are system-menu items** — the "no room-local system menu" decision below is **overturned**. `entered()` registers **"delete frame"** and **"duplicate frame"** on `playdate.getSystemMenu()` (like `SelectionRoom`'s "new/copy/delete image"). "delete frame" acts on the **cursor** frame and shows the reused `SelectionRoom` confirm dialog (`confirmingDelete` / `drawConfirmDeleteDialog`, A = yes / B = no); rejected with no dialog at 1 frame. "duplicate frame" deep-copies the cursor frame, inserts at `cursor+1`, rejected at 12 frames.
+> - New session state: `confirmingDelete` (bool | nil). Removed: `movedSinceMark`.
+> - `inputHandler`: while `confirmingDelete` → A confirms, B cancels, all else inert (modal, mirrors `SelectionRoom`). Otherwise A = mark/unmark toggle; D-Pad = move marked frame or move cursor.
+> - Duplicate needs an **`inserted` reindex payload** for Spec 011's `undoHistory:remapFrames` (mirror of the `removed` shift) — payload shape is a task-level detail.
+> - `FR-021`/`FR-022` refinements below ("`numColumns` adjacent steps", arming clause) are now **in `spec.md`** (Ninth Round) — spec and plan agree; the *"Spec refinements surfaced during planning"* subsection is resolved.
+
+**FrameManagementView (rewrite)** — session state: `cursor` (1-based grid index), `marked` (1-based | nil), `bReleasedSinceEnter` (bool), `confirmingDelete` (bool | nil), `crankAccu` (int, reset in `entered()`), `thumbCache` (`{ [pos] = scaledImage }`).
+- `entered()`: `bReleasedSinceEnter=false`, `crankAccu=0`, `confirmingDelete=nil`, build `thumbCache` for all frames, build the `gridview` (`numColumns = 3`, rows = `ceil(n/3)`). `getSystemMenu():removeAllMenuItems()` then **register "delete frame" + "duplicate frame"** *(Ninth Round — mirrors `SelectionRoom:buildSystemMenu`; `EditorRoom:entered()` rebuilds its own menu on return)*.
+- `update()`: read `getCrankTicks(4)` once → `crankAccu`; if `playdate.buttonIsPressed(kButtonB)` and `bReleasedSinceEnter` and `crankAccu >= ZOOM_TICK_THRESHOLD` → `returnToEditor()`. If B not pressed → `bReleasedSinceEnter=true`. Redraw on `needsRedraw`.
+- `inputHandler()`: while `confirmingDelete` → `AButtonDown` confirms, `BButtonDown` cancels, all else inert (modal, mirrors `SelectionRoom`). Otherwise: `up/down/left/right ButtonDown` → if `marked` then `moveMarked(dx,dy)` else `moveCursor(dx,dy)`; `AButtonDown` → `pressA()`.
+- `moveMarked(dx,dy)`: `steps = dx≠0 and 1 or numColumns`; `sign = (dx or dy) > 0 and 1 or -1`; loop `steps` times: `t = marked + sign`; break if out of `[1, frameCount()]`; `swapFrames(marked, t)`; swap `thumbCache[marked]`/`thumbCache[t]`; `editorRoom:onFramesReindexed({ swapped = { marked, t } })`; `marked = t`; `cursor = t`.
+- `pressA()` *(Ninth Round)*: plain toggle — `marked ~= cursor` → `marked = cursor`; `marked == cursor` → `marked = nil`. Never deletes.
+- **Menu callback `deleteFrame`** *(Ninth Round)*: guard `frameCount() > 1`; set `confirmingDelete = true` (dialog target = `cursor`). Dialog A → `recordDeleteFrame` + `table.remove` (both arrays + `thumbCache`) + `onFramesReindexed({removed})` + clear `confirmingDelete` + `marked = nil`. Dialog B → clear `confirmingDelete`.
+- **Menu callback `duplicateFrame`** *(Ninth Round)*: guard `frameCount() < 12`; `layersCopy = LayerModel.cloneFrameLayers(frameLayers[cursor])`, flat-copy `frames[cursor]`; `table.insert(..., cursor+1, ...)` in both arrays + `thumbCache`; `onFramesReindexed({ inserted = cursor+1 })` (Spec 011 — new payload; see Ninth-Round callout).
+- `returnToEditor()`: unchanged (`imageData.returnFrame = cursor`; `switchRoom(editorRoom)`).
+- `draw()`: `gridview:drawInRect(0,0,400,240)`; `drawCell` → thumbnail from `thumbCache[index]` centred in the cell, `[*]` frame border if `index == marked`, selection ring if `index == cursor`, "Frame i/n" caption. If `confirmingDelete` → draw the confirm dialog last (reuse `SelectionRoom:drawConfirmDeleteDialog` style).
+- **Entry gesture in `EditorRoom.handleCrank` is unchanged** (`zoomTickAccu <= -ZOOM_TICK_THRESHOLD` → `openFrameManagementView()`).
+
+**Consolidated overlay bar** — `Bauchbinde` gains a vertical anchor:
+- `Bauchbinde:draw(lines, hSide, vAnchor, screenW, screenH)` — `vAnchor` `"top"|"bottom"`; `bandY = vAnchor=="top" and margin or (screenH - bandH - margin)`. `drawBottom(text, side, screenW, screenH)` is **kept with its exact current signature** as a thin wrapper (`self:draw(text, side, "bottom", ...)`), so the other caller — `SelectionRoom.lua:456` `bauchbinde:drawBottom(label, "left", 400, 240)` — is unaffected. Only `EditorRoom` calls the new `draw`.
+- `EditorRoom.draw`: compute `vAnchor = (cursor.y <= GRID_ROWS/2) and "bottom" or "top"`; `hSide` unchanged (`cursor.x <= GRID_COLS/2 and "right" or "left"`). Compose **one** region: line = `pickMessageVisible and pickMessage or "<frame/layer label>"`; if `statusMessage` append as a second line in the same band (not a second `drawBottom` at a fixed side — fixes the pre-existing bottom-left collision). If `pickerVisible`, the tile-picker filmstrip renders **inside the same anchored region**, stacked with the label line, never at screen-centre.
+- `drawTilePickerOverlay`: `px` centred horizontally is fine; `py` becomes `vAnchor`-relative (top: `margin`; bottom: `240 - panelH - margin - labelH`).
+- `UndoPrompt.draw()` stays last (own layer). Its box is centred; when the bar is at top the box already clears it, when at bottom likewise — no change needed, but ADR-048 records the coordination rule.
+- Pure helpers for the headless test: `overlayAnchor(cursorY, rows)`, `overlayRegionRect(anchor, contentH, screenH)`, `cursorCellRect(cx, cy)`.
+
+**Spec 011 shake gesture in the Frame Room** — **Resolved, no change.** Spec 011 `FR-010` already names the frame-management view in its *exclusion* list ("In Title-, Selection- und Frame-Verwaltungs-View DARF die Geste NICHT ausgewertet werden"). Spec 011 `research.md` R6 gave the *rationale* ("B is held there") which the persistent room retires — but the *requirement* stands: the Frame Room does not start the accelerometer and does not evaluate shake. `deleteFrame` undo entries are still recorded (the `recordDeleteFrame` hook is preserved) and surface when the user is back in the Tile View. Activating shake inside the Frame Room would be a **Spec 011 FR-010 change**, out of scope here. *(Recorded in ADR-047 §Konsequenzen.)*
+
+### Architecture Governance & Technical Debt (iSAQB preset — Eighth Round)
+
+**Applicability**: affects runtime behaviour (room joins `switchRoom` rotation with a real lifecycle; Tile View overlay layout pass), building blocks (`FrameManagementView`, `Bauchbinde`, `EditorRoom.draw`), interfaces (room `entered()`/exit; `Bauchbinde:draw` signature), quality attributes (usability, robustness of the room transition, thumbnail perf). **Not affected**: data model / storage / codec (frame order+count persist via v1.1 unchanged), context boundary (no new external interface), deployment (no build/packaging change).
+
+**ADRs**:
+- **ADR-047 — Frame-Verwaltung als persistenter Room**: enter B+Kurbel rückwärts / leave B+Kurbel vorwärts; B-release exit removed (retires the c2cbb6f dead-end fix); exit **armed** only after one B-release since `entered()`; reorder = sequential adjacent `swapFrames` (keeps Spec 011's `swapped` reindex payload valid); thumbnail grid via `playdate.ui.gridview`; controls mirror `SelectionRoom` — A is a mark/unmark toggle, **delete + duplicate are system-menu items** reusing `SelectionRoom`'s confirm-dialog pattern *(Ninth Round — overturns the earlier "no room-local system menu")*; shake stays inactive (Spec 011 FR-010).
+- **ADR-048 — Konsolidierte Tile-View-Overlay-Leiste**: one region on the cursor-opposite edge for frame/layer label + tile-picker filmstrip + "Tile N picked" toast + status; picker no longer screen-centred; `Bauchbinde` gains a vertical anchor; `UndoPrompt` (Spec 011) stays a separate layer with coordinated placement; anchor logic is a pure function gated by SC-008.
+
+**Risk & technical-debt review**:
+
+| ID | Risk | Mitigation | Status |
+|---|---|---|---|
+| R-32 | Crank rückstau: entry (B+Kurbel rückwärts) residual motion feeds forward ticks into the forward-only exit → false exit (c2cbb6f class, opposite axis) | `bReleasedSinceEnter` arming boolean; `crankAccu` reset in `entered()`; single crank API (`getCrankTicks(4)`, CR-01); headless test feeds tick+B sequences | **Mitigated in design**; device confirmation → quickstart Scenario 9 |
+| R-33 | Thumbnail render cost: 12 × (tilemap render + `scaledImage`) on `entered()` could blow one frame (Spec 010 R6 precedent) | Build once on `entered()`; rebuild only the 2 swapped indices per reorder, drop-one on delete; measure on device before committing to full-frame renders (R11) | **Open** — owner: Merlin (device), trigger: Phase B device test |
+| R-34 | Overlay layout bug hides content or two elements collide | Pure anchor/region functions; SC-008 headless gate over all cursor rows + picker-visible case; `UndoPrompt` kept on its own layer | **Mitigated in design** |
+| R-30↻ | Spec 011 undo history points at wrong frame after a multi-position reorder | Reorder is *only* adjacent swaps, each with `onFramesReindexed({swapped})`; no `remove+insert`, no new payload | **Closed by design** |
+
+**Security-relevant architecture**: **N/A (confirmed).** Local UI/room restructuring only — no network, no secrets, no persistence change, no new attack surface. secure-architecture preset **not applied**. Re-evaluation trigger: if Frame Room or overlay state is ever persisted or configured externally.
+
+**Audit Evidence Applicability (Eighth Round, plan level)** — arc42 edits land in Phase C / `/speckit-tasks` + `/speckit-implement`; each checkpoint carries a status line:
+
+| Checkpoint | Status | Evidence / rationale / follow-up |
+|---|---|---|
+| arc42 Kap. 2 — Randbedingungen | **N/A** | No new platform capability or input primitive; gestures reuse the occupied B+Crank channel. Trigger: a new input primitive for room nav |
+| arc42 Kap. 3 — Kontextabgrenzung | **N/A** | No new external interface. Trigger: — |
+| arc42 Kap. 4 — Lösungsstrategie | **Open** | Owner: `/speckit-tasks`→`/speckit-implement`. 2 Leitentscheidungen (persistent room, consolidated overlay). Trigger: Phase C |
+| arc42 Kap. 5 — Bausteinsicht | **Open** | Owner: Phase C. `FrameManagementView` lifecycle + `gridview`; `Bauchbinde` anchor; `EditorRoom.draw` layout unit |
+| arc42 Kap. 6 — Laufzeitsicht | **Open** | Owner: Phase C. **Double**: (a) Spec-010 backfill (layer cycling, tile picker, frame mgmt — T052), (b) new room enter/reorder/delete/exit + overlay layout sequences |
+| arc42 Kap. 7 — Verteilungssicht | **N/A** | No build/packaging/deployment change (corrects the imprecise "6/7 open" note in `tasks.md` T052). Trigger: — |
+| arc42 Kap. 8 — Querschnittliche Konzepte | **Open** | Owner: Phase C. Consolidated-overlay concept + symmetric-B+Crank-with-arming gesture concept |
+| arc42 Kap. 9 — Architekturentscheidungen (+ `adr/`) | **Open** | Owner: Phase C. ADR-047, ADR-048 + §9.35/§9.36 short entries |
+| arc42 Kap. 10 — Qualitätsanforderungen | **Open** | Owner: Phase C. Usability (SC-008), Performance (thumbnail cache), Robustness (deterministic exit) |
+| arc42 Kap. 11 — Risiken & technische Schulden | **Open** | Owner: Phase C. R-32/R-33/R-34 |
+| Secure-Architecture-Preset (iSAQB) | **N/A (confirmed)** | Local UI/room only; no network/secrets/persistence/attack surface. Trigger: Frame Room / overlay state persisted or externally configured |
+| Constitution V — Gate 1 (headless) | **Open** | Owner: `/speckit-implement`. Rewrite the `FrameManagementView` headless section for the grid + room model; add the overlay-anchor section; keep the Spec 011 `deleteFrame`-undo section green. Trigger: first code change |
+| Constitution V — Gate 2 (`buildNumber` +1, `pdc`) | **Open** | Owner: `/speckit-implement`. Start `buildNumber` 37. Trigger: first Phase-A test build |
+| Manual Simulator / Hardware integration | **Open** | Owner: Merlin. quickstart Scenario 4 (rewritten) + 8 (overlay vs. cursor, all rows) + 9 (room enter/stay/reorder/delete/exit; crank-exit no false trigger; thumbnail-build FPS). Trigger: after Phase B |
+| `docs/architecture/` evidence path | **Done (convention)** | Satisfied via `arc42/` per Constitution III, as in earlier rounds |
+
+### Spec refinements surfaced during planning — RESOLVED (Ninth Round, `/speckit-clarify` 2026-09-06)
+
+Planning found two points the spec left implicit; both are now **in `spec.md`** (Ninth Round), so spec and plan agree:
+
+1. **`FR-022` — exit gesture arming.** Resolution folded in: the exit is evaluated only after B has been released once since entering (`bReleasedSinceEnter`); `spec.md` FR-022 + Edge Case "Frame Room exit vs. entry residual".
+2. **`FR-021` — "Up/Down by one grid row".** Resolution folded in: a row move is `numColumns` sequential adjacent moves, each firing `onFramesReindexed({swapped})`; `spec.md` FR-021 + the "Reordering at the Ends" edge case.
+
+New from the Ninth Round (control alignment to `SelectionRoom`): delete + duplicate on the system menu with the reused confirm dialog; A is a mark/unmark toggle; `movedSinceMark` dropped; a `{ inserted }` `remapFrames` payload for duplicate is a task-level detail.
+
+### Complexity Tracking (Eighth Round)
+
+*No Constitution violations — table stays empty. The round is a net reduction in state (removes the B-hold/B-release lifecycle) and a reuse of existing patterns (`gridview`, `swapFrames`, `onFramesReindexed`).*
+
+### Phase C artifacts
+
+```text
+arc42/04-loesungsstrategie.md          # MOD: 2 Leitentscheidungen
+arc42/05-bausteinsicht.md              # MOD: FrameManagementView lifecycle + gridview; Bauchbinde anchor
+arc42/06-laufzeitsicht.md              # MOD: Spec-010 backfill + Eighth-Round sequences
+arc42/07-verteilungssicht.md           # MOD: one line — Eighth Round = N/A (no deployment change)
+arc42/08-querschnittliche-konzepte.md  # MOD: overlay + gesture concepts
+arc42/09-architekturentscheidungen.md  # MOD: §9.35 ADR-047, §9.36 ADR-048
+arc42/10-qualitaetsanforderungen.md    # MOD: SC-008 + thumbnail perf + deterministic exit
+arc42/11-risiken-und-technische-schulden.md  # MOD: R-32, R-33, R-34
+arc42/adr/ADR-047-Frame-Verwaltung-persistenter-Room.md   # NEW
+arc42/adr/ADR-048-Konsolidierte-Overlay-Leiste.md         # NEW
+```
+
+### Next Steps (Eighth Round)
+
+`/speckit-tasks` (on Spec 010) → task list ordered **Phase A (overlay bar) → Phase B (Frame Room) → Phase C (arc42/ADR) → gates**, each phase ending in headless-green + `buildNumber` +1 + `pdc` + commit. Then `/speckit-implement`.
