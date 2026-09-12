@@ -42,7 +42,13 @@ local ZOOM_TICK_THRESHOLD = 4
 -- (Tile-Picker). Ein Kachelschritt je PICKER_DEGREES_PER_TILE Grad
 -- Netto-Kurbeldrehung; das Overlay bleibt PICKER_VISIBLE_MS nach der letzten
 -- Bewegung sichtbar. "Tile N picked" (Pipette) blendet nach PICK_MESSAGE_MS aus.
+--
+-- Spec 010 Tenth Round (2026-09-07, aus Hardware-Test): der Picker erscheint
+-- erst nach einer VOLLEN Umdrehung (PICKER_ACTIVATE_DEGREES). So oeffnet
+-- versehentliches Antippen/Ruetteln am Crank das Overlay nicht mehr staendig;
+-- ist es offen, waehlen kleine Drehungen wie bisher die Kachel.
 local PICKER_DEGREES_PER_TILE = 30
+local PICKER_ACTIVATE_DEGREES = 360
 local PICKER_VISIBLE_MS = 1500
 local PICK_MESSAGE_MS = 1500
 
@@ -68,6 +74,7 @@ local cursor = { x = 1, y = 1 }  -- Tile-Koordinaten 1..25 / 1..15
 local activeTile = nil           -- number/nil: Pipetten-Auswahl; nil = Toggle-Modus
 local zoomTickAccu = 0           -- Tick-Akkumulator für B+Crank; Reset bei B-Release
 local crankAccumDegrees = 0      -- Spec 010: signierter Grad-Akkumulator fuer den Tile-Picker (Crank ohne B)
+local pickerArmDegrees = 0       -- Spec 010 Tenth Round: signierte Grad bis der Picker erscheint (|.| >= PICKER_ACTIVATE_DEGREES); Ruetteln hebt sich gegen 0 auf
 local bUsedForZoom = false       -- Crank während B-Hold unterdrückt die Pipette
 local bNavConsumed = false       -- B+D-Pad hat Ebene/Frame gewechselt -> Pipette bei B-Release unterdruecken
 local pickerVisible = false      -- Tile-Picker-Overlay sichtbar (abgeleitet aus pickerUntilMs)
@@ -1044,6 +1051,7 @@ local function handleCrank()
     local crankChange = playdate.getCrankChange() or 0    -- immer lesen (= drainen)
     if playdate.buttonIsPressed(playdate.kButtonB) then
         crankAccumDegrees = 0  -- kein Rest aus einer vorherigen Picker-Drehung
+        pickerArmDegrees = 0   -- B-Halten darf keine halbfertige Picker-Oeffnung hinterlassen
         if crankTicks ~= 0 then
             bUsedForZoom = true
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
@@ -1062,8 +1070,32 @@ local function handleCrank()
         zoomTickAccu = 0
         local change = crankChange
         if change ~= 0 then
+            -- Aktives Kurbeln haelt die Bauchbinde wach — auch waehrend der
+            -- Picker noch gar nicht offen ist (sonst fadet das Frame/Ebenen-
+            -- Label mitten in der Oeffnungsdrehung aus).
             lastActivityMs = playdate.getCurrentTimeMilliseconds()
-            pickerVisible = true
+        end
+
+        if not pickerVisible then
+            -- Tenth Round (FR-025 revidiert, 2026-09-07): erst eine VOLLE
+            -- Umdrehung oeffnet den Picker. Vorzeichenbehafteter Akkumulator ->
+            -- Vor-/Zurueck-Ruetteln hebt sich gegen 0 auf und oeffnet nichts;
+            -- eine ganze Drehung in BELIEBIGER Richtung oeffnet (der Picker hat
+            -- keinen Crank-Indikator, also nicht auf eine Richtung festlegen).
+            pickerArmDegrees = pickerArmDegrees + change
+            if math.abs(pickerArmDegrees) >= PICKER_ACTIVATE_DEGREES then
+                pickerArmDegrees = 0
+                crankAccumDegrees = 0   -- die Oeffnungsdrehung waehlt noch keine Kachel
+                pickerVisible = true
+                pickerUntilMs = playdate.getCurrentTimeMilliseconds() + PICKER_VISIBLE_MS
+                needsRedraw = true
+            end
+            return
+        end
+
+        -- Picker sichtbar: jede Bewegung haelt ihn offen; feine Drehung waehlt
+        -- reihum eine Kachel (unveraendert, PICKER_DEGREES_PER_TILE pro Schritt).
+        if change ~= 0 then
             pickerUntilMs = playdate.getCurrentTimeMilliseconds() + PICKER_VISIBLE_MS
             needsRedraw = true
         end
@@ -1238,6 +1270,7 @@ function EditorRoom:entered()
     endStroke()
     zoomTickAccu = 0
     crankAccumDegrees = 0
+    pickerArmDegrees = 0
     bUsedForZoom = false
     bNavConsumed = false
     pickerVisible = false
@@ -1376,11 +1409,14 @@ function EditorRoom:update()
     end
 
     -- Spec 010: Tile-Picker-Overlay nach PICKER_VISIBLE_MS ohne Kurbelbewegung
-    -- ausblenden; danach den Grad-Rest verwerfen, damit ein spaeterer Anstupser
-    -- nicht sofort weiterschaltet.
+    -- ausblenden; danach Grad-Rest UND Arm-Akkumulator verwerfen, damit ein
+    -- spaeterer Anstupser weder weiterschaltet noch den Picker halb-armiert
+    -- laesst (Tenth Round: zum Wiederoeffnen braucht es erneut eine volle
+    -- Umdrehung).
     if pickerVisible and playdate.getCurrentTimeMilliseconds() > pickerUntilMs then
         pickerVisible = false
         crankAccumDegrees = 0
+        pickerArmDegrees = 0
         needsRedraw = true
     end
     -- "Tile N picked"-Hinweis: Uebergangs-Redraw auch ohne weitere Eingabe

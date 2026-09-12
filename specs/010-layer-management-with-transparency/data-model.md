@@ -164,7 +164,7 @@ Pruning (`pruneUnusedTilesLayered`) runs **globally across all layers of all fra
 1. **B held + Up**: `activeLayer = activeLayer % 3 + 1` (forward, Layer 1→2→3→1).
 2. **B held + Down**: `activeLayer = (activeLayer + 1) % 3 + 1` (backward, Layer 1→3→2→1).
 3. **Frame switch** (B held + Left/Right): `activeLayer` unchanged — every frame has all 3 layers. A defensive `clampActive` to Layer 1 only fires on corrupt data.
-4. **Crank (no B)**: does **not** touch `activeLayer` — it drives the tile picker (`activeTile`), a separate session value.
+4. **Crank (no B)**: does **not** touch `activeLayer` — it drives the tile picker (`activeTile`), a separate session value. *(Tenth Round: a full crank revolution — signed `pickerArmDegrees`, `|·| ≥ 360°`, either direction — opens the picker; the opening turn selects no tile; then ~30°/tile stepping. Jiggle cancels toward 0 and opens nothing.)*
 5. *(No "layer deleted" transition.)*
 
 ---

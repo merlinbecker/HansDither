@@ -2,7 +2,7 @@
 
 **Feature**: `specs/010-layer-management-with-transparency/`
 
-**Added**: 2026-09-06 (Eighth Round — from hardware testing). **Revised**: 2026-09-06 (Ninth Round, `/speckit-clarify` — controls aligned to `SelectionRoom`, delete/duplicate on the system menu). Covers `FR-018`–`FR-022`, `FR-028`, `SC-004`, `SC-007`, `SC-008`.
+**Added**: 2026-09-06 (Eighth Round — from hardware testing). **Revised**: 2026-09-06 (Ninth Round, `/speckit-clarify` — controls aligned to `SelectionRoom`, delete/duplicate on the system menu); 2026-09-07 (Tenth Round — tile picker opens only after a full crank revolution). Covers `FR-018`–`FR-022`, `FR-025`, `FR-028`, `SC-004`, `SC-007`, `SC-008`.
 
 Flat codebase (no `Source/Rooms/`). Files: `Source/FrameManagementView.lua` (rewritten), `Source/Bauchbinde.lua` (vertical anchor added — `drawBottom` signature preserved; also used by `SelectionRoom.lua:456`), `Source/EditorRoom.lua` (overlay draw + no change to the entry gesture). `main.lua` already wires `FrameManagementView:init(switchRoom, EditorRoom)`.
 
@@ -56,6 +56,7 @@ Flat codebase (no `Source/Rooms/`). Files: `Source/FrameManagementView.lua` (rew
 | `EditorRoom:entered()` (return trip) | Unchanged: reads `imageData.returnFrame`, clamps `currentFrame` + `activeLayer` into the (possibly shorter/reordered) sequence, `updateTilemapFrame()`, rebuilds the system menu. |
 | Overlay draw | `vAnchor = (cursor.y <= GRID_ROWS / 2) and "bottom" or "top"`. Compose **one** content block: line 1 = `pickMessageVisible and pickMessage` or the `"Frame x/y  L#/# name"` label; line 2 = `statusMessage` (if set) in the **same** band; the tile-picker filmstrip stacked in the same anchored region when `pickerVisible`. Draw via `bauchbinde:draw(lines, hSide, vAnchor, 400, 240)`. **No** second fixed-side `drawBottom` for `statusMessage`. `UndoPrompt.draw()` still called last (separate layer). |
 | `drawTilePickerOverlay()` | Horizontal centring kept. Vertical position becomes `vAnchor`-relative (`vAnchor=="top"` → `py = margin`; `"bottom"` → `py = 240 - panelH - margin - labelH`). Never screen-centre. |
+| Picker activation *(Tenth Round, 2026-09-07)* | `handleCrank` no-B branch: while `not pickerVisible`, `pickerArmDegrees += getCrankChange()` (signed); `math.abs(pickerArmDegrees) >= PICKER_ACTIVATE_DEGREES` (`360`) → `pickerVisible = true`, `pickerArmDegrees = 0`, `crankAccumDegrees = 0` (opening turn selects no tile), then `return`. While `pickerVisible`, the unchanged `crankAccumDegrees` / `PICKER_DEGREES_PER_TILE` (`30`) stepping runs. Any `change ~= 0` sets `lastActivityMs` (keeps the label alive mid-gesture). `pickerArmDegrees` reset to 0 on: activation, the `pickerUntilMs` auto-hide, any `buttonIsPressed(kButtonB)` frame, `entered()`. CR-01 intact (no-B branch uses only `getCrankChange()`). |
 
 ### Pure helpers (headless-testable — new)
 
@@ -91,4 +92,4 @@ Flat codebase (no `Source/Rooms/`). Files: `Source/FrameManagementView.lua` (rew
 
 ---
 
-**Status**: ✅ Contract complete — Eighth-Round Frame Room + overlay bar, **Ninth-Round control alignment** (delete/duplicate on the system menu, `SelectionRoom` confirm dialog, A = mark/unmark toggle). `FR-021`/`FR-022` refinements are now in `spec.md` (Ninth Round). Task-level open item: the `{ inserted }` `remapFrames` payload shape for "duplicate frame".
+**Status**: ✅ Contract complete — Eighth-Round Frame Room + overlay bar, **Ninth-Round control alignment** (delete/duplicate on the system menu, `SelectionRoom` confirm dialog, A = mark/unmark toggle), **Tenth-Round picker activation gate** (`pickerArmDegrees`, full revolution to open — implemented, headless green, buildNumber 41). `FR-021`/`FR-022` refinements are in `spec.md` (Ninth Round). Hardware follow-up in ADR-042 *Nachtrag (10. Runde)* / T094.

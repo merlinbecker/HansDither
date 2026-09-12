@@ -215,7 +215,7 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 
 ---
 
-## Test Scenario 7: Tile Picker & Eyedropper Toast (US5, Fourth Round)
+## Test Scenario 7: Tile Picker & Eyedropper Toast (US5, Fourth Round; picker activation revised Tenth Round)
 
 **Goal**: Verify the Crank opens a tile picker that cycles the referenced tiles, and that the eyedropper shows a "Tile N picked" toast.
 
@@ -226,7 +226,9 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | In Tile View, with B **not** held, turn the Crank slowly | A filmstrip overlay appears centred on screen; the highlighted tile changes ~1 per 30° of rotation; "Tile N" is shown below it |
+| 0a | In Tile View, with B **not** held, jiggle the Crank back and forth a little (well under a full turn) | **Nothing happens** — no picker overlay (Tenth Round: opens only on a full revolution) |
+| 0b | Turn the Crank one **full revolution** (either direction) | The picker overlay appears; it is **not** yet on a new tile (the opening turn selects nothing) |
+| 1 | Keep turning the Crank slowly | The filmstrip overlay sits inside the cursor-opposite bar; the highlighted tile changes ~1 per 30° of rotation; "Tile N" is shown below it |
 | 2 | Keep turning past the last tile | Selection wraps back to tile 1 (white = "no selection") |
 | 3 | Turn the Crank the other way | Selection steps backward, wrapping at tile 1 → last tile |
 | 4 | Stop turning, wait ~2 s | The overlay auto-hides; the selected tile is now the active drawing tile |
@@ -235,6 +237,8 @@ Then repeat on **Layer 1**: an A-press on an ink pixel erases to **white** — L
 | 7 | Hold B and press Up/Down/Left/Right | Layer / frame switches (Scenario 1) — the B-tap eyedropper does **not** also fire |
 
 **Acceptance Criteria**:
+- ✅ A partial turn or back-and-forth jiggle does **not** open the picker; a full crank revolution (either direction) does, without selecting a tile (Tenth Round)
+- ✅ After the auto-hide, another full revolution is needed to re-open (the fine 30°/tile stepping only applies while the picker is open)
 - ✅ Crank (no B) opens the tile picker and cycles the referenced tiles with wraparound
 - ✅ The picker never shows orphaned session tiles (only tiles referenced in the layer positions)
 - ✅ A tile that exists only on a layer covered by a higher layer is still reachable in the picker (and does not disappear when the higher layer covers its cell)
@@ -304,7 +308,7 @@ pdc Source "Hans Dither.pdx"
 - [ ] **US2 (Transparency)**: Test Scenario 2 passes — an A-press on ink erases to the layer's non-ink state (transparent on Layers 2–3); B does not paint; transparent pixels stored/rendered/persisted
 - [ ] **US3 (Layer/Frame Switching)**: Test Scenario 1 passes — B + Up/Down = layer, B + Left/Right = frame, Crank switches neither
 - [ ] **US4 (Frame Management Room, Eighth + Ninth Round)**: Test Scenario 4 passes — persistent room (B+Crank in/out, armed exit), thumbnail grid, `SelectionRoom`-style controls, A mark/unmark toggle, D-Pad reorder, system-menu "delete frame" (A/B confirm, min. 1) + "duplicate frame" (max 12), persists
-- [ ] **US5 (Tile Picker + Toast)**: Test Scenario 7 passes — Crank cycles referenced tiles with wrap; eyedropper shows "Tile N picked"
+- [ ] **US5 (Tile Picker + Toast)**: Test Scenario 7 passes — jiggle/partial turn does not open the picker, a full revolution does (Tenth Round); once open the Crank cycles referenced tiles with wrap; eyedropper shows "Tile N picked"
 - [ ] **FR-028 / SC-008 (Consolidated overlay, Eighth Round)**: Test Scenario 8 passes — one cursor-opposite bar, never covers the cursor, no self-overlap, picker not screen-centred, `UndoPrompt` separate layer
 - [ ] **Backward Compat**: Test Scenario 5 passes — v1.0 images load as Layer 1 + two empty upper layers
 - [ ] **Compositing**: Test Scenario 6 passes — 3 layers render correctly, editing isolated to the active layer
@@ -320,7 +324,8 @@ pdc Source "Hans Dither.pdx"
 |-------|-----------|-----------|
 | Frame Management View doesn't open | B + Crank-backward not bound in `EditorRoom.handleCrank` | Check the `zoomTickAccu <= -ZOOM_TICK_THRESHOLD` branch (B-held branch) |
 | B + Up/Down or B + Left/Right doesn't switch layer/frame | `*ButtonDown` handler not checking `buttonIsPressed(kButtonB)` before `startMove` | Check `EditorRoom:inputHandler` — B-held routes to `bDpadNav` |
-| Crank does nothing / no tile-picker overlay | no-B branch of `handleCrank` not accumulating into `crankAccumDegrees`, or `pickerVisible` never set | Check `handleCrank` else-branch + `drawTilePickerOverlay` gate in `draw()` |
+| Crank does nothing / no tile-picker overlay | no-B branch of `handleCrank` not accumulating into `pickerArmDegrees`, or `pickerVisible` never set | Check `handleCrank` else-branch: `pickerArmDegrees` must reach `PICKER_ACTIVATE_DEGREES` (360) to open, then `crankAccumDegrees` drives the 30°/tile steps + `drawTilePickerOverlay` gate in `draw()` |
+| Tile picker pops up from the smallest crank touch | pre-Tenth-Round behaviour (`if change ~= 0 then pickerVisible = true`) still in place | no-B branch must gate on `math.abs(pickerArmDegrees) >= PICKER_ACTIVATE_DEGREES` before setting `pickerVisible`; reset `pickerArmDegrees` on activation / auto-hide / B-hold / `entered()` |
 | Tile picker cycles through blank/garbage tiles, or a drawn tile is unreachable | iterating `imagetable:getLength()`, or scanning the flat composite cache (drops covered-layer tiles) | `referencedTileIndices()` must scan `frameLayers[*].layers[*].positions` (skip `0`), keeping index 1 |
 | B-tap after B + D-Pad also picks a tile | `bNavConsumed` not latched in `bDpadNav`, or derived from live button state | Set it inside `bDpadNav`; clear only in `BButtonDown`/`BButtonUp` |
 | "Tile N picked" never disappears | no timeout-transition redraw for `pickMessage` | Mirror the `bauchbindeVisible` pattern in `update()` |
@@ -346,4 +351,4 @@ pdc Source "Hans Dither.pdx"
 
 ---
 
-**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast, Scenario 7). Fifth Round (Pixel View: B stops painting) folded into Scenario 2. Scenario 3 rewritten for the per-tile pixel shift (ADR-043). **Eighth Round (2026-09-06)**: Scenario 4 for the persistent Frame Management Room, new Scenario 8 (consolidated overlay bar / SC-008), plus eight Troubleshooting rows. **Ninth Round (2026-09-06, `/speckit-clarify`)**: Scenario 4 re-cut — controls mirror the project-selection room, A is a mark/unmark toggle, delete + duplicate are system-menu actions with an A/B confirm dialog.
+**Status**: ✅ Quickstart updated for the Fourth-Round Tile View control redesign (B + D-Pad navigation, Crank tile picker, eyedropper toast, Scenario 7). Fifth Round (Pixel View: B stops painting) folded into Scenario 2. Scenario 3 rewritten for the per-tile pixel shift (ADR-043). **Eighth Round (2026-09-06)**: Scenario 4 for the persistent Frame Management Room, new Scenario 8 (consolidated overlay bar / SC-008), plus eight Troubleshooting rows. **Ninth Round (2026-09-06, `/speckit-clarify`)**: Scenario 4 re-cut — controls mirror the project-selection room, A is a mark/unmark toggle, delete + duplicate are system-menu actions with an A/B confirm dialog. **Tenth Round (2026-09-07)**: Scenario 7 gains steps 0a/0b — the tile picker opens only after a full crank revolution (jiggle/partial turn does nothing); two Troubleshooting rows added.

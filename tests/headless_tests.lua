@@ -1929,7 +1929,35 @@ local function lastPickerLabel()
     return found
 end
 
--- referenzierte Tiles = {1,2,3,4}; ohne Auswahl entspricht das Slot 1
+-- Tenth Round (FR-025 revidiert, 2026-09-07): der Tile-Picker erscheint erst
+-- nach einer VOLLEN Umdrehung. Danach waehlen 30-Grad-Schritte wie gehabt die
+-- Kachel. Genutzt von den Picker-Abschnitten weiter unten.
+local function openPickerWithFullTurn()
+    crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+end
+
+-- Reines Ruetteln (Vor-/Zurueck) oeffnet den Picker NICHT: signierte Summe
+-- hebt sich gegen 0 auf.
+mockDrawTextCalls = {}
+for _ = 1, 4 do
+    crankChangeValue = 90;  EditorRoom:update()
+    crankChangeValue = -90; EditorRoom:update()
+end
+crankChangeValue = 0; EditorRoom:update()
+check(lastPickerLabel() == nil, "Ruetteln (+90/-90 x4, Summe 0) oeffnet den Tile-Picker nicht")
+
+-- Teildrehung 270 Grad -> immer noch geschlossen ...
+mockDrawTextCalls = {}
+crankChangeValue = 270; EditorRoom:update(); crankChangeValue = 0
+check(lastPickerLabel() == nil, "270 Grad (Teildrehung < 360) oeffnet den Tile-Picker nicht")
+
+-- ... weitere 90 Grad (Summe 360) -> Picker offen, aber noch KEINE Kachel gewaehlt
+mockDrawTextCalls = {}
+crankChangeValue = 90; EditorRoom:update(); crankChangeValue = 0
+check(lastPickerLabel() == "Tile 1",
+    "volle Umdrehung (270+90) oeffnet den Picker; Slot 1 = keine Auswahl (activeTile bleibt nil)")
+
+-- referenzierte Tiles = {1,2,3,4}; ab hier feine Schritte bei offenem Picker
 mockDrawTextCalls = {}
 crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- ein Kachelschritt vorwaerts
 check(lastPickerLabel() == "Tile 2", "30 Grad -> Kachel 2 gewaehlt, Overlay zeigt 'Tile 2'")
@@ -1950,6 +1978,21 @@ mockDrawTextCalls = {}
 mockTimeMs = mockTimeMs + 2000
 EditorRoom:update()
 check(lastPickerLabel() == nil, "nach 2s ohne Kurbel: Picker-Overlay ausgeblendet")
+
+-- Tenth Round: nach der Auto-Ausblendung ist der Picker wieder ZU — ein
+-- kleiner Anstupser schaltet nichts weiter und oeffnet auch nicht ...
+mockDrawTextCalls = {}
+crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0
+check(lastPickerLabel() == nil, "nach dem Ausblenden: 30-Grad-Anstupser oeffnet den Picker nicht (kein Weiterschalten)")
+
+-- ... erst eine erneute volle Umdrehung bringt ihn zurueck (activeTile bleibt Tile 4).
+mockDrawTextCalls = {}
+crankChangeValue = 360; EditorRoom:update(); crankChangeValue = 0
+check(lastPickerLabel() == "Tile 4", "nach dem Ausblenden: erst eine erneute volle Umdrehung oeffnet den Picker wieder")
+
+mockDrawTextCalls = {}
+mockTimeMs = mockTimeMs + 2000
+EditorRoom:update()
 
 local pk = EditorRoom:getImageData()
 check(#pk.frameLayers == 1 and pk.activeLayer == 1,
@@ -2012,6 +2055,9 @@ loadEditorV11("picker-covered", {
 check(EditorRoom:getImageData().frames[1][1] == 9,
     "Vorbedingung: Composite-Cache an Zelle 1 zeigt nur die oberste Ebene (Tile 9)")
 mockDrawTextCalls = {}
+openPickerWithFullTurn()   -- Tenth Round: Picker erst nach voller Umdrehung
+check(lastPickerLabel() == "Tile 1", "volle Umdrehung oeffnet den Picker (noch keine Auswahl)")
+mockDrawTextCalls = {}
 crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- referenziert = {1,7,9}; 1 -> 7
 check(lastPickerLabel() == "Tile 7",
     "Picker erreicht Tile 7 (liegt nur auf der verdeckten Ebene 2, fehlt im Composite-Cache)")
@@ -2066,6 +2112,9 @@ check(drawTextContains("Tiles: 1"),
 check(#mockDrawScaledCalls == 1, "genau 1 Tile-Vorschau (Tile 5)")
 
 -- Der Picker haengt den Abwahl-Slot (1) trotzdem an: Liste = {1, 5}.
+mockDrawTextCalls = {}
+openPickerWithFullTurn()   -- Tenth Round: Picker erst nach voller Umdrehung
+check(lastPickerLabel() == "Tile 1", "volle Umdrehung oeffnet den Picker (Abwahl-Slot 1)")
 mockDrawTextCalls = {}
 crankChangeValue = 30; EditorRoom:update(); crankChangeValue = 0   -- Abwahl(1) -> 5
 check(lastPickerLabel() == "Tile 5", "Picker: von der Abwahl vorwaerts auf Tile 5")

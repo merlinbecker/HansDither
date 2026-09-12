@@ -389,7 +389,8 @@ Hardware testing of the Third-Round build showed three problems: (1) "hold Up/Do
 ```
 B + Up / Down     -> active layer  +1 / -1   (wrap 1..3)
 B + Left / Right  -> frame  prev / next      (B + Right at last frame = append deep copy)
-Crank (no B)      -> tile-picker overlay: ~30°/tile through the REFERENCED tiles, wrap
+Crank (no B)      -> tile-picker overlay: FULL revolution (>=360deg, signed) to open;
+                     then ~30 deg/tile through the REFERENCED tiles, wrap  (Tenth Round)
 B + Crank fwd/back-> zoom chain / Frame Management View   (UNCHANGED)
 short B-tap       -> eyedropper; Bauchbinde shows "Tile N picked" ~1.5 s
 ```
@@ -399,14 +400,14 @@ short B-tap       -> eyedropper; Bauchbinde shows "Tile N picked" ~1.5 s
 - The picker iterates only tiles actually referenced by the image, scanned from the **layer positions** (`frameLayers[*].layers[*].positions`, skipping `0`) — **not** the flat composite cache. The cache keeps only the topmost tile per cell (`compositeToFlat`), so a tile that lives only on a covered layer would be missing and could disappear mid-session when a higher layer covers its cell. `imagetable:getLength()` is also wrong (session-orphaned tiles, pruned only on save). Selecting index 1 (white) means "no selection" (`activeTile = nil`, toggle mode) — set with an explicit `if`, not `(picked == 1) and nil or picked` (Lua yields `picked` there, always). `EditorRoom:buildPauseMenuImage` (the pause/context view, CR-06) shares this exact scan — its old composite-cache iteration under-counted covered-layer tiles in "Tiles: N".
 - `referencedTileIndices()` is the plain factual scan (no seed). `pickerList()` memoises it for the picker (`stepTilePicker` can fire ~12×/`update()` on a fast crank, plus once per `draw()`; invalidated on every tile mutation via `recompositeCell`/`recompositeCurrentFrame`/`entered()`) **and prepends index 1** as the deselect slot so the toggle-mode path is always reachable — even for an image where no cell references tile 1 (which would otherwise strand the picker). The pause view calls the un-seeded scan directly, keeping its count factual.
 - `bNavConsumed` latches when B + D-Pad runs, so the subsequent B-release does not also fire the eyedropper. It is cleared only in `BButtonDown`/`BButtonUp`, never derived from live button state (the user may release the direction key before B).
-- **CR-01 preserved**: the B branch of `handleCrank` still calls `getCrankTicks(4)`; the no-B branch uses `getCrankChange()` + a `crankAccumDegrees` accumulator with a sub-360° (30°) threshold — never both APIs in one frame.
+- **CR-01 preserved**: the B branch of `handleCrank` still calls `getCrankTicks(4)`; the no-B branch uses `getCrankChange()` — never both APIs for logic in one frame. *(Tenth Round, 2026-09-07)* the no-B branch now has **two** signed `getCrankChange()` accumulators, used one at a time by `pickerVisible`: while the picker is closed, `pickerArmDegrees` accumulates until `|·| ≥ PICKER_ACTIVATE_DEGREES` (360°) and opens it (jiggle cancels toward 0; either direction opens; the opening turn selects no tile); while it is open, `crankAccumDegrees` does the unchanged 30°/tile stepping. Reset on activation, on the 1.5 s auto-hide, on any B-hold, and on `entered()`.
 - B + arrow means pixel-shift in Zoom View (FR-001) and layer/frame switch in Tile View — different rooms, no conflict.
 
 **Alternatives Rejected**:
 - *Keep layer/frame on the Crank, add a modifier for the picker*: adds a third Crank mode; the Crank was already the awkward part.
 - *Tick-based picker via a second `getCrankTicks(tpr)`*: `getCrankTicks` is stateful in this codebase (see `EditorRoom:update` line ~941) and the headless mock can't catch a tpr-switching bug — would ship blind to hardware.
 
-**Status**: ✅ Implemented (EditorRoom; 356 headless assertions green). Supersedes the "Up/Down + Crank" layer control and "Crank alone = frames" from R3/R4/R9.
+**Status**: ✅ Implemented (EditorRoom; headless green). Supersedes the "Up/Down + Crank" layer control and "Crank alone = frames" from R3/R4/R9. **Tenth Round (2026-09-07, hardware testing)**: the picker opened on the smallest crank movement — incidental contact while docking/undocking the Crank kept popping the overlay. Added the full-revolution activation gate (`pickerArmDegrees`, signed, ≥ 360°). B + Crank tick thresholds untouched. See ADR-042 (Tenth-Round amendment).
 
 ---
 
@@ -521,7 +522,7 @@ The Bauchbinde already follows a "opposite the cursor" convention *horizontally*
 | R6: Pixel Shifting | Decode layer → 400×240 buffer → shift 1px (wrap) → re-tile all 375 cells |
 | R7: Backward Compat | Structure-based v1.0/v1.1 detection; pad every frame to 3 layers on load |
 | R8: Tests | Headless section per user story + Constitution V gates |
-| R10: Tile View Controls | B + Up/Down = layer, B + Left/Right = frame, Crank = tile picker (scans layer positions, not the composite cache); B + Crank unchanged |
+| R10: Tile View Controls | B + Up/Down = layer, B + Left/Right = frame, Crank = tile picker (scans layer positions, not the composite cache); B + Crank unchanged. **10th round**: the picker opens only after a **full crank revolution** (≥360° net, signed `pickerArmDegrees`, either direction); 30°/tile stepping unchanged once open |
 | **R9: Layer Count** | **Exactly 3 layers per frame, always — no add/delete (Third Round)** |
 | **R11: Frame Thumbnails (8th)** | Build `thumbCache` once on `entered()`; key by position + swap alongside `swapFrames` (reorder = 0 re-render); `table.remove` on delete; device-measure the `entered()` build (R-33) |
 | **R12: Frame Room Lifecycle (8th + 9th)** | Persistent room; enter B+Crank back / exit B+Crank forward; exit **armed** by `bReleasedSinceEnter`; one crank API (`getCrankTicks(4)`); B-release exit + `bWasHeld` deleted; reorder = sequential adjacent `swapFrames` (Spec-011-safe). **9th round**: controls mirror `SelectionRoom` — A is a mark/unmark toggle; delete + duplicate are system-menu items with the reused confirm dialog; `movedSinceMark` dropped |

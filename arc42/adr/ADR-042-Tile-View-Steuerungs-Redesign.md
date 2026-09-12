@@ -2,7 +2,9 @@
 
 ## Status
 ✅ **Umgesetzt** (Spec 010, 4. Klarstellungsrunde aus dem Hardware-Test) –
-`Source/EditorRoom.lua`, `tests/headless_tests.lua`
+`Source/EditorRoom.lua`, `tests/headless_tests.lua`.
+**10. Runde (2026-09-07)**: Picker oeffnet erst nach voller Kurbelumdrehung
+(`pickerArmDegrees`) — siehe *Nachtrag (10. Runde)* unten.
 
 ## Kontext
 Die 3. Runde legte fest: Ebene wechseln = Hoch/Runter halten + volle
@@ -51,16 +53,26 @@ Der Test auf echter Hardware zeigte drei Probleme:
 | D-Pad (ohne B) | Kachel-Cursor bewegen (unveraendert) |
 | **B halten + Hoch / Runter** | aktive Ebene +1 / -1 (Wrap 1..3) |
 | **B halten + Links / Rechts** | Frame zurueck / vor; **B + Rechts am letzten Frame** haengt einen neuen Frame an (tiefe Kopie — die einzige Frame-Anlage-Geste) |
-| **Kurbel (ohne B)** | Tile-Picker-Overlay: je ~30° Netto-Drehung eine Kachel weiter durch die **referenzierten** Tile-Indizes, Wrap am Ende; Overlay blendet ~1,5 s nach der letzten Drehung aus |
+| **Kurbel (ohne B)** | Tile-Picker-Overlay: oeffnet erst nach einer **vollen Umdrehung** (≥ 360° netto, vorzeichenbehaftet, beliebige Richtung — 10. Runde); danach je ~30° Netto-Drehung eine Kachel weiter durch die **referenzierten** Tile-Indizes, Wrap am Ende; Overlay blendet ~1,5 s nach der letzten Drehung aus |
 | B + Kurbel vorwaerts / rueckwaerts | Zoomkette / Frame-Verwaltung (**unveraendert**, Tick-basiert) |
 | kurzer B-Tipp (ohne D-Pad/Kurbel dazwischen) | Pipette; Bauchbinde zeigt kurz „Tile N picked“ |
 
 **Umsetzungsdetails:**
 
 - `handleCrank()` B-Zweig: unveraendert `getCrankTicks(4)`. Ohne-B-Zweig:
-  `getCrankChange()` + `crankAccumDegrees`-Akkumulator mit **Sub-360°-
-  Schwelle** (`PICKER_DEGREES_PER_TILE = 30`). CR-01 bleibt gewahrt, da
-  If/Else.
+  `getCrankChange()`. CR-01 bleibt gewahrt, da If/Else. **10. Runde
+  (2026-09-07):** der Ohne-B-Zweig hat jetzt **zwei** vorzeichenbehaftete
+  Grad-Akkumulatoren, gewaehlt ueber `pickerVisible`: solange der Picker
+  **zu** ist, sammelt `pickerArmDegrees`, bis `|·| ≥ PICKER_ACTIVATE_DEGREES`
+  (360°) — dann oeffnet der Picker (die Oeffnungsdrehung waehlt **keine**
+  Kachel). Vor-/Zurueck-Ruetteln hebt sich gegen 0 auf; eine ganze Drehung
+  in **beliebiger** Richtung oeffnet (der Picker hat keinen Kurbel-Indikator,
+  also nicht auf eine Richtung festlegen — anders als die richtungs­gebundene
+  `SelectionRoom`-Sync-Geste bei 720°). Solange der Picker **offen** ist,
+  macht `crankAccumDegrees` unveraendert die 30°/Kachel-Schrittung
+  (`PICKER_DEGREES_PER_TILE = 30`). `pickerArmDegrees` wird bei Aktivierung,
+  bei der 1,5-s-Auto-Ausblendung, bei jedem B-Halten und in `entered()` auf
+  0 gesetzt.
 - `referencedTileIndices()` scannt die **Ebenen-Positionen**
   (`frameLayers[*].layers[*].positions`, `0` uebersprungen) — **nicht** den
   flachen Composite-Cache `imageData.frames` und **nicht**
@@ -117,6 +129,39 @@ Der Test auf echter Hardware zeigte drei Probleme:
   neue Abschnitte fuer Tile-Picker (Schritt/Wrap/Auto-Ausblenden, verdeckte
   Kachel, Cache-Invalidierung, echte Abwahl, Bild ohne Zelle=1) und die
   Pipetten-Meldung. Alle Assertions gruen, `pdc` sauber, buildNumber 27.
+
+## Nachtrag (10. Runde, 2026-09-07) — volle Umdrehung zum Oeffnen
+
+**Trigger**: Hardware-Test des ausgelieferten 8./9.-Runden-Builds. Der Picker
+oeffnete bei der **kleinsten** Kurbelbewegung (`if change ~= 0 then pickerVisible
+= true`). Beim Ein- oder Auspacken der Kurbel — oder bei versehentlichem
+Antippen — poppte das Overlay staendig auf und verdeckte die Arbeit.
+
+**Entscheidung**: Der Picker erscheint erst nach einer **vollen Umdrehung**
+(`PICKER_ACTIVATE_DEGREES = 360`, vorzeichenbehafteter `pickerArmDegrees`,
+`math.abs(...) >= 360`, beliebige Richtung). Ist er offen, gilt die 30°/Kachel-
+Schrittung unveraendert — man waehlt fein aus und kann die Kurbel danach wieder
+einpacken, ohne das Overlay erneut auszuloesen; nach der Auto-Ausblendung
+braucht es wieder eine volle Umdrehung. **B + Kurbel** (Zoomkette / Frame-Room,
+Tick-basiert) ist unberuehrt. Konsistent mit der `PixelRoom`-Rotation (360°-
+Wrap) und der `SelectionRoom`-Sync-Geste (720°), aber richtungsneutral.
+
+**Alternativen verworfen**: (a) nur eine 20°-Totzone — zu klein, ein beherzter
+Anstupser reicht immer noch; (b) `math.max(0, ...)` nur im Uhrzeigersinn wie
+`SelectionRoom` — die Sync-Geste hat einen Crank-Indikator, der Picker nicht,
+also darf eine volle Gegendrehung nicht wirkungslos + rueckmeldungsfrei bleiben.
+
+**Tests**: `tests/headless_tests.lua` — Ruetteln (+90/−90 ×4, Summe 0) oeffnet
+nicht; 270° Teildrehung oeffnet nicht; +90° weiter (Summe 360°) oeffnet ohne
+Kachelauswahl; die bestehenden Picker-Abschnitte oeffnen jetzt per
+`openPickerWithFullTurn()` vor der 30°-Schrittung. Alle Assertions gruen, `pdc`
+sauber, buildNumber 41.
+
+**Am Geraet gegenzupruefen (T094)**: (1) eine langsame volle Umdrehung oeffnet
+zuverlaessig (kein Stottern durch 0-Frames bei sehr langsamem Drehen); (2)
+langsamer, gleichgerichteter Dauer-Drift oeffnet **nicht** faelschlich; (3) die
+volle Kurbeldrehung triggert **keinen** Fehl-Shake (Spec 011 Undo-Prompt),
+waehrend der Picker geoeffnet wird.
 
 ## Offen (Phase 7, Simulator/Hardware)
 - Haptik der 30°/Kachel-Schwelle auf echter Kurbel (evtl. nachjustieren).

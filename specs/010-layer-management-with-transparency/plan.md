@@ -14,7 +14,7 @@ Hans-Dither gains four editing capabilities:
 2. **Transparency Support (US2, P1)**: per-pixel transparency stored as `kColorClear` in the tile bitmap. Layer 1 stays 2-state (ink/white); Layers 2–3 have 3 reachable paint states (ink/white/transparent) and default to transparent (never white) wherever no tile is placed yet. Painting in Pixel View is **A only** — on Layer 1 it toggles ink/white; on Layers 2–3 it cycles ink → white → transparent → ink; B does not paint. *(Sixth Round, from a debugging session — supersedes the Fifth Round's Layers 2–3 ink/transparent-only toggle.)*
 3. **Layer & Frame Switching (US3, P1)**: every frame has a **fixed structure of exactly 3 layers** (no add/delete, like the 12-frame cap). **B + Up/Down** cycles the active layer; **B + Left/Right** steps frames (B + Right on the last frame appends one). *(Fourth Round, from hardware testing — supersedes "Up/Down + Crank".)*
 4. **Frame Management View (US4, P2)**: hold B + Crank backward in Tile View to open a list of all frames; reorder frames and delete frames (min. 1). No Layer View — layers are fixed.
-5. **Tile Picker & Eyedropper Toast (US5, Fourth Round)**: turning the Crank (no B) in Tile View opens a filmstrip picker over the *referenced* tiles (~30°/tile, wraparound, auto-hide); the eyedropper (short B-tap) shows "Tile N picked" briefly.
+5. **Tile Picker & Eyedropper Toast (US5, Fourth Round; activation revised Tenth Round)**: a **full crank revolution** (no B) in Tile View opens a filmstrip picker over the *referenced* tiles (jiggle/partial turn does not); once open, ~30°/tile stepping, wraparound, auto-hide; the eyedropper (short B-tap) shows "Tile N picked" briefly.
 
 All features reuse existing SDK capabilities (SDK-First, Constitution I) and the proven Room-based navigation and PDI storage model (Constitutions II–IV).
 
@@ -67,7 +67,7 @@ All features reuse existing SDK capabilities (SDK-First, Constitution I) and the
 
 **Status**: PASS
 
-- Layer/frame switching uses B + D-Pad (single press = single step); the Crank drives the tile picker via `getCrankChange()` + a sub-360° accumulator (Fourth Round)
+- Layer/frame switching uses B + D-Pad (single press = single step); the Crank drives the tile picker via `getCrankChange()` — a signed `pickerArmDegrees` (≥ 360°, either direction) opens it (Tenth Round), then a signed 30°/tile `crankAccumDegrees` steps it (Fourth Round)
 - Pixel shifting relies on existing graphics API for tile rendering
 - Transparency is managed via imagetable pixel states (native SDK)
 - View navigation uses existing Room pattern (switchRoom API)
@@ -376,3 +376,22 @@ arc42/adr/ADR-049-Konsolidierte-Overlay-Leiste.md         # NEW
 ### Next Steps (Eighth Round)
 
 `/speckit-tasks` (on Spec 010) → task list ordered **Phase A (overlay bar) → Phase B (Frame Room) → Phase C (arc42/ADR) → gates**, each phase ending in headless-green + `buildNumber` +1 + `pdc` + commit. Then `/speckit-implement`.
+
+---
+
+## Tenth-Round Update (2026-09-07) — Tile Picker: full revolution to open
+
+**Trigger**: hardware testing of the shipped Eighth/Ninth-Round build (see `spec.md` → Clarifications, Tenth Round). The tile picker opened on the smallest crank movement (`if change ~= 0 then pickerVisible = true`), so incidental contact while docking/undocking the Crank kept popping the overlay over the artwork.
+
+**Change** (`FR-025` / `SC-007` revised; scoped to `EditorRoom.handleCrank` no-B branch — B + Crank tick thresholds untouched):
+
+- New signed accumulator `pickerArmDegrees`. While `not pickerVisible`, `pickerArmDegrees += getCrankChange()`; `math.abs(pickerArmDegrees) >= PICKER_ACTIVATE_DEGREES` (`360`) opens the picker (`pickerVisible = true`, both accumulators reset, `return`). Back-and-forth jiggle cancels toward 0 → never opens; a full turn in **either** direction opens (the picker has no crank indicator — unlike the direction-bound `SelectionRoom` 720° sync gesture). The opening revolution selects no tile.
+- While `pickerVisible`, the unchanged `crankAccumDegrees` / `PICKER_DEGREES_PER_TILE` (`30`) stepping runs. Any `change ~= 0` refreshes `lastActivityMs` (label stays alive mid-gesture) and `pickerUntilMs`.
+- `pickerArmDegrees` reset on: activation, the `pickerUntilMs` auto-hide, any `buttonIsPressed(kButtonB)` frame, `entered()`. After the auto-hide, another full revolution is needed to re-open.
+- **CR-01 intact**: the no-B branch still uses only `getCrankChange()`.
+
+**Constitution**: no violations — one added state field + one constant, reusing the `PixelRoom` rotation / `SelectionRoom` sync accumulator pattern. Principle V gates: `lua tests/headless_tests.lua` green (jiggle + partial-turn + full-turn assertions added; existing picker sections open via `openPickerWithFullTurn()`), `buildNumber` 40 → 41, `pdc` clean.
+
+**Artifacts touched**: `Source/EditorRoom.lua`, `tests/headless_tests.lua`, `Source/pdxinfo`; `spec.md` (FR-025/SC-007/Clarifications), `research.md` (R10), `data-model.md`, `contracts/frame-room-and-overlay.md`, `quickstart.md` (Scenario 7 + Troubleshooting), `arc42/adr/ADR-042` (*Nachtrag 10. Runde*), `arc42/09-architekturentscheidungen.md` (§9.30 AD-042).
+
+**Hardware follow-up (T094)**: a slow full turn opens reliably (no stutter from 0-degree frames); slow one-directional drift does **not** falsely open; the full crank turn triggers no false shake / undo prompt (Spec 011) while opening the picker.
